@@ -1,5 +1,14 @@
 from sqlalchemy import Column, Integer, String, DateTime
+import datetime
 from database import Base
+
+class AnonymousUser(Base):
+    __tablename__ = "anonymous_users"
+
+    id = Column(String, primary_key=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    last_seen = Column(DateTime, default=datetime.datetime.utcnow)
+    claimed_user_id = Column(String, nullable=True)
 
 class ScrollUpload(Base):
     __tablename__ = "scroll_uploads"

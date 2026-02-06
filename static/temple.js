@@ -38,7 +38,7 @@ document.addEventListener("DOMContentLoaded", function () {
     const payload = {
       question: questionText,
       deity: selectedDeity,
-      visitor_id: visitorId
+      anonymous_user_id: visitorId
     };
     if (seekerId) {
       payload.seeker_id = seekerId;
@@ -85,7 +85,7 @@ document.addEventListener("DOMContentLoaded", function () {
   scrollForm.addEventListener("submit", function (e) {
     e.preventDefault();
     const formData = new FormData(scrollForm);
-    formData.append("visitor_id", visitorId);
+    formData.append("anonymous_user_id", visitorId);
     if (seekerId) formData.append("seeker_id", seekerId);
     fetch("/upload_scroll", {
       method: "POST",

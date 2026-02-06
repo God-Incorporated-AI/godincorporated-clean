@@ -222,9 +222,19 @@ def reset_scroll_system():
     with open(SCROLL_DB, "w") as f:
         json.dump([], f)
 
-def estimate_tokens(question: str, answer: str) -> int:
-    """Rough token estimation for Phase 3.1 logging."""
-    return len(question) // 4 + len(answer) // 4
+def ensure_anonymous_user(anonymous_user_id: str):
+    """Ensure the anonymous user exists in the database and update last_seen."""
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM anonymous_users WHERE id = %s", (anonymous_user_id,))
+        if not cur.fetchone():
+            cur.execute("INSERT INTO anonymous_users (id, created_at, last_seen) VALUES (%s, %s, %s)", 
+                        (anonymous_user_id, datetime.datetime.utcnow(), datetime.datetime.utcnow()))
+        else:
+            cur.execute("UPDATE anonymous_users SET last_seen = %s WHERE id = %s", 
+                        (datetime.datetime.utcnow(), anonymous_user_id))
+    conn.commit()
+    conn.close()
 
 def update_visitor(visitor_id: str, tokens_used: int):
     """Update visitor ledger with token usage."""
@@ -289,7 +299,8 @@ def register_seeker(payload: RegisterInput):
     return {"seeker_id": seeker_id, "message": "Registration successful. Welcome to the temple."}
 
 @app.post("/upload_scroll")
-async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(None), visitor_id: str = Form(None)):
+async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
+    ensure_anonymous_user(anonymous_user_id)
     # Use seeker_id if provided, else generate temp uploader_id
     uploader_id = seeker_id if seeker_id else str(uuid.uuid4())
     
@@ -330,11 +341,13 @@ class QuestionInput(BaseModel):
     question: str
     deity: str = "Hathor"  # Default to Hathor
     seeker_id: str = None
-    visitor_id: str = None
+    anonymous_user_id: str
 
 @app.post("/ask")
 async def ask_oracle(request: Request, payload: QuestionInput):
-    visitor = payload.visitor_id or "anonymous"
+    seeker = payload.seeker_id
+    anonymous_user_id = payload.anonymous_user_id
+    ensure_anonymous_user(anonymous_user_id)
     try:
         question = payload.question
         deity = payload.deity
@@ -348,8 +361,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         
         # Phase 3.1: Token metering for anonymous continuity
         estimated_tokens = estimate_tokens(question, answer)
-        if visitor != "anonymous":
-            update_visitor(visitor, estimated_tokens)
+        if anonymous_user_id:
+            update_visitor(anonymous_user_id, estimated_tokens)
         usage_class = "registered" if payload.seeker_id else "anonymous"
         
         architect_obs = architect_observe_v3(question, deity, session_id)
@@ -362,15 +375,15 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         save_log({
             "timestamp": str(datetime.datetime.now()),
             "session_id": session_id,
-            "seeker_id": payload.seeker_id,
-            "visitor_id": visitor,
+            "seeker_id": seeker,
+            "anonymous_user_id": anonymous_user_id,
             "question": question,
             "oracle_used": deity,
             "answer": answer,
             "architect_observation": architect_obs,
             "llama_observation": llama_obs,
             "source_model": source_model,
-            "phase": "3.0",
+            "phase": "4.0",
             "corpus_intent": "authoritative_training_data",
             # Phase 3.1 influence fields (defaults)
             "personal_retrieval_score": None,
@@ -388,8 +401,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 @app.post("/whisper")
-async def whisper_audio(request: Request, file: UploadFile = File(...), voice: str = Form("Hathor"), seeker_id: str = Form(None), visitor_id: str = Form(None)):
+async def whisper_audio(request: Request, file: UploadFile = File(...), voice: str = Form("Hathor"), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
     try:
+        ensure_anonymous_user(anonymous_user_id)
         session_id = str(uuid.uuid4())
         question = transcribe_audio(await file.read())
         print(f"🎤 Whisper transcription: {question}")
@@ -400,8 +414,8 @@ async def whisper_audio(request: Request, file: UploadFile = File(...), voice: s
         
         # Phase 3.1: Token metering for anonymous continuity
         estimated_tokens = estimate_tokens(question, answer)
-        if visitor_id:
-            update_visitor(visitor_id, estimated_tokens)
+        if anonymous_user_id:
+            update_visitor(anonymous_user_id, estimated_tokens)
         usage_class = "registered" if seeker_id else "anonymous"
         
         architect_obs = architect_observe_v3(question, voice, session_id)
@@ -415,14 +429,14 @@ async def whisper_audio(request: Request, file: UploadFile = File(...), voice: s
             "timestamp": str(datetime.datetime.now()),
             "session_id": session_id,
             "seeker_id": seeker_id,
-            "visitor_id": visitor_id,
+            "anonymous_user_id": anonymous_user_id,
             "question": question,
             "oracle_used": voice,
             "answer": answer,
             "architect_observation": architect_obs,
             "llama_observation": llama_obs,
             "source_model": source_model,
-            "phase": "3.0",
+            "phase": "4.0",
             "corpus_intent": "authoritative_training_data",
             # Phase 3.1 influence fields (defaults)
             "personal_retrieval_score": None,
