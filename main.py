@@ -4,6 +4,7 @@ import os
 import shutil
 import tempfile
 import uuid
+from typing import Optional
 
 from docx import Document
 from dotenv import load_dotenv
@@ -284,7 +285,7 @@ def get_scroll_count():
     }
 
 class RegisterInput(BaseModel):
-    display_name: str = None  # Optional
+    display_name: Optional[str] = None  # Optional
 
 @app.post("/register")
 def register_seeker(payload: RegisterInput):
@@ -345,7 +346,7 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
 class QuestionInput(BaseModel):
     question: str
     deity: str = "Hathor"  # Default to Hathor
-    seeker_id: str = None
+    seeker_id: Optional[str] = None
     anonymous_user_id: str
 
 @app.post("/ask")
