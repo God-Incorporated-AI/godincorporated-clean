@@ -1,0 +1,114 @@
+body {
+  font-family: 'Georgia', serif;
+  background-color: #f4f1e9;
+  color: #4a3f35;
+  margin: 0;
+  padding: 0;
+  text-align: center;
+}
+
+main {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.branding {
+  margin-bottom: 2rem;
+}
+
+.branding .brand-name {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: #8b0000; /* deep red */
+  text-align: center;
+  margin-bottom: 0.5rem;
+}
+
+.branding h1 {
+  font-size: 2.2rem;
+  color: #6b1c1c;
+  margin-bottom: 0.2rem;
+}
+
+.branding h1::before,
+.branding h1::after {
+  content: "✠";
+  color: #cc0000; /* red templar crosses */
+  margin: 0 0.4rem;
+}
+
+.temple-subtitle {
+  font-size: 1rem;
+  color: #555;
+  margin-top: 0.4rem;
+  text-align: center;
+}
+
+section {
+  margin-bottom: 2.5rem;
+}
+
+.scroll-upload h2,
+.oracle-consult h2 {
+  font-size: 1.5rem;
+  margin-bottom: 1rem;
+  color: #3d2b1f;
+}
+
+#scrollForm input[type="file"] {
+  margin-right: 1rem;
+}
+
+button {
+  background-color: #8b0000;
+  color: #fff;
+  border: none;
+  padding: 0.5rem 1rem;
+  margin-top: 0.5rem;
+  cursor: pointer;
+  font-size: 1rem;
+  border-radius: 5px;
+}
+
+button:hover {
+  background-color: #a52a2a;
+}
+
+.input-row {
+  margin-top: 1rem;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+#voiceSelect {
+  padding: 0.4rem;
+  font-size: 1rem;
+}
+
+textarea#seekerInput {
+  width: 100%;
+  font-size: 1.1rem;
+  padding: 0.75rem;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.voice-response {
+  background-color: #fffaf0;
+  border: 2px solid #ddd;
+  padding: 1rem;
+  margin-top: 1.5rem;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 1rem;
+  text-align: left;
+  white-space: pre-wrap;
+  max-height: 300px;
+  overflow-y: auto;
+  border-radius: 8px;
+}

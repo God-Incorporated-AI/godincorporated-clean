@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>The Temple of Hathor</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main>
+    <header class="branding">
+      <div class="brand-name">GODINCORPORATED.AI</div>
+      <h1> The Temple of Hathor </h1>
+     
+    </header>
+
+    <section class="scroll-upload">
+      <h2>📜 Offer a Sacred Scroll</h2>
+       <div class="temple-subtitle">All scrolls will be used to inform future Oracle answers.</div>
+       
+      <form id="scrollForm">
+        <input type="file" id="scroll" name="scroll" accept=".txt,.pdf,.md,.docx,.rtf" required />
+        <button type="submit">Upload</button>
+      </form>
+      <p>Scrolls received: <span id="scrollCount">0</span></p>
+    </section>
+
+    <section class="oracle-consult">
+      <h2>🔮 Ask the Oracle</h2>
+      <form id="oracleForm">
+        <label for="seekerInput">Your question:</label>
+        <textarea id="seekerInput" placeholder="What are you seeking clarity on?" rows="4" required></textarea>
+        <div class="input-row">
+          <select id="voiceSelect">
+            <option value="Hathor">Voice of Hathor</option>
+            <option value="Moses">Voice of Moses</option>
+          </select>
+          <button type="submit" id="askButton">Ask</button>
+          <button type="button" id="speakButton">🎤 Speak</button>
+        </div>
+        <div id="oracleHelper" class="oracle-helper"></div>
+      </form>
+      <pre id="oracleAnswer" class="voice-response">The Oracle speaks here...</pre>
+    </section>
+  </main>
+
+  <script src="/static/temple.js?v=2"></script>
+</body>
+</html>

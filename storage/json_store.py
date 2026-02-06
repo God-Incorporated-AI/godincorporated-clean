@@ -1,0 +1,73 @@
+import os
+import json
+import datetime
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+UPLOAD_DIR = os.path.join(BASE_DIR, "scrolls_uploads")
+AUDIO_DIR = os.path.join(BASE_DIR, "audio")
+TRANSCRIPT_LOG = os.path.join(BASE_DIR, "oracle_log.json")
+SCROLL_DB = os.path.join(BASE_DIR, "scroll_data.json")
+SEEKERS_DB = os.path.join(BASE_DIR, "seekers.json")
+VISITORS_DB = os.path.join(BASE_DIR, "visitors.json")
+
+def save_log(entry):
+    try:
+        logs = []
+        if os.path.exists(TRANSCRIPT_LOG):
+            with open(TRANSCRIPT_LOG, "r") as f:
+                content = f.read().strip()
+                logs = json.loads(content) if content else []
+        logs.append(entry)
+        with open(TRANSCRIPT_LOG, "w") as f:
+            json.dump(logs, f, indent=2)
+    except Exception as e:
+        print("⚠️ Logging failed:", e)
+
+def load_scroll_data():
+    """Load scroll data from JSON, return list of scrolls."""
+    try:
+        with open(SCROLL_DB, "r") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return []
+
+def save_scroll_data(scrolls):
+    """Save list of scrolls to JSON."""
+    with open(SCROLL_DB, "w") as f:
+        json.dump(scrolls, f, indent=2)
+
+def load_seekers():
+    """Load seekers data from JSON, return dict of seekers."""
+    try:
+        with open(SEEKERS_DB, "r") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return {}
+
+def save_seekers(seekers):
+    """Save dict of seekers to JSON."""
+    with open(SEEKERS_DB, "w") as f:
+        json.dump(seekers, f, indent=2)
+
+def load_visitors():
+    """Load visitors data from JSON, return dict of visitors."""
+    try:
+        with open(VISITORS_DB, "r") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return {}
+
+def save_visitors(visitors):
+    """Save dict of visitors to JSON."""
+    with open(VISITORS_DB, "w") as f:
+        json.dump(visitors, f, indent=2)

@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+venv/
+.env
+
+# Runtime data
+logs/
+temp_audio/
+audio/
+scrolls_uploads/
+chroma_store/
+oracle_log.json
+visitors.json
+seekers.json
+scroll_data.json
+temple_memory/
+
+# OS
+.DS_Store
+
