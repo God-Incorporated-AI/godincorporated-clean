@@ -51,9 +51,11 @@ def get_db_connection():
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         raise ValueError("DATABASE_URL not set")
-    # Fix SQLAlchemy-style URL for psycopg2 compatibility
+    # Defensive normalization for SQLAlchemy-style URLs
     if db_url.startswith("postgresql+psycopg2://"):
+        original_url = db_url
         db_url = db_url.replace("postgresql+psycopg2://", "postgresql://")
+        print(f"WARNING: Normalized DATABASE_URL from SQLAlchemy format to psycopg2-compatible: {original_url} -> {db_url}")
     return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
 
 def test_db_connectivity():
