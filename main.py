@@ -19,10 +19,10 @@ from PyPDF2 import PdfReader
 import httpx
 import psycopg2
 
-from .config.settings import LLAMA_ENABLED, xai_api_key
-from .services.tts import generate_tts_audio
-from .services.whisper import transcribe_audio
-from .storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, SEEKERS_DB, VISITORS_DB, save_log, load_scroll_data, save_scroll_data, load_seekers, save_seekers, load_visitors, save_visitors
+from config.settings import LLAMA_ENABLED, xai_api_key
+from services.tts import generate_tts_audio
+from services.whisper import transcribe_audio
+from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, SEEKERS_DB, VISITORS_DB, save_log, load_scroll_data, save_scroll_data, load_seekers, save_seekers, load_visitors, save_visitors
 
 app = FastAPI()
 
