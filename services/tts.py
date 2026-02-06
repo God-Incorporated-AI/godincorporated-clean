@@ -1,7 +1,7 @@
 import os
 import uuid
 from openai import OpenAI
-from ..storage.json_store import AUDIO_DIR
+from storage.json_store import AUDIO_DIR
 
 openai_client = None  # Lazy load
 
