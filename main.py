@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 import os
 import shutil
 import tempfile
@@ -56,7 +57,7 @@ def get_db_connection():
     if db_url.startswith("postgresql+psycopg2://"):
         original_url = db_url
         db_url = db_url.replace("postgresql+psycopg2://", "postgresql://")
-        print(f"WARNING: Normalized DATABASE_URL from SQLAlchemy format to psycopg2-compatible: {original_url} -> {db_url}")
+        logging.debug(f"Normalized DATABASE_URL from SQLAlchemy format to psycopg2-compatible: {original_url} -> {db_url}")
     return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
 
 def test_db_connectivity():
