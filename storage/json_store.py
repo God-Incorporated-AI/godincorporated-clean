@@ -10,6 +10,7 @@ TRANSCRIPT_LOG = os.path.join(BASE_DIR, "oracle_log.json")
 SCROLL_DB = os.path.join(BASE_DIR, "scroll_data.json")
 SEEKERS_DB = os.path.join(BASE_DIR, "seekers.json")
 VISITORS_DB = os.path.join(BASE_DIR, "visitors.json")
+IDENTITY_CLAIMS_DB = os.path.join(BASE_DIR, "identity_claims.json")
 
 def save_log(entry):
     try:
@@ -71,3 +72,19 @@ def save_visitors(visitors):
     """Save dict of visitors to JSON."""
     with open(VISITORS_DB, "w") as f:
         json.dump(visitors, f, indent=2)
+
+def load_identity_claims():
+    """Load identity claims from JSON, return list of claims."""
+    try:
+        with open(IDENTITY_CLAIMS_DB, "r") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return []
+
+def save_identity_claims(claims):
+    """Save list of identity claims to JSON."""
+    with open(IDENTITY_CLAIMS_DB, "w") as f:
+        json.dump(claims, f, indent=2)
