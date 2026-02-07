@@ -47,6 +47,11 @@ def get_openai_client():
         openai_client = OpenAI(api_key=api_key)
     return openai_client
 
+def estimate_tokens(question: str, answer: str) -> int:
+    """Rough token estimation for metering. ~4 chars per token."""
+    total_chars = len(question) + len(answer)
+    return total_chars // 4
+
 # Phase 3.2.1: Minimal read-only Postgres connectivity
 def get_db_connection():
     """Lazy-loaded read-only DB connection. No writes allowed."""
