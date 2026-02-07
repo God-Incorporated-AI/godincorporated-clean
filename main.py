@@ -24,7 +24,7 @@ import psycopg2
 from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio
 from services.whisper import transcribe_audio
-from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, SEEKERS_DB, VISITORS_DB, save_log, load_scroll_data, save_scroll_data, load_seekers, save_seekers, load_visitors, save_visitors
+from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, SEEKERS_DB, VISITORS_DB, save_log, load_scroll_data, save_scroll_data, load_seekers, save_seekers, load_visitors, save_visitors, load_identity_claims, save_identity_claims
 
 app = FastAPI()
 
@@ -272,6 +272,26 @@ def update_visitor(visitor_id: str, tokens_used: int):
     visitor["token_used_today"] += tokens_used
     save_visitors(visitors)
 
+def resolve_seeker_id(anonymous_user_id: str, provided_seeker_id: Optional[str] = None) -> Optional[str]:
+    """Resolve seeker_id with precedence: provided > claimed > None"""
+    if provided_seeker_id:
+        return provided_seeker_id
+    
+    claims = load_identity_claims()
+    for claim in claims:
+        if claim["anonymous_user_id"] == anonymous_user_id and claim["revoked_at"] is None:
+            return claim["seeker_id"]
+    
+    return None
+
+def resolve_identity_state(anonymous_user_id: str) -> dict:
+    """Return identity state for UI decisions"""
+    seeker_id = resolve_seeker_id(anonymous_user_id)
+    return {
+        "is_claimed": seeker_id is not None,
+        "seeker_id": seeker_id
+    }
+
 @app.get("/", response_class=HTMLResponse)
 @app.get("/temple", response_class=HTMLResponse)
 def temple_page(request: Request):
@@ -310,9 +330,73 @@ def register_seeker(payload: RegisterInput):
     save_seekers(seekers)
     return {"seeker_id": seeker_id, "message": "Registration successful. Welcome to the temple."}
 
+class ClaimIdentityInput(BaseModel):
+    anonymous_user_id: str
+    display_name: Optional[str] = None
+
+@app.post("/claim_identity")
+def claim_identity(payload: ClaimIdentityInput):
+    anonymous_user_id = payload.anonymous_user_id
+    display_name = payload.display_name
+    
+    claims = load_identity_claims()
+    seekers = load_seekers()
+    
+    # Check if already claimed
+    existing_claim = None
+    for claim in claims:
+        if claim["anonymous_user_id"] == anonymous_user_id and claim["revoked_at"] is None:
+            existing_claim = claim
+            break
+    
+    if existing_claim:
+        # Idempotent: check if display_name matches
+        seeker_id = existing_claim["seeker_id"]
+        seeker = seekers.get(seeker_id)
+        if seeker and seeker.get("display_name") == display_name:
+            return {"seeker_id": seeker_id, "message": "Identity already claimed.", "profile": seeker}
+        else:
+            return JSONResponse(content={"error": "Identity already claimed with different details."}, status_code=409)
+    
+    # Create new seeker
+    seeker_id = str(uuid.uuid4())
+    seekers[seeker_id] = {
+        "seeker_id": seeker_id,
+        "created_at": str(datetime.datetime.now()),
+        "display_name": display_name,
+        "title": "Seeker",
+        "scroll_count": 0,
+        "donation_total": 0.0,
+        "influence_state": "disabled",
+        "eligibility_flags": []
+    }
+    save_seekers(seekers)
+    
+    # Create claim
+    claim = {
+        "anonymous_user_id": anonymous_user_id,
+        "seeker_id": seeker_id,
+        "claimed_at": str(datetime.datetime.now()),
+        "claim_method": "manual",
+        "revoked_at": None
+    }
+    claims.append(claim)
+    save_identity_claims(claims)
+    
+    # Log the event
+    save_log({
+        "event": "identity_claimed",
+        "anonymous_user_id": anonymous_user_id,
+        "seeker_id": seeker_id,
+        "phase": "4.1"
+    })
+    
+    return {"seeker_id": seeker_id, "message": "Identity claimed successfully.", "profile": seekers[seeker_id]}
+
 @app.post("/upload_scroll")
 async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
     ensure_anonymous_user(anonymous_user_id)
+    seeker_id = resolve_seeker_id(anonymous_user_id, seeker_id)
     # Use seeker_id if provided, else generate temp uploader_id
     uploader_id = seeker_id if seeker_id else str(uuid.uuid4())
     
@@ -357,7 +441,7 @@ class QuestionInput(BaseModel):
 
 @app.post("/ask")
 async def ask_oracle(request: Request, payload: QuestionInput):
-    seeker = payload.seeker_id
+    seeker = resolve_seeker_id(payload.anonymous_user_id, payload.seeker_id)
     anonymous_user_id = payload.anonymous_user_id
     ensure_anonymous_user(anonymous_user_id)
     try:
@@ -416,6 +500,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 async def whisper_audio(request: Request, file: UploadFile = File(...), voice: str = Form("Hathor"), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
     try:
         ensure_anonymous_user(anonymous_user_id)
+        seeker_id = resolve_seeker_id(anonymous_user_id, seeker_id)
         session_id = str(uuid.uuid4())
         question = transcribe_audio(await file.read())
         print(f"🎤 Whisper transcription: {question}")
