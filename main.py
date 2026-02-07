@@ -10,9 +10,8 @@ from typing import Optional
 from docx import Document
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from passlib.context import CryptContext
+from fastapi.middleware.session import SessionMiddleware
 from openai import OpenAI
 from psycopg2.extras import RealDictCursor
 from pydantic import BaseModel
@@ -24,7 +23,7 @@ import psycopg2
 from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio
 from services.whisper import transcribe_audio
-from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, SEEKERS_DB, VISITORS_DB, save_log, load_scroll_data, save_scroll_data, load_seekers, save_seekers, load_visitors, save_visitors
+from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, SEEKERS_DB, VISITORS_DB, save_log, load_scroll_data, save_scroll_data, load_seekers, save_seekers, load_visitors, save_visitors, load_identity_claims, save_identity_claims, load_users, save_users
 
 app = FastAPI()
 
@@ -33,6 +32,10 @@ app.mount("/static", StaticFiles(directory=static_path), name="static")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+
+# Phase 4.2: Authentication setup
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-secret-key-change-in-prod"))
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(AUDIO_DIR, exist_ok=True)
