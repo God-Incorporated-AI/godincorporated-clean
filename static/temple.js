@@ -230,4 +230,87 @@ document.addEventListener("DOMContentLoaded", function () {
   if (seekerId) {
     registerForm.style.display = "none";
   }
+
+  // Phase 4.2: Hamburger menu for auth and identity
+  const menuToggle = document.getElementById("menuToggle");
+  const mainMenu = document.getElementById("mainMenu");
+  const authSection = document.getElementById("authSection");
+  const identitySection = document.getElementById("identitySection");
+  const usageSection = document.getElementById("usageSection");
+
+  // Toggle menu visibility
+  menuToggle.addEventListener("click", function() {
+    mainMenu.classList.toggle("show");
+  });
+
+  // Close menu when clicking outside
+  document.addEventListener("click", function(e) {
+    if (!menuToggle.contains(e.target) && !mainMenu.contains(e.target)) {
+      mainMenu.classList.remove("show");
+    }
+  });
+
+  // Fetch and display identity info
+  async function updateIdentityDisplay() {
+    try {
+      const url = `/me?anonymous_user_id=${encodeURIComponent(visitorId)}`;
+      const response = await fetch(url);
+      const data = await response.json();
+      
+      if (data.authenticated) {
+        // Show authenticated user info
+        authSection.innerHTML = `
+          <div class="menu-item">
+            <strong>${data.email}</strong>
+            <button id="logoutBtn" class="menu-button">Logout</button>
+          </div>
+        `;
+        identitySection.innerHTML = `
+          <div class="menu-item">
+            <span>Questions asked: ${data.usage.questions_asked}</span>
+            <span>Limit: ${data.usage.question_limit}</span>
+          </div>
+        `;
+        
+        // Add logout handler
+        document.getElementById("logoutBtn").addEventListener("click", async function() {
+          await fetch("/auth/logout", { method: "POST" });
+          location.reload(); // Refresh to update UI
+        });
+      } else {
+        // Show anonymous/login options
+        authSection.innerHTML = `
+          <div class="menu-item">
+            <button id="loginBtn" class="menu-button">Login</button>
+            <button id="registerBtn" class="menu-button">Register</button>
+          </div>
+        `;
+        identitySection.innerHTML = `
+          <div class="menu-item">
+            <span>Anonymous user</span>
+            <span>Questions asked: ${data.usage.questions_asked}</span>
+            <span>Limit: ${data.usage.question_limit}</span>
+          </div>
+        `;
+        
+        // Add login/register handlers
+        document.getElementById("loginBtn").addEventListener("click", function() {
+          // TODO: Show login form modal
+          alert("Login form coming soon!");
+        });
+        document.getElementById("registerBtn").addEventListener("click", function() {
+          // TODO: Show register form modal  
+          alert("Register form coming soon!");
+        });
+      }
+    } catch (err) {
+      console.error("Failed to fetch identity:", err);
+      // Fallback to anonymous display
+      authSection.innerHTML = `<div class="menu-item">Unable to load identity</div>`;
+      identitySection.innerHTML = `<div class="menu-item">Anonymous user</div>`;
+    }
+  }
+
+  // Update identity display on load
+  updateIdentityDisplay();
 });

@@ -10,8 +10,11 @@ from typing import Optional
 from docx import Document
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Query, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from passlib.context import CryptContext
-from fastapi.middleware.session import SessionMiddleware
+from starlette.middleware.sessions import SessionMiddleware
 from openai import OpenAI
 from psycopg2.extras import RealDictCursor
 from pydantic import BaseModel
@@ -295,6 +298,35 @@ def resolve_identity_state(anonymous_user_id: str) -> dict:
         "seeker_id": seeker_id
     }
 
+def hash_password(password: str) -> str:
+    """Hash a password using bcrypt."""
+    return pwd_context.hash(password)
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against its hash."""
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_current_user(request: Request) -> Optional[dict]:
+    """Get current authenticated user from session."""
+    user_id = request.session.get("user_id")
+    if user_id:
+        users = load_users()
+        return users.get(user_id)
+    return None
+
+def can_user_ask(anonymous_user_id: str, seeker_id: Optional[str] = None) -> bool:
+    """Check if user has remaining questions."""
+    visitors = load_visitors()
+    visitor = visitors.get(seeker_id or anonymous_user_id)
+    if not visitor:
+        return True  # New user, allow
+    
+    total_used = visitor.get("token_used_total", 0)
+    is_authenticated = seeker_id is not None and load_users().get(seeker_id) is not None  # Rough check
+    
+    limit = 33 if is_authenticated else 9
+    return total_used < limit
+
 @app.get("/", response_class=HTMLResponse)
 @app.get("/temple", response_class=HTMLResponse)
 def temple_page(request: Request):
@@ -396,6 +428,137 @@ def claim_identity(payload: ClaimIdentityInput):
     
     return {"seeker_id": seeker_id, "message": "Identity claimed successfully.", "profile": seekers[seeker_id]}
 
+class AuthRegisterInput(BaseModel):
+    email: str
+    password: str
+    anonymous_user_id: str
+
+@app.post("/auth/register")
+def auth_register(payload: AuthRegisterInput, request: Request):
+    email = payload.email.lower().strip()
+    password = payload.password
+    anonymous_user_id = payload.anonymous_user_id
+    
+    # Validate password strength (basic)
+    if len(password) < 8:
+        return JSONResponse(content={"error": "Password must be at least 8 characters"}, status_code=400)
+    
+    users = load_users()
+    claims = load_identity_claims()
+    
+    # Check if email already exists
+    for user in users.values():
+        if user["email"] == email:
+            return JSONResponse(content={"error": "Email already registered"}, status_code=409)
+    
+    # Find the claim for this anonymous_user_id
+    claim = None
+    for c in claims:
+        if c["anonymous_user_id"] == anonymous_user_id and c["revoked_at"] is None:
+            claim = c
+            break
+    
+    if not claim:
+        return JSONResponse(content={"error": "Identity not claimed. Please claim your identity first."}, status_code=400)
+    
+    seeker_id = claim["seeker_id"]
+    
+    # Create user
+    user_id = str(uuid.uuid4())
+    hashed_password = hash_password(password)
+    users[user_id] = {
+        "user_id": user_id,
+        "email": email,
+        "hashed_password": hashed_password,
+        "seeker_id": seeker_id,
+        "created_at": str(datetime.datetime.now()),
+        "last_login": None
+    }
+    save_users(users)
+    
+    # Set session
+    request.session["user_id"] = user_id
+    
+    return {"message": "Registration successful", "user_id": user_id}
+
+class AuthLoginInput(BaseModel):
+    email: str
+    password: str
+
+@app.post("/auth/login")
+def auth_login(payload: AuthLoginInput, request: Request):
+    email = payload.email.lower().strip()
+    password = payload.password
+    
+    users = load_users()
+    
+    # Find user by email
+    user = None
+    user_id = None
+    for uid, u in users.items():
+        if u["email"] == email:
+            user = u
+            user_id = uid
+            break
+    
+    if not user or not verify_password(password, user["hashed_password"]):
+        return JSONResponse(content={"error": "Invalid email or password"}, status_code=401)
+    
+    # Update last login
+    user["last_login"] = str(datetime.datetime.now())
+    save_users(users)
+    
+    # Set session
+    request.session["user_id"] = user_id
+    
+    return {"message": "Login successful", "user_id": user_id}
+
+@app.post("/auth/logout")
+def auth_logout(request: Request):
+    request.session.clear()
+    return {"message": "Logged out successfully"}
+
+@app.get("/me")
+def get_me(request: Request):
+    user = get_current_user(request)
+    if user:
+        # Authenticated user
+        visitors = load_visitors()
+        visitor = visitors.get(user.get("seeker_id"))
+        questions_asked = visitor.get("token_used_total", 0) if visitor else 0
+        question_limit = 33  # Authenticated limit
+        return {
+            "authenticated": True,
+            "email": user["email"],
+            "usage": {
+                "questions_asked": questions_asked,
+                "question_limit": question_limit
+            }
+        }
+    else:
+        # Anonymous user
+        anonymous_id = request.query_params.get("anonymous_user_id")
+        if anonymous_id:
+            state = resolve_identity_state(anonymous_id)
+            visitors = load_visitors()
+            visitor = visitors.get(anonymous_id)
+            questions_asked = visitor.get("token_used_total", 0) if visitor else 0
+            question_limit = 9  # Anonymous limit
+            return {
+                "authenticated": False,
+                "usage": {
+                    "questions_asked": questions_asked,
+                    "question_limit": question_limit
+                }
+            }
+        return {
+            "authenticated": False,
+            "usage": {
+                "questions_asked": 0,
+                "question_limit": 9
+            }
+        }
+
 @app.post("/upload_scroll")
 async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
     ensure_anonymous_user(anonymous_user_id)
@@ -447,6 +610,11 @@ async def ask_oracle(request: Request, payload: QuestionInput):
     seeker = resolve_seeker_id(payload.anonymous_user_id, payload.seeker_id)
     anonymous_user_id = payload.anonymous_user_id
     ensure_anonymous_user(anonymous_user_id)
+    
+    # Phase 4.2: Usage enforcement
+    if not can_user_ask(anonymous_user_id, seeker):
+        return JSONResponse(content={"error": "Usage limit reached. Please log in or try again later."}, status_code=429)
+    
     try:
         question = payload.question
         deity = payload.deity
