@@ -112,3 +112,62 @@ textarea#seekerInput {
   overflow-y: auto;
   border-radius: 8px;
 }
+
+/* Phase 4.2: Hamburger menu */
+.header-actions {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+}
+
+.menu-toggle {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: #4a3f35;
+}
+
+.main-menu {
+  display: none;
+  position: absolute;
+  top: 2.5rem;
+  right: 0;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 1rem;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+  min-width: 200px;
+  z-index: 1000;
+}
+
+.main-menu.show {
+  display: block;
+}
+
+.menu-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.menu-section button {
+  background: #8b0000;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.menu-section button:hover {
+  background: #a00000;
+}
+
+#userInfo, #usageInfo {
+  font-size: 0.9rem;
+  color: #4a3f35;
+  margin-bottom: 0.5rem;
+}

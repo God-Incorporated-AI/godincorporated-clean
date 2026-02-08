@@ -10,6 +10,22 @@
   <main>
     <header class="branding">
       <div class="brand-name">GODINCORPORATED.AI</div>
+      <div class="header-actions">
+        <button id="menuToggle" class="menu-toggle">☰</button>
+        <nav id="mainMenu" class="main-menu">
+          <div id="menuAnonymous" class="menu-section">
+            <button id="loginBtn">Log in</button>
+            <button id="registerBtn">Create account</button>
+            <button id="supportBtn">Support the Temple</button>
+          </div>
+          <div id="menuAuthenticated" class="menu-section" style="display: none;">
+            <div id="userInfo">Welcome, <span id="userEmail"></span></div>
+            <div id="usageInfo">Questions used: <span id="usageCount">0</span></div>
+            <button id="logoutBtn">Log out</button>
+            <button id="supportBtn">Support the Temple</button>
+          </div>
+        </nav>
+      </div>
       <h1> The Temple of Hathor </h1>
      
     </header>
