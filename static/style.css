@@ -15,6 +15,7 @@ main {
 
 .branding {
   margin-bottom: 2rem;
+  position: relative;
 }
 
 .branding .brand-name {
@@ -170,4 +171,70 @@ textarea#seekerInput {
   font-size: 0.9rem;
   color: #4a3f35;
   margin-bottom: 0.5rem;
+}
+
+/* Phase 4.2.1: Modal styles */
+.modal {
+  display: none;
+  position: fixed;
+  z-index: 2000;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0,0,0,0.5);
+}
+
+.modal-content {
+  background-color: #fff;
+  margin: 15% auto;
+  padding: 20px;
+  border: 1px solid #888;
+  width: 80%;
+  max-width: 400px;
+  border-radius: 8px;
+}
+
+.close {
+  color: #aaa;
+  float: right;
+  font-size: 28px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.close:hover,
+.close:focus {
+  color: black;
+  text-decoration: none;
+}
+
+.modal form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modal label {
+  font-weight: bold;
+}
+
+.modal input {
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+
+.modal button {
+  background-color: #8b0000;
+  color: white;
+  border: none;
+  padding: 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.modal button:hover {
+  background-color: #a52a2a;
 }
