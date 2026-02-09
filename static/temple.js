@@ -234,9 +234,21 @@ document.addEventListener("DOMContentLoaded", function () {
   // Phase 4.2: Hamburger menu for auth and identity
   const menuToggle = document.getElementById("menuToggle");
   const mainMenu = document.getElementById("mainMenu");
-  const authSection = document.getElementById("authSection");
-  const identitySection = document.getElementById("identitySection");
-  const usageSection = document.getElementById("usageSection");
+  const menuAnonymous = document.getElementById("menuAnonymous");
+  const menuAuthenticated = document.getElementById("menuAuthenticated");
+  const userEmail = document.getElementById("userEmail");
+  const usageCount = document.getElementById("usageCount");
+  const loginBtn = document.getElementById("loginBtn");
+  const registerBtn = document.getElementById("registerBtn");
+  const logoutBtn = document.getElementById("logoutBtn");
+  const supportBtn = document.getElementById("supportBtn");
+
+  // Phase 4.2.1: Modal elements
+  const loginModal = document.getElementById("loginModal");
+  const registerModal = document.getElementById("registerModal");
+  const loginForm = document.getElementById("loginForm");
+  const registerForm = document.getElementById("registerForm");
+  const closeButtons = document.querySelectorAll(".close");
 
   // Toggle menu visibility
   menuToggle.addEventListener("click", function() {
@@ -250,6 +262,60 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   });
 
+  // Modal event listeners
+  loginBtn.addEventListener("click", function() {
+    loginModal.style.display = "block";
+    mainMenu.classList.remove("show");
+  });
+
+  registerBtn.addEventListener("click", function() {
+    registerModal.style.display = "block";
+    mainMenu.classList.remove("show");
+  });
+
+  supportBtn.addEventListener("click", function() {
+    alert("Support the Temple: Donations coming soon!");
+  });
+
+  // Close modals
+  closeButtons.forEach(btn => {
+    btn.addEventListener("click", function() {
+      loginModal.style.display = "none";
+      registerModal.style.display = "none";
+    });
+  });
+
+  // Close modal when clicking outside
+  window.addEventListener("click", function(e) {
+    if (e.target === loginModal) {
+      loginModal.style.display = "none";
+    }
+    if (e.target === registerModal) {
+      registerModal.style.display = "none";
+    }
+  });
+
+  // Form submissions (stubbed)
+  loginForm.addEventListener("submit", async function(e) {
+    e.preventDefault();
+    const email = document.getElementById("loginEmail").value;
+    const password = document.getElementById("loginPassword").value;
+    // Stub: alert success
+    alert(`Login attempted for ${email}`);
+    loginModal.style.display = "none";
+    // In real implementation: submit to /auth/login
+  });
+
+  registerForm.addEventListener("submit", async function(e) {
+    e.preventDefault();
+    const email = document.getElementById("registerEmail").value;
+    const password = document.getElementById("registerPassword").value;
+    // Stub: alert success
+    alert(`Registration attempted for ${email}`);
+    registerModal.style.display = "none";
+    // In real implementation: submit to /auth/register
+  });
+
   // Fetch and display identity info
   async function updateIdentityDisplay() {
     try {
@@ -258,56 +324,27 @@ document.addEventListener("DOMContentLoaded", function () {
       const data = await response.json();
       
       if (data.authenticated) {
-        // Show authenticated user info
-        authSection.innerHTML = `
-          <div class="menu-item">
-            <strong>${data.email}</strong>
-            <button id="logoutBtn" class="menu-button">Logout</button>
-          </div>
-        `;
-        identitySection.innerHTML = `
-          <div class="menu-item">
-            <span>Questions asked: ${data.usage.questions_asked}</span>
-            <span>Limit: ${data.usage.question_limit}</span>
-          </div>
-        `;
+        // Show authenticated menu
+        menuAnonymous.style.display = "none";
+        menuAuthenticated.style.display = "flex";
+        userEmail.textContent = data.email;
+        usageCount.textContent = data.usage.questions_asked;
         
-        // Add logout handler
-        document.getElementById("logoutBtn").addEventListener("click", async function() {
+        // Logout handler
+        logoutBtn.addEventListener("click", async function() {
           await fetch("/auth/logout", { method: "POST" });
-          location.reload(); // Refresh to update UI
+          location.reload();
         });
       } else {
-        // Show anonymous/login options
-        authSection.innerHTML = `
-          <div class="menu-item">
-            <button id="loginBtn" class="menu-button">Login</button>
-            <button id="registerBtn" class="menu-button">Register</button>
-          </div>
-        `;
-        identitySection.innerHTML = `
-          <div class="menu-item">
-            <span>Anonymous user</span>
-            <span>Questions asked: ${data.usage.questions_asked}</span>
-            <span>Limit: ${data.usage.question_limit}</span>
-          </div>
-        `;
-        
-        // Add login/register handlers
-        document.getElementById("loginBtn").addEventListener("click", function() {
-          // TODO: Show login form modal
-          alert("Login form coming soon!");
-        });
-        document.getElementById("registerBtn").addEventListener("click", function() {
-          // TODO: Show register form modal  
-          alert("Register form coming soon!");
-        });
+        // Show anonymous menu
+        menuAnonymous.style.display = "flex";
+        menuAuthenticated.style.display = "none";
       }
     } catch (err) {
       console.error("Failed to fetch identity:", err);
-      // Fallback to anonymous display
-      authSection.innerHTML = `<div class="menu-item">Unable to load identity</div>`;
-      identitySection.innerHTML = `<div class="menu-item">Anonymous user</div>`;
+      // Fallback to anonymous
+      menuAnonymous.style.display = "flex";
+      menuAuthenticated.style.display = "none";
     }
   }
 
