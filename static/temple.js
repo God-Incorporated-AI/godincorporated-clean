@@ -191,46 +191,6 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   });
 
-  // Phase 3.1: Lightweight registration (optional)
-  const registerForm = document.createElement("form");
-  registerForm.id = "registerForm";
-  registerForm.innerHTML = `
-    <h3>Leave a name so the Temple can remember you.</h3>
-    <input type="text" id="displayName" placeholder="one word name that will be solely yours." maxlength="50" style="width: 300px;">
-    <button type="submit">Register</button>
-    <p style="font-size: 0.9em; color: #666;">"Leaving a name allows the Temple to remember your questions and offerings. You may always remain anonymous if you wish."</p>
-  `;
-  document.body.appendChild(registerForm);
-
-  registerForm.addEventListener("submit", function (e) {
-    e.preventDefault();
-    const displayName = document.getElementById("displayName").value.trim() || null;
-    fetch("/register", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ display_name: displayName }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.seeker_id) {
-          seekerId = data.seeker_id;
-          localStorage.setItem("seeker_id", seekerId);
-          alert(data.message);
-          registerForm.style.display = "none"; // Hide after registration
-        } else {
-          alert("Registration failed.");
-        }
-      })
-      .catch((err) => {
-        alert("Registration error: " + err.message);
-      });
-  });
-
-  // Hide registration if already registered
-  if (seekerId) {
-    registerForm.style.display = "none";
-  }
-
   // Phase 4.2: Hamburger menu for auth and identity
   const menuToggle = document.getElementById("menuToggle");
   const mainMenu = document.getElementById("mainMenu");
@@ -274,7 +234,7 @@ document.addEventListener("DOMContentLoaded", function () {
   });
 
   supportBtn.addEventListener("click", function() {
-    alert("Support the Temple: Donations coming soon!");
+    // Support functionality coming soon
   });
 
   // Close modals
@@ -300,20 +260,14 @@ document.addEventListener("DOMContentLoaded", function () {
     e.preventDefault();
     const email = document.getElementById("loginEmail").value;
     const password = document.getElementById("loginPassword").value;
-    // Stub: alert success
-    alert(`Login attempted for ${email}`);
-    loginModal.style.display = "none";
-    // In real implementation: submit to /auth/login
+    // UI scaffolding - backend integration pending
   });
 
   registerForm.addEventListener("submit", async function(e) {
     e.preventDefault();
     const email = document.getElementById("registerEmail").value;
     const password = document.getElementById("registerPassword").value;
-    // Stub: alert success
-    alert(`Registration attempted for ${email}`);
-    registerModal.style.display = "none";
-    // In real implementation: submit to /auth/register
+    // UI scaffolding - backend integration pending
   });
 
   // Fetch and display identity info
