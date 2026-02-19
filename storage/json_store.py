@@ -12,6 +12,8 @@ SEEKERS_DB = os.path.join(BASE_DIR, "seekers.json")
 VISITORS_DB = os.path.join(BASE_DIR, "visitors.json")
 IDENTITY_CLAIMS_DB = os.path.join(BASE_DIR, "identity_claims.json")
 USERS_DB = os.path.join(BASE_DIR, "users.json")
+VERIFICATION_TOKENS_DB = os.path.join(BASE_DIR, "verification_tokens.json")
+RESET_TOKENS_DB = os.path.join(BASE_DIR, "reset_tokens.json")
 
 def save_log(entry):
     try:
@@ -96,6 +98,14 @@ def load_users():
         with open(USERS_DB, "r") as f:
             data = json.load(f)
             if isinstance(data, dict):
+                # Migrate existing users to have is_verified
+                migrated = False
+                for user in data.values():
+                    if "is_verified" not in user:
+                        user["is_verified"] = True
+                        migrated = True
+                if migrated:
+                    save_users(data)
                 return data
     except (FileNotFoundError, json.JSONDecodeError):
         pass
@@ -105,3 +115,35 @@ def save_users(users):
     """Save dict of users to JSON."""
     with open(USERS_DB, "w") as f:
         json.dump(users, f, indent=2)
+
+def load_verification_tokens():
+    """Load verification tokens from JSON, return list of tokens."""
+    try:
+        with open(VERIFICATION_TOKENS_DB, "r") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return []
+
+def save_verification_tokens(tokens):
+    """Save list of verification tokens to JSON."""
+    with open(VERIFICATION_TOKENS_DB, "w") as f:
+        json.dump(tokens, f, indent=2)
+
+def load_reset_tokens():
+    """Load reset tokens from JSON, return list of tokens."""
+    try:
+        with open(RESET_TOKENS_DB, "r") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    return []
+
+def save_reset_tokens(tokens):
+    """Save list of reset tokens to JSON."""
+    with open(RESET_TOKENS_DB, "w") as f:
+        json.dump(tokens, f, indent=2)

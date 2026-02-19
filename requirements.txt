@@ -2,7 +2,7 @@ annotated-types==0.7.0
 anyio==4.9.0
 attrs==25.3.0
 backoff==2.2.1
-bcrypt==4.3.0
+bcrypt==4.0.1
 build==1.2.2.post1
 cachetools==5.5.2
 certifi==2025.6.15

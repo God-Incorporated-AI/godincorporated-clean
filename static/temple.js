@@ -1,4 +1,11 @@
 document.addEventListener("DOMContentLoaded", function () {
+  // Check for reset token in URL
+  const urlParams = new URLSearchParams(window.location.search);
+  const resetToken = urlParams.get('token');
+  if (resetToken && window.location.pathname === '/auth/reset-password') {
+    document.getElementById("resetToken").value = resetToken;
+    resetPasswordModal.style.display = "block";
+  }
   // Documentation: Identity States and Unified /ask Contract
   //
   // The system supports three seeker states:
@@ -26,12 +33,23 @@ document.addEventListener("DOMContentLoaded", function () {
   const oracleHelper = document.getElementById("oracleHelper");
 
   // Phase 3.1: Anonymous continuity and seeker identity
-  let visitorId = localStorage.getItem("visitor_id");
-  if (!visitorId) {
-    visitorId = crypto.randomUUID();
-    localStorage.setItem("visitor_id", visitorId);
-  }
+  let visitorId = null; // Will be set from backend
   let seekerId = localStorage.getItem("seeker_id") || null;
+
+  // Safe JSON parsing helper
+  async function safeReadJson(response) {
+    const text = await response.text();
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.includes("application/json")) {
+      try {
+        return JSON.parse(text);
+      } catch (e) {
+        return { error: text || "Request failed" };
+      }
+    } else {
+      return { error: text || "Request failed" };
+    }
+  }
 
   // Unified /ask submission function
   async function submitOracleQuestion(questionText, selectedDeity) {
@@ -154,7 +172,7 @@ document.addEventListener("DOMContentLoaded", function () {
         const formData = new FormData();
         formData.append("file", blob, "voice_input.webm");
         formData.append("voice", voiceSelect.value);
-        formData.append("visitor_id", visitorId);
+        formData.append("anonymous_user_id", visitorId);
         if (seekerId) formData.append("seeker_id", seekerId);
 
         fetch("/whisper", {
@@ -191,17 +209,17 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   });
 
-  // Phase 4.2: Hamburger menu for auth and identity
   const menuToggle = document.getElementById("menuToggle");
   const mainMenu = document.getElementById("mainMenu");
   const menuAnonymous = document.getElementById("menuAnonymous");
   const menuAuthenticated = document.getElementById("menuAuthenticated");
-  const userEmail = document.getElementById("userEmail");
+  const userDisplayName = document.getElementById("userDisplayName");
   const usageCount = document.getElementById("usageCount");
   const loginBtn = document.getElementById("loginBtn");
   const registerBtn = document.getElementById("registerBtn");
   const logoutBtn = document.getElementById("logoutBtn");
   const supportBtn = document.getElementById("supportBtn");
+  const forgotPasswordLink = document.getElementById("forgotPasswordLink");
 
   // Phase 4.2.1: Modal elements
   const loginModal = document.getElementById("loginModal");
@@ -209,6 +227,18 @@ document.addEventListener("DOMContentLoaded", function () {
   const loginForm = document.getElementById("loginForm");
   const registerForm = document.getElementById("registerForm");
   const closeButtons = document.querySelectorAll(".close");
+
+  // Reset modals
+  const resetRequestModal = document.getElementById("resetRequestModal");
+  const resetPasswordModal = document.getElementById("resetPasswordModal");
+  const resetRequestForm = document.getElementById("resetRequestForm");
+  const resetPasswordForm = document.getElementById("resetPasswordForm");
+
+  // Error elements
+  const loginError = document.getElementById("loginError");
+  const registerError = document.getElementById("registerError");
+  const resetRequestError = document.getElementById("resetRequestError");
+  const resetPasswordError = document.getElementById("resetPasswordError");
 
   // Toggle menu visibility
   menuToggle.addEventListener("click", function() {
@@ -224,11 +254,20 @@ document.addEventListener("DOMContentLoaded", function () {
 
   // Modal event listeners
   loginBtn.addEventListener("click", function() {
+    loginError.textContent = "";
     loginModal.style.display = "block";
     mainMenu.classList.remove("show");
   });
 
+  forgotPasswordLink.addEventListener("click", function(e) {
+    e.preventDefault();
+    resetRequestError.textContent = "";
+    resetRequestModal.style.display = "block";
+    loginModal.style.display = "none";
+  });
+
   registerBtn.addEventListener("click", function() {
+    registerError.textContent = "";
     registerModal.style.display = "block";
     mainMenu.classList.remove("show");
   });
@@ -242,6 +281,12 @@ document.addEventListener("DOMContentLoaded", function () {
     btn.addEventListener("click", function() {
       loginModal.style.display = "none";
       registerModal.style.display = "none";
+      resetRequestModal.style.display = "none";
+      resetPasswordModal.style.display = "none";
+      loginError.textContent = "";
+      registerError.textContent = "";
+      resetRequestError.textContent = "";
+      resetPasswordError.textContent = "";
     });
   });
 
@@ -249,54 +294,219 @@ document.addEventListener("DOMContentLoaded", function () {
   window.addEventListener("click", function(e) {
     if (e.target === loginModal) {
       loginModal.style.display = "none";
+      loginError.textContent = "";
     }
     if (e.target === registerModal) {
       registerModal.style.display = "none";
+      registerError.textContent = "";
+    }
+    if (e.target === resetRequestModal) {
+      resetRequestModal.style.display = "none";
+      resetRequestError.textContent = "";
+    }
+    if (e.target === resetPasswordModal) {
+      resetPasswordModal.style.display = "none";
+      resetPasswordError.textContent = "";
     }
   });
 
-  // Form submissions (stubbed)
+  // Form submissions
   loginForm.addEventListener("submit", async function(e) {
     e.preventDefault();
-    const email = document.getElementById("loginEmail").value;
+    const email = document.getElementById("loginEmail").value.trim();
     const password = document.getElementById("loginPassword").value;
-    // UI scaffolding - backend integration pending
+    if (!email || !password) return;
+
+    // Clear previous error
+    loginError.textContent = "";
+
+    // Disable button
+    const submitBtn = loginForm.querySelector("button");
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Logging in...";
+
+    try {
+      const response = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ email, password })
+      });
+      const data = await safeReadJson(response);
+      if (response.status === 401 || response.status === 403) {
+        loginError.textContent = "Session expired or unauthorized. Please log in again.";
+        updateIdentityDisplay();
+        return;
+      }
+      if (response.ok) {
+        // Success
+        loginModal.style.display = "none";
+        updateIdentityDisplay();
+      } else {
+        // Error
+        loginError.textContent = data.error || "Login failed";
+      }
+    } catch (err) {
+      loginError.textContent = "Network error";
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Log In";
+    }
   });
 
   registerForm.addEventListener("submit", async function(e) {
     e.preventDefault();
-    const email = document.getElementById("registerEmail").value;
+    const email = document.getElementById("registerEmail").value.trim();
+    const displayName = document.getElementById("registerDisplayName").value.trim();
     const password = document.getElementById("registerPassword").value;
-    // UI scaffolding - backend integration pending
+    if (!email || !displayName || !password) return;
+
+    // Clear previous error
+    registerError.textContent = "";
+
+    // Disable button
+    const submitBtn = registerForm.querySelector("button");
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Creating account...";
+
+    try {
+      const response = await fetch("/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ email, password, display_name: displayName })
+      });
+      const data = await safeReadJson(response);
+      if (response.status === 401 || response.status === 403) {
+        registerError.textContent = "Session expired or unauthorized. Please log in again.";
+        updateIdentityDisplay();
+        return;
+      }
+      if (response.ok) {
+        // Success
+        registerModal.style.display = "none";
+        updateIdentityDisplay();
+      } else {
+        // Error
+        registerError.textContent = data.error || "Registration failed";
+      }
+    } catch (err) {
+      registerError.textContent = err.message || "Network error";
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Create Account";
+    }
+  });
+
+  resetRequestForm.addEventListener("submit", async function(e) {
+    e.preventDefault();
+    const email = document.getElementById("resetEmail").value.trim();
+    if (!email) return;
+
+    // Clear previous error
+    resetRequestError.textContent = "";
+
+    // Disable button
+    const submitBtn = resetRequestForm.querySelector("button");
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Sending...";
+
+    try {
+      const response = await fetch("/auth/request-password-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email })
+      });
+      const data = await safeReadJson(response);
+      if (response.ok) {
+        // Success
+        resetRequestModal.style.display = "none";
+        alert("If an account with that email exists, a reset link has been sent. Check the console.");
+      } else {
+        // Error
+        resetRequestError.textContent = data.error || "Request failed";
+      }
+    } catch (err) {
+      resetRequestError.textContent = "Network error";
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Send Reset Link";
+    }
+  });
+
+  resetPasswordForm.addEventListener("submit", async function(e) {
+    e.preventDefault();
+    const token = document.getElementById("resetToken").value.trim();
+    const newPassword = document.getElementById("newPassword").value;
+    if (!token || !newPassword) return;
+
+    // Clear previous error
+    resetPasswordError.textContent = "";
+
+    // Disable button
+    const submitBtn = resetPasswordForm.querySelector("button");
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Resetting...";
+
+    try {
+      const response = await fetch("/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, new_password: newPassword })
+      });
+      const data = await safeReadJson(response);
+      if (response.ok) {
+        // Success
+        resetPasswordModal.style.display = "none";
+        alert("Password reset successfully. Please log in with your new password.");
+      } else {
+        // Error
+        resetPasswordError.textContent = data.error || "Reset failed";
+      }
+    } catch (err) {
+      resetPasswordError.textContent = "Network error";
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Reset Password";
+    }
   });
 
   // Fetch and display identity info
   async function updateIdentityDisplay() {
     try {
-      const url = `/me?anonymous_user_id=${encodeURIComponent(visitorId)}`;
-      const response = await fetch(url);
-      const data = await response.json();
+      const response = await fetch("/me", { credentials: "same-origin" });
+      const data = await safeReadJson(response);
+      if (response.status === 401 || response.status === 403 || data.error) {
+        // Treat as anonymous
+        visitorId = null;
+        seekerId = localStorage.getItem("seeker_id") || null;
+        menuAnonymous.style.display = "flex";
+        menuAuthenticated.style.display = "none";
+        return;
+      }
       
       if (data.authenticated) {
-        // Show authenticated menu
+        // Authenticated user
+        visitorId = data.anonymous_user_id || null; // In case
         menuAnonymous.style.display = "none";
         menuAuthenticated.style.display = "flex";
-        userEmail.textContent = data.email;
+        userDisplayName.textContent = data.display_name;
         usageCount.textContent = data.usage.questions_asked;
         
         // Logout handler
         logoutBtn.addEventListener("click", async function() {
-          await fetch("/auth/logout", { method: "POST" });
+          await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
           location.reload();
         });
       } else {
-        // Show anonymous menu
+        // Anonymous user
+        visitorId = data.anonymous_user_id;
         menuAnonymous.style.display = "flex";
         menuAuthenticated.style.display = "none";
       }
     } catch (err) {
       console.error("Failed to fetch identity:", err);
-      // Fallback to anonymous
+      // Fallback to anonymous without id
       menuAnonymous.style.display = "flex";
       menuAuthenticated.style.display = "none";
     }
