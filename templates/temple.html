@@ -19,7 +19,7 @@
             <button id="supportBtn">Support the Temple</button>
           </div>
           <div id="menuAuthenticated" class="menu-section" style="display: none;">
-            <div id="userInfo">Welcome, <span id="userEmail"></span></div>
+            <div id="userInfo">Welcome, <span id="userDisplayName"></span></div>
             <div id="usageInfo">Questions used: <span id="usageCount">0</span></div>
             <button id="logoutBtn">Log out</button>
             <button id="supportBtn">Support the Temple</button>
@@ -72,6 +72,8 @@
         <input type="password" id="loginPassword" required>
         <button type="submit">Log In</button>
       </form>
+      <a href="#" id="forgotPasswordLink">Forgot password?</a>
+      <div id="loginError" class="error-message"></div>
     </div>
   </div>
 
@@ -79,16 +81,48 @@
     <div class="modal-content">
       <span class="close">&times;</span>
       <h2>Create Account</h2>
-      <form id="registerForm">
+      <form id="registerForm" method="post">
         <label for="registerEmail">Email:</label>
         <input type="email" id="registerEmail" required>
+        <label for="registerDisplayName">Display Name:</label>
+        <input type="text" id="registerDisplayName" maxlength="24" pattern="^[A-Za-z0-9_]{2,24}$" title="2-24 characters, letters, numbers, underscores only" required>
         <label for="registerPassword">Password:</label>
         <input type="password" id="registerPassword" required>
         <button type="submit">Create Account</button>
       </form>
+      <div id="registerError" class="error-message"></div>
     </div>
   </div>
 
+
+  <!-- Password reset modals -->
+  <div id="resetRequestModal" class="modal">
+    <div class="modal-content">
+      <span class="close">&times;</span>
+      <h2>Reset Password</h2>
+      <form id="resetRequestForm">
+        <label for="resetEmail">Email:</label>
+        <input type="email" id="resetEmail" required>
+        <button type="submit">Send Reset Link</button>
+      </form>
+      <div id="resetRequestError" class="error-message"></div>
+    </div>
+  </div>
+
+  <div id="resetPasswordModal" class="modal">
+    <div class="modal-content">
+      <span class="close">&times;</span>
+      <h2>Reset Password</h2>
+      <form id="resetPasswordForm">
+        <label for="resetToken">Reset Token:</label>
+        <input type="text" id="resetToken" required>
+        <label for="newPassword">New Password:</label>
+        <input type="password" id="newPassword" required>
+        <button type="submit">Reset Password</button>
+      </form>
+      <div id="resetPasswordError" class="error-message"></div>
+    </div>
+  </div>
   <script src="/static/temple.js?v=2"></script>
 </body>
 </html>

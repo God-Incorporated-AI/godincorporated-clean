@@ -1,4 +1,5 @@
 import datetime
+from datetime import timezone
 import json
 import logging
 import os
@@ -9,10 +10,11 @@ from typing import Optional
 
 from docx import Document
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from itsdangerous import Signer, BadSignature
 from passlib.context import CryptContext
 from starlette.middleware.sessions import SessionMiddleware
 from openai import OpenAI
@@ -26,19 +28,134 @@ import psycopg2
 from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio
 from services.whisper import transcribe_audio
-from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, SEEKERS_DB, VISITORS_DB, save_log, load_scroll_data, save_scroll_data, load_seekers, save_seekers, load_visitors, save_visitors, load_identity_claims, save_identity_claims, load_users, save_users
+from services.mail import send_email
+from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, SEEKERS_DB, VISITORS_DB, save_log, load_scroll_data, save_scroll_data, load_seekers, save_seekers, load_visitors, save_visitors, load_users, save_users, load_verification_tokens, save_verification_tokens, load_reset_tokens, save_reset_tokens
+
+load_dotenv()
+
+class DatabaseSessionStore:
+    def __init__(self, secret_key: str):
+        self.signer = Signer(secret_key)
+    
+    def get(self, session_id: str) -> dict:
+        try:
+            conn = get_db_connection()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT data FROM user_sessions WHERE session_id = %s",
+                    (session_id,)
+                )
+                result = cur.fetchone()
+                if result:
+                    return json.loads(result['data'])
+        except Exception as e:
+            print(f"Session get error: {e}")
+        return {}
+    
+    def set(self, session_id: str, data: dict, expires_days: int = 30):
+        try:
+            conn = get_db_connection()
+            expires_at = datetime.datetime.now(timezone.utc) + datetime.timedelta(days=expires_days)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO user_sessions (session_id, data, expires_at) VALUES (%s, %s, %s) ON CONFLICT (session_id) DO UPDATE SET data = EXCLUDED.data, expires_at = EXCLUDED.expires_at",
+                    (session_id, json.dumps(data), expires_at)
+                )
+            conn.commit()
+        except Exception as e:
+            print(f"Session set error: {e}")
+    
+    def delete(self, session_id: str):
+        try:
+            conn = get_db_connection()
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM user_sessions WHERE session_id = %s", (session_id,))
+            conn.commit()
+        except Exception as e:
+            print(f"Session delete error: {e}")
+
+class DatabaseSessionMiddleware:
+    def __init__(self, app, secret_key: str):
+        self.app = app
+        self.store = DatabaseSessionStore(secret_key)
+    
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        
+        # Parse cookies
+        headers = dict((k, v) for k, v in scope.get("headers", []))
+        cookies = {}
+        if b"cookie" in headers:
+            cookie_str = headers[b"cookie"].decode()
+            for cookie in cookie_str.split(";"):
+                if "=" in cookie:
+                    k, v = cookie.strip().split("=", 1)
+                    cookies[k] = v
+        
+        session_id = cookies.get("session")
+        session_data = {}
+        if session_id:
+            session_data = self.store.get(session_id)
+        
+        # Add session to scope
+        scope["session"] = session_data
+        
+        # Track if session was modified
+        original_session = session_data.copy()
+        
+        # Response handler
+        async def send_wrapper(message):
+            nonlocal session_id
+            if message["type"] == "http.response.start":
+                # Check if session was modified
+                current_session = scope.get("session", {})
+                if current_session != original_session:
+                    if not session_id:
+                        session_id = str(uuid.uuid4())
+                    self.store.set(session_id, current_session)
+                    # Add session cookie
+                    cookie_value = f"session={session_id}; HttpOnly; Path=/; Max-Age=2592000; SameSite=Lax"
+                    message["headers"] = message.get("headers", []) + [(b"Set-Cookie", cookie_value.encode())]
+            await send(message)
+        
+        await self.app(scope, receive, send_wrapper)
 
 app = FastAPI()
 
 static_path = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/static", StaticFiles(directory=static_path), name="static")
 
+# Favicon route to prevent 404 noise
+@app.get("/favicon.ico")
+async def favicon():
+    return Response(status_code=204)
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
+from starlette.middleware.sessions import SessionMiddleware
+
 # Phase 4.2: Authentication setup
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-secret-key-change-in-prod"))
+session_store = DatabaseSessionStore(os.getenv("SESSION_SECRET", "dev-secret-key-change-in-prod"))
+app.add_middleware(DatabaseSessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-secret-key-change-in-prod"))
+
+# Global exception handlers for JSON error responses
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.detail}
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal Server Error"}
+    )
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(AUDIO_DIR, exist_ok=True)
@@ -83,12 +200,77 @@ def test_db_connectivity():
         print(f"DB connectivity test failed: {e}")
         return False
 
+def create_sessions_table():
+    """Create sessions table if it doesn't exist."""
+    try:
+        # Create a fresh connection for table creation
+        db_url = os.getenv("DATABASE_URL")
+        if not db_url:
+            raise ValueError("DATABASE_URL not set")
+        if db_url.startswith("postgresql+psycopg2://"):
+            db_url = db_url.replace("postgresql+psycopg2://", "postgresql://")
+        
+        conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+        conn.rollback()  # Reset any aborted transaction
+        with conn.cursor() as cur:
+            # Check if tables exist first
+            cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_sessions');")
+            user_sessions_exists = cur.fetchone()['exists']
+            
+            cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'anonymous_users');")
+            anonymous_users_exists = cur.fetchone()['exists']
+            
+            if not user_sessions_exists:
+                cur.execute("""
+                    CREATE TABLE user_sessions (
+                        session_id VARCHAR(255) PRIMARY KEY,
+                        data TEXT NOT NULL,
+                        expires_at TIMESTAMP NOT NULL
+                    );
+                """)
+                try:
+                    cur.execute("CREATE INDEX idx_user_sessions_expires_at ON user_sessions (expires_at);")
+                except:
+                    pass
+            
+            if not anonymous_users_exists:
+                cur.execute("""
+                    CREATE TABLE anonymous_users (
+                        id VARCHAR(255) PRIMARY KEY,
+                        created_at TIMESTAMP NOT NULL,
+                        last_seen TIMESTAMP NOT NULL
+                    );
+                """)
+        conn.commit()
+        conn.close()
+        print("Tables ready.")
+    except Exception as e:
+        print(f"Failed to create tables: {e}")
+        # Continue anyway
+
+# Initialize database tables
+create_sessions_table()
+
 # Optional: Add a test endpoint (can be removed later)
 @app.get("/db_test")
 def db_test():
     """Endpoint to verify DB connectivity without affecting app behavior."""
     success = test_db_connectivity()
     return {"db_connected": success}
+
+@app.get("/debug_table")
+def debug_table():
+    """Check if tables exist."""
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT table_name FROM information_schema.tables WHERE table_name = 'user_sessions'")
+            user_sessions = cur.fetchone()
+            cur.execute("SELECT table_name FROM information_schema.tables WHERE table_name = 'anonymous_users'")
+            anonymous_users = cur.fetchone()
+        return {"user_sessions": user_sessions, "anonymous_users": anonymous_users}
+    except Exception as e:
+        return {"error": str(e)}
 
 def get_llama_observation(question: str, oracle_used: str, answer: str, scrolls: list = None) -> dict:
     if not LLAMA_ENABLED:
@@ -279,14 +461,9 @@ def update_visitor(visitor_id: str, tokens_used: int):
     save_visitors(visitors)
 
 def resolve_seeker_id(anonymous_user_id: str, provided_seeker_id: Optional[str] = None) -> Optional[str]:
-    """Resolve seeker_id with precedence: provided > claimed > None"""
+    """Resolve seeker_id with precedence: provided > None (since no claims)"""
     if provided_seeker_id:
         return provided_seeker_id
-    
-    claims = load_identity_claims()
-    for claim in claims:
-        if claim["anonymous_user_id"] == anonymous_user_id and claim["revoked_at"] is None:
-            return claim["seeker_id"]
     
     return None
 
@@ -305,6 +482,19 @@ def hash_password(password: str) -> str:
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against its hash."""
     return pwd_context.verify(plain_password, hashed_password)
+
+def validate_reset_token(token: str) -> Optional[str]:
+    """Validate reset token and return user_id if valid, else None."""
+    reset_tokens = load_reset_tokens()
+    for entry in reset_tokens:
+        if entry["token"] == token:
+            if entry.get("used", False):
+                return None
+            expires_at = datetime.datetime.fromisoformat(entry["expires_at"])
+            if datetime.datetime.utcnow() > expires_at:
+                return None
+            return entry["user_id"]
+    return None
 
 def get_current_user(request: Request) -> Optional[dict]:
     """Get current authenticated user from session."""
@@ -365,35 +555,47 @@ def register_seeker(payload: RegisterInput):
     save_seekers(seekers)
     return {"seeker_id": seeker_id, "message": "Registration successful. Welcome to the temple."}
 
-class ClaimIdentityInput(BaseModel):
-    anonymous_user_id: str
-    display_name: Optional[str] = None
+class AuthRegisterInput(BaseModel):
+    email: str
+    password: str
+    display_name: str
 
-@app.post("/claim_identity")
-def claim_identity(payload: ClaimIdentityInput):
-    anonymous_user_id = payload.anonymous_user_id
-    display_name = payload.display_name
+@app.post("/auth/register")
+def auth_register(payload: AuthRegisterInput, request: Request):
+    import re
+    email = payload.email.lower().strip()
+    password = payload.password
+    display_name = payload.display_name.strip()
     
-    claims = load_identity_claims()
+    # Validate display_name
+    if not re.match(r'^[A-Za-z0-9_]{2,24}$', display_name):
+        return JSONResponse(content={"error": "Invalid display name format"}, status_code=400)
+    
+    # Validate password strength (basic)
+    if len(password) < 8:
+        return JSONResponse(content={"error": "Password must be at least 8 characters"}, status_code=400)
+    
+    if len(password.encode("utf-8")) > 72:
+        return JSONResponse(
+            content={"error": "Password must be 72 bytes or fewer."},
+            status_code=400
+        )
+    
+    users = load_users()
     seekers = load_seekers()
     
-    # Check if already claimed
-    existing_claim = None
-    for claim in claims:
-        if claim["anonymous_user_id"] == anonymous_user_id and claim["revoked_at"] is None:
-            existing_claim = claim
-            break
+    # Check if email already exists
+    for user in users.values():
+        if user["email"] == email:
+            return JSONResponse(content={"error": "Email already registered"}, status_code=409)
     
-    if existing_claim:
-        # Idempotent: check if display_name matches
-        seeker_id = existing_claim["seeker_id"]
-        seeker = seekers.get(seeker_id)
-        if seeker and seeker.get("display_name") == display_name:
-            return {"seeker_id": seeker_id, "message": "Identity already claimed.", "profile": seeker}
-        else:
-            return JSONResponse(content={"error": "Identity already claimed with different details."}, status_code=409)
+    # Check display_name uniqueness (case-insensitive)
+    display_name_lower = display_name.lower()
+    for user in users.values():
+        if user.get("display_name_lower") == display_name_lower:
+            return JSONResponse(content={"error": "Display name already taken"}, status_code=409)
     
-    # Create new seeker
+    # Create seeker
     seeker_id = str(uuid.uuid4())
     seekers[seeker_id] = {
         "seeker_id": seeker_id,
@@ -407,62 +609,6 @@ def claim_identity(payload: ClaimIdentityInput):
     }
     save_seekers(seekers)
     
-    # Create claim
-    claim = {
-        "anonymous_user_id": anonymous_user_id,
-        "seeker_id": seeker_id,
-        "claimed_at": str(datetime.datetime.now()),
-        "claim_method": "manual",
-        "revoked_at": None
-    }
-    claims.append(claim)
-    save_identity_claims(claims)
-    
-    # Log the event
-    save_log({
-        "event": "identity_claimed",
-        "anonymous_user_id": anonymous_user_id,
-        "seeker_id": seeker_id,
-        "phase": "4.1"
-    })
-    
-    return {"seeker_id": seeker_id, "message": "Identity claimed successfully.", "profile": seekers[seeker_id]}
-
-class AuthRegisterInput(BaseModel):
-    email: str
-    password: str
-    anonymous_user_id: str
-
-@app.post("/auth/register")
-def auth_register(payload: AuthRegisterInput, request: Request):
-    email = payload.email.lower().strip()
-    password = payload.password
-    anonymous_user_id = payload.anonymous_user_id
-    
-    # Validate password strength (basic)
-    if len(password) < 8:
-        return JSONResponse(content={"error": "Password must be at least 8 characters"}, status_code=400)
-    
-    users = load_users()
-    claims = load_identity_claims()
-    
-    # Check if email already exists
-    for user in users.values():
-        if user["email"] == email:
-            return JSONResponse(content={"error": "Email already registered"}, status_code=409)
-    
-    # Find the claim for this anonymous_user_id
-    claim = None
-    for c in claims:
-        if c["anonymous_user_id"] == anonymous_user_id and c["revoked_at"] is None:
-            claim = c
-            break
-    
-    if not claim:
-        return JSONResponse(content={"error": "Identity not claimed. Please claim your identity first."}, status_code=400)
-    
-    seeker_id = claim["seeker_id"]
-    
     # Create user
     user_id = str(uuid.uuid4())
     hashed_password = hash_password(password)
@@ -471,15 +617,49 @@ def auth_register(payload: AuthRegisterInput, request: Request):
         "email": email,
         "hashed_password": hashed_password,
         "seeker_id": seeker_id,
+        "display_name": display_name,
+        "display_name_lower": display_name_lower,
+        "is_verified": False,
         "created_at": str(datetime.datetime.now()),
         "last_login": None
     }
     save_users(users)
     
+    # Generate verification token
+    verification_token = str(uuid.uuid4())
+    expires_at = datetime.datetime.now() + datetime.timedelta(hours=24)  # 24 hours as per prompt
+    verification_tokens = load_verification_tokens()
+    verification_tokens.append({
+        "token": verification_token,
+        "user_id": user_id,
+        "expires_at": expires_at.isoformat()
+    })
+    save_verification_tokens(verification_tokens)
+    
+    # Build verification link
+    base_url = os.getenv("BASE_URL", "http://localhost:8000")
+    verification_link = f"{base_url}/auth/verify-email?token={verification_token}"
+    
+    # Send verification email
+    try:
+        send_email(
+            to_email=email,
+            subject="Verify your God Incorporated account",
+            html=f"""
+<h2>Welcome to God Incorporated</h2>
+<p>Please verify your email by clicking below:</p>
+<p><a href="{verification_link}">Verify Email</a></p>
+<p>This link expires in 24 hours.</p>
+"""
+        )
+    except Exception as e:
+        print(f"Failed to send verification email to {email}: {str(e)}")
+        return JSONResponse(content={"error": "Registration successful, but failed to send verification email. Please contact support."}, status_code=500)
+    
     # Set session
     request.session["user_id"] = user_id
     
-    return {"message": "Registration successful", "user_id": user_id}
+    return {"message": "Registration successful. Please check your email for verification link.", "user_id": user_id}
 
 class AuthLoginInput(BaseModel):
     email: str
@@ -504,6 +684,10 @@ def auth_login(payload: AuthLoginInput, request: Request):
     if not user or not verify_password(password, user["hashed_password"]):
         return JSONResponse(content={"error": "Invalid email or password"}, status_code=401)
     
+    # Check if user is verified
+    if not user.get("is_verified", False):
+        return JSONResponse(content={"error": "Please verify your email before logging in."}, status_code=403)
+    
     # Update last login
     user["last_login"] = str(datetime.datetime.now())
     save_users(users)
@@ -515,8 +699,197 @@ def auth_login(payload: AuthLoginInput, request: Request):
 
 @app.post("/auth/logout")
 def auth_logout(request: Request):
+    # Clear the session
     request.session.clear()
     return {"message": "Logged out successfully"}
+
+@app.get("/auth/verify-email")
+def auth_verify_email(token: str = Query(...)):
+    verification_tokens = load_verification_tokens()
+    users = load_users()
+    
+    # Find the token
+    token_entry = None
+    for entry in verification_tokens:
+        if entry["token"] == token:
+            token_entry = entry
+            break
+    
+    if not token_entry:
+        return JSONResponse(content={"error": "Invalid verification token"}, status_code=400)
+    
+    # Check expiry
+    expires_at = datetime.datetime.fromisoformat(token_entry["expires_at"])
+    if datetime.datetime.now() > expires_at:
+        return JSONResponse(content={"error": "Verification token has expired"}, status_code=400)
+    
+    user_id = token_entry["user_id"]
+    if user_id not in users:
+        return JSONResponse(content={"error": "User not found"}, status_code=400)
+    
+    # Mark user as verified
+    users[user_id]["is_verified"] = True
+    save_users(users)
+    
+    # Remove the token
+    verification_tokens.remove(token_entry)
+    save_verification_tokens(verification_tokens)
+    
+    # Send confirmation email
+    try:
+        send_email(
+            users[user_id]["email"],
+            "Email Verification Successful",
+            "Your email has been successfully verified. You can now log in to your account."
+        )
+    except Exception as e:
+        logging.error(f"Failed to send email verification confirmation to {users[user_id]['email']}: {e}")
+        # Log the error but continue, as verification succeeded
+    
+    return {"message": "Email verified successfully. You can now log in."}
+
+class AuthResetPasswordInput(BaseModel):
+    token: str
+    new_password: str
+
+class PasswordResetRequestInput(BaseModel):
+    email: str
+
+@app.get("/auth/reset-password", response_class=HTMLResponse)
+def show_reset_form(token: str = Query(...)):
+    user_id = validate_reset_token(token)
+    if not user_id:
+        return HTMLResponse("<h2>Invalid or expired reset link.</h2>", status_code=400)
+
+    return HTMLResponse(f"""
+        <html>
+            <body>
+                <h2>Reset Your Password</h2>
+                <form method="post" action="/auth/reset-password">
+                    <input type="hidden" name="token" value="{token}" />
+                    <label>New Password:</label><br/>
+                    <input type="password" name="new_password" required /><br/><br/>
+                    <button type="submit">Reset Password</button>
+                </form>
+            </body>
+        </html>
+    """)
+
+@app.post("/auth/reset-password")
+def auth_reset_password(
+    token: str = Form(None),
+    new_password: str = Form(None),
+):
+    if not token or not new_password:
+        return JSONResponse(content={"error": "Token and new_password are required"}, status_code=400)
+    
+    # Validate password
+    if len(new_password) < 8:
+        return JSONResponse(content={"error": "Password must be at least 8 characters"}, status_code=400)
+    
+    if len(new_password.encode("utf-8")) > 72:
+        return JSONResponse(content={"error": "Password must be 72 bytes or fewer."}, status_code=400)
+    
+    reset_tokens = load_reset_tokens()
+    users = load_users()
+    
+    # Find the token
+    token_entry = None
+    for entry in reset_tokens:
+        if entry["token"] == token:
+            token_entry = entry
+            break
+    
+    if not token_entry:
+        return JSONResponse(content={"error": "Invalid reset token"}, status_code=400)
+    
+    if token_entry.get("used", False):
+        return JSONResponse(content={"error": "Reset token has already been used"}, status_code=400)
+    
+    # Check expiry
+    expires_at = datetime.datetime.fromisoformat(token_entry["expires_at"])
+    if datetime.datetime.utcnow() > expires_at:
+        return JSONResponse(content={"error": "Reset token has expired"}, status_code=400)
+    
+    user_id = token_entry["user_id"]
+    if user_id not in users:
+        return JSONResponse(content={"error": "User not found"}, status_code=400)
+    
+    # Update password
+    users[user_id]["hashed_password"] = hash_password(new_password)
+    save_users(users)
+    
+    # Mark token as used
+    token_entry["used"] = True
+    save_reset_tokens(reset_tokens)
+    
+    # Send confirmation email
+    try:
+        send_email(
+            users[user_id]["email"],
+            "Password Reset Confirmation",
+            "Your password has been successfully changed. If you did not request this change, please contact support immediately."
+        )
+    except Exception as e:
+        logging.error(f"Failed to send password reset confirmation email to {users[user_id]['email']}: {e}")
+        # Log the error but continue, as password reset succeeded
+    
+    # Invalidate sessions (clear session store - since we use in-memory, this is a no-op for now)
+    # In a real app, you'd clear all sessions for this user
+    
+    return {"message": "Password reset successfully. Please log in with your new password."}
+
+@app.post("/auth/request-password-reset")
+def auth_request_password_reset(payload: PasswordResetRequestInput):
+    email = payload.email.lower().strip()
+    users = load_users()
+    
+    # Find user by email
+    user = None
+    user_id = None
+    for uid, u in users.items():
+        if u["email"] == email:
+            user = u
+            user_id = uid
+            break
+    
+    # Always return success to prevent user enumeration
+    if user:
+        # Create reset token
+        token = str(uuid.uuid4())
+        expires_at = datetime.datetime.utcnow() + datetime.timedelta(minutes=30)
+        reset_tokens = load_reset_tokens()
+        reset_tokens.append({
+            "token": token,
+            "user_id": user_id,
+            "expires_at": expires_at.isoformat(),
+            "used": False
+        })
+        save_reset_tokens(reset_tokens)
+        
+        # Build reset link
+        app_base_url = os.getenv("APP_BASE_URL", "http://localhost:8000")
+        reset_url = f"{app_base_url}/auth/reset-password?token={token}"
+        
+        subject = "Reset your God Incorporated password"
+        html = f"""
+<p>You requested a password reset.</p>
+<p>Click the link below to set a new password:</p>
+<p><a href="{reset_url}">{reset_url}</a></p>
+<p>This link expires in 30 minutes.</p>
+<p>If you did not request this, you may ignore this email.</p>
+"""
+
+        try:
+            send_email(
+                to_email=email,
+                subject=subject,
+                html=html
+            )
+        except Exception as e:
+            print("Email send failed:", str(e))
+    
+    return {"message": "If that email exists, a reset link has been sent."}
 
 @app.get("/me")
 def get_me(request: Request):
@@ -529,7 +902,7 @@ def get_me(request: Request):
         question_limit = 33  # Authenticated limit
         return {
             "authenticated": True,
-            "email": user["email"],
+            "display_name": user["display_name"],
             "usage": {
                 "questions_asked": questions_asked,
                 "question_limit": question_limit
@@ -537,25 +910,23 @@ def get_me(request: Request):
         }
     else:
         # Anonymous user
-        anonymous_id = request.query_params.get("anonymous_user_id")
-        if anonymous_id:
-            state = resolve_identity_state(anonymous_id)
-            visitors = load_visitors()
-            visitor = visitors.get(anonymous_id)
-            questions_asked = visitor.get("token_used_total", 0) if visitor else 0
-            question_limit = 9  # Anonymous limit
-            return {
-                "authenticated": False,
-                "usage": {
-                    "questions_asked": questions_asked,
-                    "question_limit": question_limit
-                }
-            }
+        anonymous_id = request.session.get("anonymous_user_id")
+        if not anonymous_id:
+            anonymous_id = str(uuid.uuid4())
+            request.session["anonymous_user_id"] = anonymous_id
+        state = resolve_identity_state(anonymous_id)
+        visitors = load_visitors()
+        visitor = visitors.get(anonymous_id)
+        questions_asked = visitor.get("token_used_total", 0) if visitor else 0
+        question_limit = 9  # Anonymous limit
         return {
             "authenticated": False,
+            "anonymous_user_id": anonymous_id,
+            "is_claimed": state["is_claimed"],
+            "seeker_id": state["seeker_id"],
             "usage": {
-                "questions_asked": 0,
-                "question_limit": 9
+                "questions_asked": questions_asked,
+                "question_limit": question_limit
             }
         }
 
@@ -603,12 +974,18 @@ class QuestionInput(BaseModel):
     question: str
     deity: str = "Hathor"  # Default to Hathor
     seeker_id: Optional[str] = None
-    anonymous_user_id: str
+    anonymous_user_id: Optional[str] = None
 
 @app.post("/ask")
 async def ask_oracle(request: Request, payload: QuestionInput):
-    seeker = resolve_seeker_id(payload.anonymous_user_id, payload.seeker_id)
     anonymous_user_id = payload.anonymous_user_id
+    if not anonymous_user_id:
+        anonymous_user_id = request.session.get("anonymous_user_id")
+        if not anonymous_user_id:
+            anonymous_user_id = str(uuid.uuid4())
+            request.session["anonymous_user_id"] = anonymous_user_id
+    
+    seeker = resolve_seeker_id(anonymous_user_id, payload.seeker_id)
     ensure_anonymous_user(anonymous_user_id)
     
     # Phase 4.2: Usage enforcement
@@ -628,8 +1005,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         
         # Phase 3.1: Token metering for anonymous continuity
         estimated_tokens = estimate_tokens(question, answer)
-        if anonymous_user_id:
-            update_visitor(anonymous_user_id, estimated_tokens)
+        visitor_key = seeker if seeker else anonymous_user_id
+        if visitor_key:
+            update_visitor(visitor_key, estimated_tokens)
         usage_class = "registered" if payload.seeker_id else "anonymous"
         
         architect_obs = architect_observe_v3(question, deity, session_id)
@@ -682,8 +1060,9 @@ async def whisper_audio(request: Request, file: UploadFile = File(...), voice: s
         
         # Phase 3.1: Token metering for anonymous continuity
         estimated_tokens = estimate_tokens(question, answer)
-        if anonymous_user_id:
-            update_visitor(anonymous_user_id, estimated_tokens)
+        visitor_key = seeker_id if seeker_id else anonymous_user_id
+        if visitor_key:
+            update_visitor(visitor_key, estimated_tokens)
         usage_class = "registered" if seeker_id else "anonymous"
         
         architect_obs = architect_observe_v3(question, voice, session_id)
