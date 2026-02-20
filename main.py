@@ -11,7 +11,7 @@ from typing import Optional
 from docx import Document
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from itsdangerous import Signer, BadSignature
@@ -130,7 +130,7 @@ app.mount("/static", StaticFiles(directory=static_path), name="static")
 # Favicon route to prevent 404 noise
 @app.get("/favicon.ico")
 async def favicon():
-    return Response(status_code=204)
+    return FileResponse(os.path.join(static_path, "favicon.ico"))
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
