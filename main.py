@@ -29,9 +29,11 @@ from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio
 from services.whisper import transcribe_audio
 from services.mail import send_email
-from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, SEEKERS_DB, VISITORS_DB, save_log, load_scroll_data, save_scroll_data, load_seekers, save_seekers, load_visitors, save_visitors, load_users, save_users, load_verification_tokens, save_verification_tokens, load_reset_tokens, save_reset_tokens
+from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, SEEKERS_DB, VISITORS_DB, save_log, load_scroll_data, save_scroll_data, load_seekers, save_seekers, load_visitors, save_visitors
 
 load_dotenv()
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class DatabaseSessionStore:
     def __init__(self, secret_key: str):
@@ -464,23 +466,32 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def validate_reset_token(token: str) -> Optional[str]:
     """Validate reset token and return user_id if valid, else None."""
-    reset_tokens = load_reset_tokens()
-    for entry in reset_tokens:
-        if entry["token"] == token:
-            if entry.get("used", False):
-                return None
-            expires_at = datetime.datetime.fromisoformat(entry["expires_at"])
-            if datetime.datetime.utcnow() > expires_at:
-                return None
-            return entry["user_id"]
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM users WHERE reset_token = %s AND reset_token_expires_at > %s", (token, datetime.datetime.now(timezone.utc)))
+        result = cur.fetchone()
+    conn.close()
+    if result:
+        return result['id']
     return None
 
 def get_current_user(request: Request) -> Optional[dict]:
     """Get current authenticated user from session."""
     user_id = request.session.get("user_id")
     if user_id:
-        users = load_users()
-        return users.get(user_id)
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, email, seeker_id, display_name, email_verified FROM users WHERE id = %s", (user_id,))
+            result = cur.fetchone()
+        conn.close()
+        if result:
+            return {
+                "user_id": result['id'],
+                "email": result['email'],
+                "seeker_id": result['seeker_id'],
+                "display_name": result['display_name'],
+                "is_verified": result['email_verified']
+            }
     return None
 
 def can_user_ask(anonymous_user_id: str, seeker_id: Optional[str] = None) -> bool:
@@ -491,7 +502,13 @@ def can_user_ask(anonymous_user_id: str, seeker_id: Optional[str] = None) -> boo
         return True  # New user, allow
     
     total_used = visitor.get("token_used_total", 0)
-    is_authenticated = seeker_id is not None and load_users().get(seeker_id) is not None  # Rough check
+    is_authenticated = False
+    if seeker_id:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM users WHERE seeker_id = %s", (seeker_id,))
+            is_authenticated = cur.fetchone() is not None
+        conn.close()
     
     limit = 33 if is_authenticated else 9
     return total_used < limit
@@ -560,18 +577,22 @@ def auth_register(payload: AuthRegisterInput, request: Request):
             status_code=400
         )
     
-    users = load_users()
+    conn = get_db_connection()
     seekers = load_seekers()
     
     # Check if email already exists
-    for user in users.values():
-        if user["email"] == email:
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+        if cur.fetchone():
+            conn.close()
             return JSONResponse(content={"error": "Email already registered"}, status_code=409)
     
     # Check display_name uniqueness (case-insensitive)
     display_name_lower = display_name.lower()
-    for user in users.values():
-        if user.get("display_name_lower") == display_name_lower:
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM users WHERE display_name_lower = %s", (display_name_lower,))
+        if cur.fetchone():
+            conn.close()
             return JSONResponse(content={"error": "Display name already taken"}, status_code=409)
     
     # Create seeker
@@ -591,29 +612,16 @@ def auth_register(payload: AuthRegisterInput, request: Request):
     # Create user
     user_id = str(uuid.uuid4())
     hashed_password = hash_password(password)
-    users[user_id] = {
-        "user_id": user_id,
-        "email": email,
-        "hashed_password": hashed_password,
-        "seeker_id": seeker_id,
-        "display_name": display_name,
-        "display_name_lower": display_name_lower,
-        "is_verified": False,
-        "created_at": str(datetime.datetime.now()),
-        "last_login": None
-    }
-    save_users(users)
-    
-    # Generate verification token
     verification_token = str(uuid.uuid4())
-    expires_at = datetime.datetime.now() + datetime.timedelta(hours=24)  # 24 hours as per prompt
-    verification_tokens = load_verification_tokens()
-    verification_tokens.append({
-        "token": verification_token,
-        "user_id": user_id,
-        "expires_at": expires_at.isoformat()
-    })
-    save_verification_tokens(verification_tokens)
+    created_at = datetime.datetime.now(timezone.utc)
+    
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO users (id, email, password_hash, seeker_id, display_name, display_name_lower, email_verified, verification_token, created_at, last_login)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (user_id, email, hashed_password, seeker_id, display_name, display_name_lower, False, verification_token, created_at, None))
+    conn.commit()
+    conn.close()
     
     # Build verification link
     base_url = os.getenv("BASE_URL", "http://localhost:8000")
@@ -649,27 +657,23 @@ def auth_login(payload: AuthLoginInput, request: Request):
     email = payload.email.lower().strip()
     password = payload.password
     
-    users = load_users()
-    
-    # Find user by email
-    user = None
-    user_id = None
-    for uid, u in users.items():
-        if u["email"] == email:
-            user = u
-            user_id = uid
-            break
-    
-    if not user or not verify_password(password, user["hashed_password"]):
-        return JSONResponse(content={"error": "Invalid email or password"}, status_code=401)
-    
-    # Check if user is verified
-    if not user.get("is_verified", False):
-        return JSONResponse(content={"error": "Please verify your email before logging in."}, status_code=403)
-    
-    # Update last login
-    user["last_login"] = str(datetime.datetime.now())
-    save_users(users)
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, password_hash, email_verified, seeker_id, display_name FROM users WHERE email = %s", (email,))
+        result = cur.fetchone()
+        if not result or not verify_password(password, result['password_hash']):
+            conn.close()
+            return JSONResponse(content={"error": "Invalid email or password"}, status_code=401)
+        
+        if not result['email_verified']:
+            conn.close()
+            return JSONResponse(content={"error": "Please verify your email before logging in."}, status_code=403)
+        
+        user_id = result['id']
+        # Update last login
+        cur.execute("UPDATE users SET last_login = %s WHERE id = %s", (datetime.datetime.now(timezone.utc), user_id))
+    conn.commit()
+    conn.close()
     
     # Set session
     request.session["user_id"] = user_id
@@ -684,45 +688,31 @@ def auth_logout(request: Request):
 
 @app.get("/auth/verify-email")
 def auth_verify_email(token: str = Query(...)):
-    verification_tokens = load_verification_tokens()
-    users = load_users()
-    
-    # Find the token
-    token_entry = None
-    for entry in verification_tokens:
-        if entry["token"] == token:
-            token_entry = entry
-            break
-    
-    if not token_entry:
-        return JSONResponse(content={"error": "Invalid verification token"}, status_code=400)
-    
-    # Check expiry
-    expires_at = datetime.datetime.fromisoformat(token_entry["expires_at"])
-    if datetime.datetime.now() > expires_at:
-        return JSONResponse(content={"error": "Verification token has expired"}, status_code=400)
-    
-    user_id = token_entry["user_id"]
-    if user_id not in users:
-        return JSONResponse(content={"error": "User not found"}, status_code=400)
-    
-    # Mark user as verified
-    users[user_id]["is_verified"] = True
-    save_users(users)
-    
-    # Remove the token
-    verification_tokens.remove(token_entry)
-    save_verification_tokens(verification_tokens)
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, email FROM users WHERE verification_token = %s", (token,))
+        result = cur.fetchone()
+        if not result:
+            conn.close()
+            return JSONResponse(content={"error": "Invalid verification token"}, status_code=400)
+        
+        user_id = result['id']
+        email = result['email']
+        
+        # Mark user as verified and clear token
+        cur.execute("UPDATE users SET email_verified = true, verification_token = null WHERE id = %s", (user_id,))
+    conn.commit()
+    conn.close()
     
     # Send confirmation email
     try:
         send_email(
-            users[user_id]["email"],
+            email,
             "Email Verification Successful",
             "Your email has been successfully verified. You can now log in to your account."
         )
     except Exception as e:
-        logging.error(f"Failed to send email verification confirmation to {users[user_id]['email']}: {e}")
+        logging.error(f"Failed to send email verification confirmation to {email}: {e}")
         # Log the error but continue, as verification succeeded
     
     return {"message": "Email verified successfully. You can now log in."}
@@ -769,48 +759,31 @@ def auth_reset_password(
     if len(new_password.encode("utf-8")) > 72:
         return JSONResponse(content={"error": "Password must be 72 bytes or fewer."}, status_code=400)
     
-    reset_tokens = load_reset_tokens()
-    users = load_users()
-    
-    # Find the token
-    token_entry = None
-    for entry in reset_tokens:
-        if entry["token"] == token:
-            token_entry = entry
-            break
-    
-    if not token_entry:
-        return JSONResponse(content={"error": "Invalid reset token"}, status_code=400)
-    
-    if token_entry.get("used", False):
-        return JSONResponse(content={"error": "Reset token has already been used"}, status_code=400)
-    
-    # Check expiry
-    expires_at = datetime.datetime.fromisoformat(token_entry["expires_at"])
-    if datetime.datetime.utcnow() > expires_at:
-        return JSONResponse(content={"error": "Reset token has expired"}, status_code=400)
-    
-    user_id = token_entry["user_id"]
-    if user_id not in users:
-        return JSONResponse(content={"error": "User not found"}, status_code=400)
-    
-    # Update password
-    users[user_id]["hashed_password"] = hash_password(new_password)
-    save_users(users)
-    
-    # Mark token as used
-    token_entry["used"] = True
-    save_reset_tokens(reset_tokens)
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, email FROM users WHERE reset_token = %s AND reset_token_expires_at > %s", (token, datetime.datetime.now(timezone.utc)))
+        result = cur.fetchone()
+        if not result:
+            conn.close()
+            return JSONResponse(content={"error": "Invalid or expired reset token"}, status_code=400)
+        
+        user_id = result['id']
+        email = result['email']
+        
+        # Update password and clear token
+        cur.execute("UPDATE users SET password_hash = %s, reset_token = null, reset_token_expires_at = null WHERE id = %s", (hash_password(new_password), user_id))
+    conn.commit()
+    conn.close()
     
     # Send confirmation email
     try:
         send_email(
-            users[user_id]["email"],
+            email,
             "Password Reset Confirmation",
             "Your password has been successfully changed. If you did not request this change, please contact support immediately."
         )
     except Exception as e:
-        logging.error(f"Failed to send password reset confirmation email to {users[user_id]['email']}: {e}")
+        logging.error(f"Failed to send password reset confirmation email to {email}: {e}")
         # Log the error but continue, as password reset succeeded
     
     # Invalidate sessions (clear session store - since we use in-memory, this is a no-op for now)
@@ -821,30 +794,22 @@ def auth_reset_password(
 @app.post("/auth/request-password-reset")
 def auth_request_password_reset(payload: PasswordResetRequestInput):
     email = payload.email.lower().strip()
-    users = load_users()
     
-    # Find user by email
-    user = None
-    user_id = None
-    for uid, u in users.items():
-        if u["email"] == email:
-            user = u
-            user_id = uid
-            break
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+        result = cur.fetchone()
     
     # Always return success to prevent user enumeration
-    if user:
+    if result:
+        user_id = result['id']
         # Create reset token
         token = str(uuid.uuid4())
-        expires_at = datetime.datetime.utcnow() + datetime.timedelta(minutes=30)
-        reset_tokens = load_reset_tokens()
-        reset_tokens.append({
-            "token": token,
-            "user_id": user_id,
-            "expires_at": expires_at.isoformat(),
-            "used": False
-        })
-        save_reset_tokens(reset_tokens)
+        expires_at = datetime.datetime.now(timezone.utc) + datetime.timedelta(minutes=30)
+        
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET reset_token = %s, reset_token_expires_at = %s WHERE id = %s", (token, expires_at, user_id))
+        conn.commit()
         
         # Build reset link
         app_base_url = os.getenv("APP_BASE_URL", "http://localhost:8000")
@@ -868,6 +833,7 @@ def auth_request_password_reset(payload: PasswordResetRequestInput):
         except Exception as e:
             print("Email send failed:", str(e))
     
+    conn.close()
     return {"message": "If that email exists, a reset link has been sent."}
 
 @app.get("/me")
