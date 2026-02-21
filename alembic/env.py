@@ -6,6 +6,13 @@ from sqlalchemy import pool
 from alembic import context
 
 import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env file
+env_path = Path(__file__).resolve().parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

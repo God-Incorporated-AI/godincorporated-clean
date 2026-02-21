@@ -251,27 +251,6 @@ def create_sessions_table():
 # Initialize database tables
 create_sessions_table()
 
-# Optional: Add a test endpoint (can be removed later)
-@app.get("/db_test")
-def db_test():
-    """Endpoint to verify DB connectivity without affecting app behavior."""
-    success = test_db_connectivity()
-    return {"db_connected": success}
-
-@app.get("/debug_table")
-def debug_table():
-    """Check if tables exist."""
-    try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT table_name FROM information_schema.tables WHERE table_name = 'user_sessions'")
-            user_sessions = cur.fetchone()
-            cur.execute("SELECT table_name FROM information_schema.tables WHERE table_name = 'anonymous_users'")
-            anonymous_users = cur.fetchone()
-        return {"user_sessions": user_sessions, "anonymous_users": anonymous_users}
-    except Exception as e:
-        return {"error": str(e)}
-
 def get_llama_observation(question: str, oracle_used: str, answer: str, scrolls: list = None) -> dict:
     if not LLAMA_ENABLED:
         return None
