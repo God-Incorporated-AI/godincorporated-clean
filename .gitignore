@@ -21,3 +21,4 @@ temple_memory/
 # OS
 .DS_Store
 
+.vscode/
