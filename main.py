@@ -29,7 +29,7 @@ from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio
 from services.whisper import transcribe_audio
 from services.mail import send_email
-from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, SEEKERS_DB, VISITORS_DB, save_log, load_scroll_data, save_scroll_data, load_seekers, save_seekers, load_visitors, save_visitors
+from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, VISITORS_DB, save_log, load_scroll_data, save_scroll_data, load_visitors, save_visitors
 
 load_dotenv()
 
@@ -537,18 +537,6 @@ class RegisterInput(BaseModel):
 @app.post("/register")
 def register_seeker(payload: RegisterInput):
     seeker_id = str(uuid.uuid4())
-    seekers = load_seekers()
-    seekers[seeker_id] = {
-        "seeker_id": seeker_id,
-        "created_at": str(datetime.datetime.now()),
-        "display_name": payload.display_name,
-        "title": "Seeker",  # Default
-        "scroll_count": 0,
-        "donation_total": 0.0,
-        "influence_state": "disabled",
-        "eligibility_flags": []
-    }
-    save_seekers(seekers)
     return {"seeker_id": seeker_id, "message": "Registration successful. Welcome to the temple."}
 
 class AuthRegisterInput(BaseModel):
@@ -578,36 +566,6 @@ def auth_register(payload: AuthRegisterInput, request: Request):
         )
     
     conn = get_db_connection()
-    seekers = load_seekers()
-    
-    # Check if email already exists
-    with conn.cursor() as cur:
-        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
-        if cur.fetchone():
-            conn.close()
-            return JSONResponse(content={"error": "Email already registered"}, status_code=409)
-    
-    # Check display_name uniqueness (case-insensitive)
-    display_name_lower = display_name.lower()
-    with conn.cursor() as cur:
-        cur.execute("SELECT id FROM users WHERE display_name_lower = %s", (display_name_lower,))
-        if cur.fetchone():
-            conn.close()
-            return JSONResponse(content={"error": "Display name already taken"}, status_code=409)
-    
-    # Create seeker
-    seeker_id = str(uuid.uuid4())
-    seekers[seeker_id] = {
-        "seeker_id": seeker_id,
-        "created_at": str(datetime.datetime.now()),
-        "display_name": display_name,
-        "title": "Seeker",
-        "scroll_count": 0,
-        "donation_total": 0.0,
-        "influence_state": "disabled",
-        "eligibility_flags": []
-    }
-    save_seekers(seekers)
     
     # Create user
     user_id = str(uuid.uuid4())
@@ -908,10 +866,11 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
     
     # Update seeker scroll_count if seeker_id provided
     if seeker_id:
-        seekers = load_seekers()
-        if seeker_id in seekers:
-            seekers[seeker_id]["scroll_count"] += 1
-            save_seekers(seekers)
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET scroll_count = scroll_count + 1 WHERE seeker_id = %s", (seeker_id,))
+        conn.commit()
+        conn.close()
     
     return {"message": "📜 Your scroll has been uploaded.", "scroll_id": scroll_entry["scroll_id"]}
 
