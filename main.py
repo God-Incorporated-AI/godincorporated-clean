@@ -29,8 +29,7 @@ from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio
 from services.whisper import transcribe_audio
 from services.mail import send_email
-from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, VISITORS_DB, save_log, load_scroll_data, save_scroll_data, load_visitors, save_visitors
-
+from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, save_log, load_scroll_data, save_scroll_data
 load_dotenv()
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -417,29 +416,6 @@ def ensure_anonymous_user(anonymous_user_id: str):
     conn.commit()
     conn.close()
 
-def update_visitor(visitor_id: str, tokens_used: int):
-    """Update visitor ledger with token usage."""
-    visitors = load_visitors()
-    today = str(datetime.date.today())
-    if visitor_id not in visitors:
-        visitors[visitor_id] = {
-            "created_at": str(datetime.datetime.now()),
-            "last_seen": str(datetime.datetime.now()),
-            "last_seen_date": today,
-            "token_used_total": 0,
-            "token_used_today": 0,
-            "limit_state": "ok"
-        }
-    else:
-        visitor = visitors[visitor_id]
-        if visitor.get("last_seen_date") != today:
-            visitor["token_used_today"] = 0
-            visitor["last_seen_date"] = today
-        visitor["last_seen"] = str(datetime.datetime.now())
-    visitor = visitors[visitor_id]
-    visitor["token_used_total"] += tokens_used
-    visitor["token_used_today"] += tokens_used
-    save_visitors(visitors)
 
 def resolve_seeker_id(anonymous_user_id: str, provided_seeker_id: Optional[str] = None) -> Optional[str]:
     """Resolve seeker_id with precedence: provided > None (since no claims)"""
@@ -494,25 +470,28 @@ def get_current_user(request: Request) -> Optional[dict]:
             }
     return None
 
-def can_user_ask(anonymous_user_id: str, seeker_id: Optional[str] = None) -> bool:
-    """Check if user has remaining questions."""
-    visitors = load_visitors()
-    visitor = visitors.get(seeker_id or anonymous_user_id)
-    if not visitor:
-        return True  # New user, allow
-    
-    total_used = visitor.get("token_used_total", 0)
-    is_authenticated = False
-    if seeker_id:
+def can_user_ask(request: Request, anonymous_user_id: str, seeker_id: Optional[str] = None) -> bool:
+    user = get_current_user(request)
+    if user:
+        # authenticated
         conn = get_db_connection()
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM users WHERE seeker_id = %s", (seeker_id,))
-            is_authenticated = cur.fetchone() is not None
+            cur.execute("SELECT COUNT(*) FROM oracle_interactions WHERE user_id = %s", (user["user_id"],))
+            count = cur.fetchone()[0]
         conn.close()
-    
-    limit = 33 if is_authenticated else 9
-    return total_used < limit
-
+        return count < 33
+    else:
+        # anonymous
+        session_id = request.session.get("session_id")
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            request.session["session_id"] = session_id
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM oracle_interactions WHERE session_id = %s", (session_id,))
+            count = cur.fetchone()[0]
+        conn.close()
+        return count < 9
 @app.get("/", response_class=HTMLResponse)
 @app.get("/temple", response_class=HTMLResponse)
 def temple_page(request: Request):
@@ -799,9 +778,11 @@ def get_me(request: Request):
     user = get_current_user(request)
     if user:
         # Authenticated user
-        visitors = load_visitors()
-        visitor = visitors.get(user.get("seeker_id"))
-        questions_asked = visitor.get("token_used_total", 0) if visitor else 0
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM oracle_interactions WHERE user_id = %s", (user["user_id"],))
+            questions_asked = cur.fetchone()[0]
+        conn.close()
         question_limit = 33  # Authenticated limit
         return {
             "authenticated": True,
@@ -811,16 +792,16 @@ def get_me(request: Request):
                 "question_limit": question_limit
             }
         }
-    else:
-        # Anonymous user
-        anonymous_id = request.session.get("anonymous_user_id")
-        if not anonymous_id:
-            anonymous_id = str(uuid.uuid4())
-            request.session["anonymous_user_id"] = anonymous_id
-        state = resolve_identity_state(anonymous_id)
-        visitors = load_visitors()
-        visitor = visitors.get(anonymous_id)
-        questions_asked = visitor.get("token_used_total", 0) if visitor else 0
+        session_id = request.session.get("session_id")
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            request.session["session_id"] = session_id
+        state = resolve_identity_state(session_id)
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM oracle_interactions WHERE session_id = %s", (session_id,))
+            questions_asked = cur.fetchone()[0]
+        conn.close()
         question_limit = 9  # Anonymous limit
         return {
             "authenticated": False,
@@ -907,11 +888,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         source_model = result["source_model"]
         print("ANSWER len =", len(answer))
         
-        # Phase 3.1: Token metering for anonymous continuity
-        estimated_tokens = estimate_tokens(question, answer)
-        visitor_key = seeker if seeker else anonymous_user_id
-        if visitor_key:
-            update_visitor(visitor_key, estimated_tokens)
         usage_class = "registered" if payload.seeker_id else "anonymous"
         
         architect_obs = architect_observe_v3(question, deity, session_id)
@@ -964,10 +940,6 @@ async def whisper_audio(request: Request, file: UploadFile = File(...), voice: s
         
         # Phase 3.1: Token metering for anonymous continuity
         estimated_tokens = estimate_tokens(question, answer)
-        visitor_key = seeker_id if seeker_id else anonymous_user_id
-        if visitor_key:
-            update_visitor(visitor_key, estimated_tokens)
-        usage_class = "registered" if seeker_id else "anonymous"
         
         architect_obs = architect_observe_v3(question, voice, session_id)
         scrolls = load_scroll_data()  # For LLaMA analysis
