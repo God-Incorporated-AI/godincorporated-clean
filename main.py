@@ -38,6 +38,85 @@ def get_ip_hash(request: Request) -> str:
     ip = request.client.host if request.client else "unknown"
     return hashlib.sha256(ip.encode()).hexdigest()
 
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+
+class DatabaseSessionMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, sliding_days: int = 7):
+        super().__init__(app)
+        self.sliding_days = sliding_days
+
+    async def dispatch(self, request: Request, call_next):
+        session_cookie = request.cookies.get("gi_session")
+        conn = get_db_connection()
+        session_row = None
+
+        try:
+            with conn.cursor() as cur:
+                if session_cookie:
+                    cur.execute(
+                        """
+                        SELECT id, user_id, last_seen_at
+                        FROM sessions
+                        WHERE id = %s
+                        """,
+                        (session_cookie,)
+                    )
+                    session_row = cur.fetchone()
+
+                now = datetime.datetime.now(datetime.timezone.utc)
+
+                if session_row:
+                    expiration_threshold = now - datetime.timedelta(days=self.sliding_days)
+                    if session_row["last_seen_at"] < expiration_threshold:
+                        session_row = None
+
+                if not session_row:
+                    new_id = str(uuid.uuid4())
+                    ip_hash = get_ip_hash(request)
+                    user_agent = request.headers.get("user-agent")
+
+                    cur.execute(
+                        """
+                        INSERT INTO sessions (id, user_id, started_at, last_seen_at, ip_hash, user_agent)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (new_id, None, now, now, ip_hash, user_agent)
+                    )
+                    conn.commit()
+
+                    session_row = {
+                        "id": new_id,
+                        "user_id": None,
+                        "last_seen_at": now
+                    }
+                else:
+                    cur.execute(
+                        """
+                        UPDATE sessions
+                        SET last_seen_at = %s
+                        WHERE id = %s
+                        """,
+                        (now, session_row["id"])
+                    )
+                    conn.commit()
+
+        finally:
+            conn.close()
+
+        request.state.session = session_row
+
+        response: Response = await call_next(request)
+
+        response.set_cookie(
+            key="gi_session",
+            value=session_row["id"],
+            httponly=True,
+            samesite="lax"
+        )
+
+        return response
+
 app = FastAPI()
 
 static_path = os.path.join(os.path.dirname(__file__), "static")
