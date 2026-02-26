@@ -1,5 +1,6 @@
 import datetime
 from datetime import timezone
+import hashlib
 import json
 import logging
 import os
@@ -30,98 +31,12 @@ from services.tts import generate_tts_audio
 from services.whisper import transcribe_audio
 from services.mail import send_email
 from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, save_log, load_scroll_data, save_scroll_data
+
 load_dotenv()
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-class DatabaseSessionStore:
-    def __init__(self, secret_key: str):
-        self.signer = Signer(secret_key)
-    
-    def get(self, session_id: str) -> dict:
-        try:
-            conn = get_db_connection()
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT data FROM user_sessions WHERE session_id = %s",
-                    (session_id,)
-                )
-                result = cur.fetchone()
-                if result:
-                    return json.loads(result['data'])
-        except Exception as e:
-            print(f"Session get error: {e}")
-        return {}
-    
-    def set(self, session_id: str, data: dict, expires_days: int = 30):
-        try:
-            conn = get_db_connection()
-            expires_at = datetime.datetime.now(timezone.utc) + datetime.timedelta(days=expires_days)
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO user_sessions (session_id, data, expires_at) VALUES (%s, %s, %s) ON CONFLICT (session_id) DO UPDATE SET data = EXCLUDED.data, expires_at = EXCLUDED.expires_at",
-                    (session_id, json.dumps(data), expires_at)
-                )
-            conn.commit()
-        except Exception as e:
-            print(f"Session set error: {e}")
-    
-    def delete(self, session_id: str):
-        try:
-            conn = get_db_connection()
-            with conn.cursor() as cur:
-                cur.execute("DELETE FROM user_sessions WHERE session_id = %s", (session_id,))
-            conn.commit()
-        except Exception as e:
-            print(f"Session delete error: {e}")
-
-class DatabaseSessionMiddleware:
-    def __init__(self, app, secret_key: str):
-        self.app = app
-        self.store = DatabaseSessionStore(secret_key)
-    
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-        
-        # Parse cookies
-        headers = dict((k, v) for k, v in scope.get("headers", []))
-        cookies = {}
-        if b"cookie" in headers:
-            cookie_str = headers[b"cookie"].decode()
-            for cookie in cookie_str.split(";"):
-                if "=" in cookie:
-                    k, v = cookie.strip().split("=", 1)
-                    cookies[k] = v
-        
-        session_id = cookies.get("session")
-        session_data = {}
-        if session_id:
-            session_data = self.store.get(session_id)
-        
-        # Add session to scope
-        scope["session"] = session_data
-        
-        # Track if session was modified
-        original_session = session_data.copy()
-        
-        # Response handler
-        async def send_wrapper(message):
-            nonlocal session_id
-            if message["type"] == "http.response.start":
-                # Check if session was modified
-                current_session = scope.get("session", {})
-                if current_session != original_session:
-                    if not session_id:
-                        session_id = str(uuid.uuid4())
-                    self.store.set(session_id, current_session)
-                    # Add session cookie
-                    cookie_value = f"session={session_id}; HttpOnly; Path=/; Max-Age=2592000; SameSite=Lax"
-                    message["headers"] = message.get("headers", []) + [(b"Set-Cookie", cookie_value.encode())]
-            await send(message)
-        
-        await self.app(scope, receive, send_wrapper)
+def get_ip_hash(request: Request) -> str:
+    ip = request.client.host if request.client else "unknown"
+    return hashlib.sha256(ip.encode()).hexdigest()
 
 app = FastAPI()
 
@@ -136,12 +51,12 @@ async def favicon():
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
-from starlette.middleware.sessions import SessionMiddleware
-
 # Phase 4.2: Authentication setup
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-session_store = DatabaseSessionStore(os.getenv("SESSION_SECRET", "dev-secret-key-change-in-prod"))
-app.add_middleware(DatabaseSessionMiddleware, secret_key=os.getenv("SESSION_SECRET", "dev-secret-key-change-in-prod"))
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.getenv("SESSION_SECRET", "dev-secret-key-change-in-prod")
+)
 
 # Global exception handlers for JSON error responses
 @app.exception_handler(HTTPException)
@@ -416,7 +331,6 @@ def ensure_anonymous_user(anonymous_user_id: str):
     conn.commit()
     conn.close()
 
-
 def resolve_seeker_id(anonymous_user_id: str, provided_seeker_id: Optional[str] = None) -> Optional[str]:
     """Resolve seeker_id with precedence: provided > None (since no claims)"""
     if provided_seeker_id:
@@ -470,28 +384,29 @@ def get_current_user(request: Request) -> Optional[dict]:
             }
     return None
 
-def can_user_ask(request: Request, anonymous_user_id: str, seeker_id: Optional[str] = None) -> bool:
-    user = get_current_user(request)
-    if user:
-        # authenticated
-        conn = get_db_connection()
+def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
+    conn = get_db_connection()
+    try:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM oracle_interactions WHERE user_id = %s", (user["user_id"],))
-            count = cur.fetchone()[0]
+            if user_id:
+                cur.execute(
+                    "SELECT COUNT(*) AS total FROM oracle_interactions WHERE user_id = %s",
+                    (user_id,)
+                )
+                limit = 33
+            else:
+                cur.execute(
+                    "SELECT COUNT(*) AS total FROM oracle_interactions WHERE session_id = %s",
+                    (session_id,)
+                )
+                limit = 9
+
+            row = cur.fetchone()
+            count = row["total"] if row else 0
+            return count < limit
+    finally:
         conn.close()
-        return count < 33
-    else:
-        # anonymous
-        session_id = request.session.get("session_id")
-        if not session_id:
-            session_id = str(uuid.uuid4())
-            request.session["session_id"] = session_id
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM oracle_interactions WHERE session_id = %s", (session_id,))
-            count = cur.fetchone()[0]
-        conn.close()
-        return count < 9
+
 @app.get("/", response_class=HTMLResponse)
 @app.get("/temple", response_class=HTMLResponse)
 def temple_page(request: Request):
@@ -516,6 +431,14 @@ class RegisterInput(BaseModel):
 @app.post("/register")
 def register_seeker(payload: RegisterInput):
     seeker_id = str(uuid.uuid4())
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO users (id, seeker_id, display_name, display_name_lower, title, scroll_count, donation_total, influence_state, eligibility_flags, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (seeker_id, seeker_id, payload.display_name, (payload.display_name or "").lower(), "Seeker", 0, 0, "disabled", [], datetime.datetime.now(timezone.utc)))
+    conn.commit()
+    conn.close()
     return {"seeker_id": seeker_id, "message": "Registration successful. Welcome to the temple."}
 
 class AuthRegisterInput(BaseModel):
@@ -546,17 +469,35 @@ def auth_register(payload: AuthRegisterInput, request: Request):
     
     conn = get_db_connection()
     
+    # Check if email already exists
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+        if cur.fetchone():
+            conn.close()
+            return JSONResponse(content={"error": "Email already registered"}, status_code=409)
+    
+    # Check display_name uniqueness (case-insensitive)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM users WHERE LOWER(display_name) = %s",
+            (display_name.lower(),)
+        )
+        if cur.fetchone():
+            conn.close()
+            return JSONResponse(content={"error": "Display name already taken"}, status_code=409)
+    
     # Create user
     user_id = str(uuid.uuid4())
+    seeker_id = str(uuid.uuid4())
     hashed_password = hash_password(password)
     verification_token = str(uuid.uuid4())
     created_at = datetime.datetime.now(timezone.utc)
     
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO users (id, email, password_hash, seeker_id, display_name, display_name_lower, email_verified, verification_token, created_at, last_login)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (user_id, email, hashed_password, seeker_id, display_name, display_name_lower, False, verification_token, created_at, None))
+            INSERT INTO users (id, email, password_hash, seeker_id, display_name, display_name_lower, email_verified, verification_token, created_at, last_login, title, scroll_count, donation_total, influence_state, eligibility_flags)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (user_id, email, hashed_password, seeker_id, display_name, display_name.lower(), False, verification_token, created_at, None, "Seeker", 0, 0, "disabled", []))
     conn.commit()
     conn.close()
     
@@ -776,43 +717,57 @@ def auth_request_password_reset(payload: PasswordResetRequestInput):
 @app.get("/me")
 def get_me(request: Request):
     user = get_current_user(request)
+
     if user:
-        # Authenticated user
         conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM oracle_interactions WHERE user_id = %s", (user["user_id"],))
-            questions_asked = cur.fetchone()[0]
-        conn.close()
-        question_limit = 33  # Authenticated limit
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) AS total FROM oracle_interactions WHERE user_id = %s",
+                    (user["user_id"],)
+                )
+                row = cur.fetchone()
+                questions_asked = (row["total"] if row else 0)
+        finally:
+            conn.close()
+
         return {
             "authenticated": True,
-            "display_name": user["display_name"],
+            "display_name": user.get("display_name"),
             "usage": {
                 "questions_asked": questions_asked,
-                "question_limit": question_limit
+                "question_limit": 33
             }
         }
-        session_id = request.session.get("session_id")
-        if not session_id:
-            session_id = str(uuid.uuid4())
-            request.session["session_id"] = session_id
-        state = resolve_identity_state(session_id)
-        conn = get_db_connection()
+
+    # Anonymous branch (must execute when user is None)
+    session_id = request.session.get("session_id")
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        request.session["session_id"] = session_id
+
+    conn = get_db_connection()
+    try:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM oracle_interactions WHERE session_id = %s", (session_id,))
-            questions_asked = cur.fetchone()[0]
+            cur.execute(
+                "SELECT COUNT(*) AS total FROM oracle_interactions WHERE session_id = %s",
+                (session_id,)
+            )
+            row = cur.fetchone()
+            questions_asked = (row["total"] if row else 0)
+    finally:
         conn.close()
-        question_limit = 9  # Anonymous limit
-        return {
-            "authenticated": False,
-            "anonymous_user_id": anonymous_id,
-            "is_claimed": state["is_claimed"],
-            "seeker_id": state["seeker_id"],
-            "usage": {
-                "questions_asked": questions_asked,
-                "question_limit": question_limit
-            }
+
+    # If your app tracks anonymous_user_id or seeker/claim state, include them ONLY if already available.
+    # Do not invent new identity logic here.
+
+    return {
+        "authenticated": False,
+        "usage": {
+            "questions_asked": questions_asked,
+            "question_limit": 9
         }
+    }
 
 @app.post("/upload_scroll")
 async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
@@ -863,31 +818,31 @@ class QuestionInput(BaseModel):
 
 @app.post("/ask")
 async def ask_oracle(request: Request, payload: QuestionInput):
-    anonymous_user_id = payload.anonymous_user_id
-    if not anonymous_user_id:
-        anonymous_user_id = request.session.get("anonymous_user_id")
-        if not anonymous_user_id:
-            anonymous_user_id = str(uuid.uuid4())
-            request.session["anonymous_user_id"] = anonymous_user_id
+    session_id = request.session.get("session_id")
+    if not session_id:
+        return JSONResponse(content={"error": "Session not found"}, status_code=400)
     
-    seeker = resolve_seeker_id(anonymous_user_id, payload.seeker_id)
-    ensure_anonymous_user(anonymous_user_id)
+    seeker = resolve_seeker_id(session_id, payload.seeker_id)
+    ensure_anonymous_user(session_id)
     
     # Phase 4.2: Usage enforcement
-    if not can_user_ask(anonymous_user_id, seeker):
+    user = get_current_user(request)
+    user_id = user["user_id"] if user else None
+    if not can_user_ask(session_id, user_id):
         return JSONResponse(content={"error": "Usage limit reached. Please log in or try again later."}, status_code=429)
     
     try:
         question = payload.question
         deity = payload.deity
         print("ASK:", deity, "len(question) =", len(question))
-        session_id = str(uuid.uuid4())
 
         result = await get_oracle_response(question, deity)
         answer = result["answer"]
         source_model = result["source_model"]
         print("ANSWER len =", len(answer))
         
+        # Phase 3.1: Token metering for anonymous continuity
+        estimated_tokens = estimate_tokens(question, answer)
         usage_class = "registered" if payload.seeker_id else "anonymous"
         
         architect_obs = architect_observe_v3(question, deity, session_id)
@@ -901,7 +856,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "timestamp": str(datetime.datetime.now()),
             "session_id": session_id,
             "seeker_id": seeker,
-            "anonymous_user_id": anonymous_user_id,
+            "anonymous_user_id": session_id,  # Keep for compatibility
             "question": question,
             "oracle_used": deity,
             "answer": answer,
@@ -919,6 +874,36 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "estimated_tokens": estimated_tokens,
             "usage_class": usage_class
         })
+        
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            user_id = None
+            if seeker:
+                cur.execute("SELECT id FROM users WHERE seeker_id = %s", (seeker,))
+                user = cur.fetchone()
+                if user:
+                    user_id = user['id']
+        
+            cur.execute(
+                """
+                INSERT INTO oracle_interactions
+                (session_id, user_id, input_type, question_text, response_text, model_provider, model_name, mode)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    session_id,
+                    user_id,
+                    "text",
+                    question,
+                    answer,
+                    "openai",
+                    source_model,
+                    deity
+                )
+            )
+        conn.commit()
+        conn.close()
+        
         return {"answer": answer}
 
     except Exception as e:
@@ -928,18 +913,26 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 @app.post("/whisper")
 async def whisper_audio(request: Request, file: UploadFile = File(...), voice: str = Form("Hathor"), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
     try:
-        ensure_anonymous_user(anonymous_user_id)
-        seeker_id = resolve_seeker_id(anonymous_user_id, seeker_id)
-        session_id = str(uuid.uuid4())
+        session_id = request.session.get("session_id")
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            request.session["session_id"] = session_id
+        
+        seeker_id = resolve_seeker_id(session_id, seeker_id)
+        ensure_anonymous_user(session_id)
+        
+        # Usage enforcement
+        user = get_current_user(request)
+        user_id = user["user_id"] if user else None
+        if not can_user_ask(session_id, user_id):
+            return JSONResponse(content={"error": "Usage limit reached. Please log in or try again later."}, status_code=429)
+        
         question = transcribe_audio(await file.read())
         print(f"🎤 Whisper transcription: {question}")
 
         result_oracle = await get_oracle_response(question, voice)
         answer = result_oracle["answer"]
         source_model = result_oracle["source_model"]
-        
-        # Phase 3.1: Token metering for anonymous continuity
-        estimated_tokens = estimate_tokens(question, answer)
         
         architect_obs = architect_observe_v3(question, voice, session_id)
         scrolls = load_scroll_data()  # For LLaMA analysis
@@ -952,7 +945,7 @@ async def whisper_audio(request: Request, file: UploadFile = File(...), voice: s
             "timestamp": str(datetime.datetime.now()),
             "session_id": session_id,
             "seeker_id": seeker_id,
-            "anonymous_user_id": anonymous_user_id,
+            "anonymous_user_id": session_id,  # Keep for compatibility
             "question": question,
             "oracle_used": voice,
             "answer": answer,
@@ -965,12 +958,38 @@ async def whisper_audio(request: Request, file: UploadFile = File(...), voice: s
             "personal_retrieval_score": None,
             "global_retrieval_score": None,
             "shadow_delta": None,
-            "influence_state": "disabled",
-            # Phase 3.1 anonymous metering
-            "estimated_tokens": estimated_tokens,
-            "usage_class": usage_class
+            "influence_state": "disabled"
         })
-
+        
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            user_id = None
+            if seeker_id:
+                cur.execute("SELECT id FROM users WHERE seeker_id = %s", (seeker_id,))
+                user = cur.fetchone()
+                if user:
+                    user_id = user['id']
+        
+            cur.execute(
+                """
+                INSERT INTO oracle_interactions
+                (session_id, user_id, input_type, question_text, response_text, model_provider, model_name, mode)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    session_id,
+                    user_id,
+                    "voice",
+                    question,
+                    answer,
+                    "openai",
+                    source_model,
+                    voice
+                )
+            )
+        conn.commit()
+        conn.close()
+        
         audio_url = generate_tts_audio(answer, voice)
 
         return {"transcription": question, "answer": answer, "audio_url": audio_url}
