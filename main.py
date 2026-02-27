@@ -137,6 +137,8 @@ app.add_middleware(
     secret_key=os.getenv("SESSION_SECRET", "dev-secret-key-change-in-prod")
 )
 
+app.add_middleware(DatabaseSessionMiddleware)
+
 # Global exception handlers for JSON error responses
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
@@ -195,56 +197,7 @@ def test_db_connectivity():
         print(f"DB connectivity test failed: {e}")
         return False
 
-def create_sessions_table():
-    """Create sessions table if it doesn't exist."""
-    try:
-        # Create a fresh connection for table creation
-        db_url = os.getenv("DATABASE_URL")
-        if not db_url:
-            raise ValueError("DATABASE_URL not set")
-        if db_url.startswith("postgresql+psycopg2://"):
-            db_url = db_url.replace("postgresql+psycopg2://", "postgresql://")
-        
-        conn = psycopg2.connect(db_url, cursor_factory=RealDictCursor)
-        conn.rollback()  # Reset any aborted transaction
-        with conn.cursor() as cur:
-            # Check if tables exist first
-            cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'user_sessions');")
-            user_sessions_exists = cur.fetchone()['exists']
-            
-            cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'anonymous_users');")
-            anonymous_users_exists = cur.fetchone()['exists']
-            
-            if not user_sessions_exists:
-                cur.execute("""
-                    CREATE TABLE user_sessions (
-                        session_id VARCHAR(255) PRIMARY KEY,
-                        data TEXT NOT NULL,
-                        expires_at TIMESTAMP NOT NULL
-                    );
-                """)
-                try:
-                    cur.execute("CREATE INDEX idx_user_sessions_expires_at ON user_sessions (expires_at);")
-                except:
-                    pass
-            
-            if not anonymous_users_exists:
-                cur.execute("""
-                    CREATE TABLE anonymous_users (
-                        id VARCHAR(255) PRIMARY KEY,
-                        created_at TIMESTAMP NOT NULL,
-                        last_seen TIMESTAMP NOT NULL
-                    );
-                """)
-        conn.commit()
-        conn.close()
-        print("Tables ready.")
-    except Exception as e:
-        print(f"Failed to create tables: {e}")
-        # Continue anyway
 
-# Initialize database tables
-create_sessions_table()
 
 def get_llama_observation(question: str, oracle_used: str, answer: str, scrolls: list = None) -> dict:
     if not LLAMA_ENABLED:
@@ -603,6 +556,24 @@ def auth_register(payload: AuthRegisterInput, request: Request):
     # Set session
     request.session["user_id"] = user_id
     
+    # Bind authenticated user to authoritative DB session
+    session_row = getattr(request.state, "session", None)
+    if session_row and session_row.get("id"):
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE sessions
+                    SET user_id = %s
+                    WHERE id = %s
+                    """,
+                    (user_id, session_row["id"])
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    
     return {"message": "Registration successful. Please check your email for verification link.", "user_id": user_id}
 
 class AuthLoginInput(BaseModel):
@@ -634,6 +605,24 @@ def auth_login(payload: AuthLoginInput, request: Request):
     
     # Set session
     request.session["user_id"] = user_id
+    
+    # Bind authenticated user to authoritative DB session
+    session_row = getattr(request.state, "session", None)
+    if session_row and session_row.get("id"):
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE sessions
+                    SET user_id = %s
+                    WHERE id = %s
+                    """,
+                    (user_id, session_row["id"])
+                )
+            conn.commit()
+        finally:
+            conn.close()
     
     return {"message": "Login successful", "user_id": user_id}
 
@@ -797,6 +786,7 @@ def auth_request_password_reset(payload: PasswordResetRequestInput):
 def get_me(request: Request):
     user = get_current_user(request)
 
+    # Authenticated user
     if user:
         conn = get_db_connection()
         try:
@@ -806,7 +796,7 @@ def get_me(request: Request):
                     (user["user_id"],)
                 )
                 row = cur.fetchone()
-                questions_asked = (row["total"] if row else 0)
+                questions_asked = row["total"] if row else 0
         finally:
             conn.close()
 
@@ -819,11 +809,8 @@ def get_me(request: Request):
             }
         }
 
-    # Anonymous branch (must execute when user is None)
-    session_id = request.session.get("session_id")
-    if not session_id:
-        session_id = str(uuid.uuid4())
-        request.session["session_id"] = session_id
+    # Anonymous user
+    session_id = request.state.session["id"]
 
     conn = get_db_connection()
     try:
@@ -833,12 +820,9 @@ def get_me(request: Request):
                 (session_id,)
             )
             row = cur.fetchone()
-            questions_asked = (row["total"] if row else 0)
+            questions_asked = row["total"] if row else 0
     finally:
         conn.close()
-
-    # If your app tracks anonymous_user_id or seeker/claim state, include them ONLY if already available.
-    # Do not invent new identity logic here.
 
     return {
         "authenticated": False,
@@ -847,6 +831,9 @@ def get_me(request: Request):
             "question_limit": 9
         }
     }
+
+
+
 
 @app.post("/upload_scroll")
 async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
@@ -897,10 +884,8 @@ class QuestionInput(BaseModel):
 
 @app.post("/ask")
 async def ask_oracle(request: Request, payload: QuestionInput):
-    session_id = request.session.get("session_id")
-    if not session_id:
-        return JSONResponse(content={"error": "Session not found"}, status_code=400)
-    
+    session_id = request.state.session["id"]   
+
     seeker = resolve_seeker_id(session_id, payload.seeker_id)
     ensure_anonymous_user(session_id)
     
@@ -992,10 +977,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 @app.post("/whisper")
 async def whisper_audio(request: Request, file: UploadFile = File(...), voice: str = Form("Hathor"), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
     try:
-        session_id = request.session.get("session_id")
-        if not session_id:
-            session_id = str(uuid.uuid4())
-            request.session["session_id"] = session_id
+        session_id = request.state.session["id"]
         
         seeker_id = resolve_seeker_id(session_id, seeker_id)
         ensure_anonymous_user(session_id)
