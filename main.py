@@ -587,8 +587,12 @@ def auth_login(payload: AuthLoginInput, request: Request):
     
     conn = get_db_connection()
     with conn.cursor() as cur:
-        cur.execute("SELECT id, password_hash, email_verified, seeker_id, display_name FROM users WHERE email = %s", (email,))
+        cur.execute(
+            "SELECT id, password_hash, email_verified, seeker_id, display_name FROM users WHERE email = %s",
+            (email,)
+        )
         result = cur.fetchone()
+
         if not result or not verify_password(password, result['password_hash']):
             conn.close()
             return JSONResponse(content={"error": "Invalid email or password"}, status_code=401)
@@ -598,33 +602,67 @@ def auth_login(payload: AuthLoginInput, request: Request):
             return JSONResponse(content={"error": "Please verify your email before logging in."}, status_code=403)
         
         user_id = result['id']
+
         # Update last login
-        cur.execute("UPDATE users SET last_login = %s WHERE id = %s", (datetime.datetime.now(timezone.utc), user_id))
+        cur.execute(
+            "UPDATE users SET last_login = %s WHERE id = %s",
+            (datetime.datetime.now(timezone.utc), user_id)
+        )
+
     conn.commit()
     conn.close()
-    
-    # Set session
-    request.session["user_id"] = user_id
-    
-    # Bind authenticated user to authoritative DB session
-    session_row = getattr(request.state, "session", None)
-    if session_row and session_row.get("id"):
-        conn = get_db_connection()
-        try:
-            with conn.cursor() as cur:
+
+    # --- SECURITY-GRADE SESSION ROTATION ---
+
+    old_session = getattr(request.state, "session", None)
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+
+            # Invalidate old session instead of deleting (preserves FK integrity)
+            if old_session and old_session.get("id"):
                 cur.execute(
                     """
                     UPDATE sessions
-                    SET user_id = %s
+                    SET user_id = NULL
                     WHERE id = %s
                     """,
-                    (user_id, session_row["id"])
+                    (old_session["id"],)
                 )
-            conn.commit()
-        finally:
-            conn.close()
-    
-    return {"message": "Login successful", "user_id": user_id}
+
+            # Create brand new authenticated session
+            new_session_id = str(uuid.uuid4())
+            now = datetime.datetime.now(datetime.timezone.utc)
+            ip_hash = get_ip_hash(request)
+            user_agent = request.headers.get("user-agent")
+
+            cur.execute(
+                """
+                INSERT INTO sessions (id, user_id, started_at, last_seen_at, ip_hash, user_agent)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (new_session_id, user_id, now, now, ip_hash, user_agent)
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Clear Starlette session and re-bind user_id
+    request.session.clear()
+    request.session["user_id"] = user_id
+
+    # Build response with new cookie
+    response = JSONResponse({"message": "Login successful", "user_id": user_id})
+    response.set_cookie(
+        key="gi_session",
+        value=new_session_id,
+        httponly=True,
+        samesite="lax"
+    )
+
+    return response
 
 @app.post("/auth/logout")
 def auth_logout(request: Request):
