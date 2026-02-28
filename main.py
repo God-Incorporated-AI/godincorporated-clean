@@ -38,84 +38,7 @@ def get_ip_hash(request: Request) -> str:
     ip = request.client.host if request.client else "unknown"
     return hashlib.sha256(ip.encode()).hexdigest()
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
 
-class DatabaseSessionMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, sliding_days: int = 7):
-        super().__init__(app)
-        self.sliding_days = sliding_days
-
-    async def dispatch(self, request: Request, call_next):
-        session_cookie = request.cookies.get("gi_session")
-        conn = get_db_connection()
-        session_row = None
-
-        try:
-            with conn.cursor() as cur:
-                if session_cookie:
-                    cur.execute(
-                        """
-                        SELECT id, user_id, last_seen_at
-                        FROM sessions
-                        WHERE id = %s
-                        """,
-                        (session_cookie,)
-                    )
-                    session_row = cur.fetchone()
-
-                now = datetime.datetime.now(datetime.timezone.utc)
-
-                if session_row:
-                    expiration_threshold = now - datetime.timedelta(days=self.sliding_days)
-                    if session_row["last_seen_at"] < expiration_threshold:
-                        session_row = None
-
-                if not session_row:
-                    new_id = str(uuid.uuid4())
-                    ip_hash = get_ip_hash(request)
-                    user_agent = request.headers.get("user-agent")
-
-                    cur.execute(
-                        """
-                        INSERT INTO sessions (id, user_id, started_at, last_seen_at, ip_hash, user_agent)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        """,
-                        (new_id, None, now, now, ip_hash, user_agent)
-                    )
-                    conn.commit()
-
-                    session_row = {
-                        "id": new_id,
-                        "user_id": None,
-                        "last_seen_at": now
-                    }
-                else:
-                    cur.execute(
-                        """
-                        UPDATE sessions
-                        SET last_seen_at = %s
-                        WHERE id = %s
-                        """,
-                        (now, session_row["id"])
-                    )
-                    conn.commit()
-
-        finally:
-            conn.close()
-
-        request.state.session = session_row
-
-        response: Response = await call_next(request)
-
-        response.set_cookie(
-            key="gi_session",
-            value=session_row["id"],
-            httponly=True,
-            samesite="lax"
-        )
-
-        return response
 
 app = FastAPI()
 
@@ -137,7 +60,7 @@ app.add_middleware(
     secret_key=os.getenv("SESSION_SECRET", "dev-secret-key-change-in-prod")
 )
 
-app.add_middleware(DatabaseSessionMiddleware)
+
 
 # Global exception handlers for JSON error responses
 @app.exception_handler(HTTPException)
@@ -416,6 +339,18 @@ def get_current_user(request: Request) -> Optional[dict]:
             }
     return None
 
+def get_question_limit(user: Optional[dict]) -> int:
+    """
+    Central entitlement authority.
+    Phase 4.5 — Tier-ready enforcement.
+    """
+
+    if not user:
+        return 9  # Anonymous baseline
+
+    # Future: inspect tier/subscription here
+    return 33  # Registered baseline
+
 def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
     conn = get_db_connection()
     try:
@@ -425,17 +360,19 @@ def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
                     "SELECT COUNT(*) AS total FROM oracle_interactions WHERE user_id = %s",
                     (user_id,)
                 )
-                limit = 33
             else:
                 cur.execute(
                     "SELECT COUNT(*) AS total FROM oracle_interactions WHERE session_id = %s",
                     (session_id,)
                 )
-                limit = 9
 
             row = cur.fetchone()
             count = row["total"] if row else 0
-            return count < limit
+
+        user = {"user_id": user_id} if user_id else None
+        limit = get_question_limit(user)
+
+        return count < limit
     finally:
         conn.close()
 
@@ -556,24 +493,7 @@ def auth_register(payload: AuthRegisterInput, request: Request):
     # Set session
     request.session["user_id"] = user_id
     
-    # Bind authenticated user to authoritative DB session
-    session_row = getattr(request.state, "session", None)
-    if session_row and session_row.get("id"):
-        conn = get_db_connection()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE sessions
-                    SET user_id = %s
-                    WHERE id = %s
-                    """,
-                    (user_id, session_row["id"])
-                )
-            conn.commit()
-        finally:
-            conn.close()
-    
+       
     return {"message": "Registration successful. Please check your email for verification link.", "user_id": user_id}
 
 class AuthLoginInput(BaseModel):
@@ -609,64 +529,18 @@ def auth_login(payload: AuthLoginInput, request: Request):
             (datetime.datetime.now(timezone.utc), user_id)
         )
 
+        # 🔐 Establish session
+        request.session["user_id"] = user_id
+        request.session["display_name"] = result["display_name"]
+
     conn.commit()
     conn.close()
 
-    # --- SECURITY-GRADE SESSION ROTATION ---
-
-    old_session = getattr(request.state, "session", None)
-
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-
-            # Invalidate old session instead of deleting (preserves FK integrity)
-            if old_session and old_session.get("id"):
-                cur.execute(
-                    """
-                    UPDATE sessions
-                    SET user_id = NULL
-                    WHERE id = %s
-                    """,
-                    (old_session["id"],)
-                )
-
-            # Create brand new authenticated session
-            new_session_id = str(uuid.uuid4())
-            now = datetime.datetime.now(datetime.timezone.utc)
-            ip_hash = get_ip_hash(request)
-            user_agent = request.headers.get("user-agent")
-
-            cur.execute(
-                """
-                INSERT INTO sessions (id, user_id, started_at, last_seen_at, ip_hash, user_agent)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-                (new_session_id, user_id, now, now, ip_hash, user_agent)
-            )
-
-        conn.commit()
-    finally:
-        conn.close()
-
-    # Clear Starlette session and re-bind user_id
-    request.session.clear()
-    request.session["user_id"] = user_id
-
-    # Build response with new cookie
-    response = JSONResponse({"message": "Login successful", "user_id": user_id})
-    response.set_cookie(
-        key="gi_session",
-        value=new_session_id,
-        httponly=True,
-        samesite="lax"
-    )
-
-    return response
-
+    return {"message": "Login successful"}
+    
+    
 @app.post("/auth/logout")
 def auth_logout(request: Request):
-    # Clear the session
     request.session.clear()
     return {"message": "Logged out successfully"}
 
@@ -822,9 +696,16 @@ def auth_request_password_reset(payload: PasswordResetRequestInput):
 
 @app.get("/me")
 def get_me(request: Request):
+
+    # Ensure stable anonymous session_id
+    session_id = request.session.get("session_id")
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        request.session["session_id"] = session_id
+
     user = get_current_user(request)
 
-    # Authenticated user
+    # Authenticated branch
     if user:
         conn = get_db_connection()
         try:
@@ -840,16 +721,15 @@ def get_me(request: Request):
 
         return {
             "authenticated": True,
-            "display_name": user.get("display_name"),
+            "display_name": user["display_name"],
+            "anonymous_user_id": session_id,
             "usage": {
                 "questions_asked": questions_asked,
                 "question_limit": 33
             }
         }
 
-    # Anonymous user
-    session_id = request.state.session["id"]
-
+    # Anonymous branch
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
@@ -864,13 +744,12 @@ def get_me(request: Request):
 
     return {
         "authenticated": False,
+        "anonymous_user_id": session_id,
         "usage": {
             "questions_asked": questions_asked,
             "question_limit": 9
         }
     }
-
-
 
 
 @app.post("/upload_scroll")
@@ -922,17 +801,22 @@ class QuestionInput(BaseModel):
 
 @app.post("/ask")
 async def ask_oracle(request: Request, payload: QuestionInput):
-    session_id = request.state.session["id"]   
 
-    seeker = resolve_seeker_id(session_id, payload.seeker_id)
-    ensure_anonymous_user(session_id)
-    
-    # Phase 4.2: Usage enforcement
+    session_id = request.session.get("session_id")
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        request.session["session_id"] = session_id
+
     user = get_current_user(request)
     user_id = user["user_id"] if user else None
+
     if not can_user_ask(session_id, user_id):
-        return JSONResponse(content={"error": "Usage limit reached. Please log in or try again later."}, status_code=429)
+        return JSONResponse(
+            content={"error": "Usage limit reached. Please log in or try again later."},
+            status_code=429
+        )
     
+        
     try:
         question = payload.question
         deity = payload.deity
@@ -957,7 +841,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         save_log({
             "timestamp": str(datetime.datetime.now()),
             "session_id": session_id,
-            "seeker_id": seeker,
+            "seeker_id": user_id,
             "anonymous_user_id": session_id,  # Keep for compatibility
             "question": question,
             "oracle_used": deity,
@@ -979,12 +863,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         
         conn = get_db_connection()
         with conn.cursor() as cur:
-            user_id = None
-            if seeker:
-                cur.execute("SELECT id FROM users WHERE seeker_id = %s", (seeker,))
-                user = cur.fetchone()
-                if user:
-                    user_id = user['id']
+            
         
             cur.execute(
                 """
@@ -1015,14 +894,16 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 @app.post("/whisper")
 async def whisper_audio(request: Request, file: UploadFile = File(...), voice: str = Form("Hathor"), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
     try:
-        session_id = request.state.session["id"]
-        
-        seeker_id = resolve_seeker_id(session_id, seeker_id)
-        ensure_anonymous_user(session_id)
-        
-        # Usage enforcement
+        session_id = request.session.get("session_id")
+        if not session_id:
+            session_id = str(uuid.uuid4())
+            request.session["session_id"] = session_id
+
         user = get_current_user(request)
         user_id = user["user_id"] if user else None
+       
+        # Usage enforcement
+
         if not can_user_ask(session_id, user_id):
             return JSONResponse(content={"error": "Usage limit reached. Please log in or try again later."}, status_code=429)
         
@@ -1043,7 +924,7 @@ async def whisper_audio(request: Request, file: UploadFile = File(...), voice: s
         save_log({
             "timestamp": str(datetime.datetime.now()),
             "session_id": session_id,
-            "seeker_id": seeker_id,
+            "seeker_id": user_id,
             "anonymous_user_id": session_id,  # Keep for compatibility
             "question": question,
             "oracle_used": voice,
@@ -1062,13 +943,7 @@ async def whisper_audio(request: Request, file: UploadFile = File(...), voice: s
         
         conn = get_db_connection()
         with conn.cursor() as cur:
-            user_id = None
-            if seeker_id:
-                cur.execute("SELECT id FROM users WHERE seeker_id = %s", (seeker_id,))
-                user = cur.fetchone()
-                if user:
-                    user_id = user['id']
-        
+                   
             cur.execute(
                 """
                 INSERT INTO oracle_interactions
