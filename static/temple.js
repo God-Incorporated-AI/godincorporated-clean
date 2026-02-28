@@ -222,11 +222,19 @@ document.addEventListener("DOMContentLoaded", function () {
   const forgotPasswordLink = document.getElementById("forgotPasswordLink");
 
   // Phase 4.2.1: Modal elements
-  const loginModal = document.getElementById("loginModal");
-  const registerModal = document.getElementById("registerModal");
-  const loginForm = document.getElementById("loginForm");
-  const registerForm = document.getElementById("registerForm");
-  const closeButtons = document.querySelectorAll(".close");
+const loginModal = document.getElementById("loginModal");
+const registerModal = document.getElementById("registerModal");
+const loginForm = document.getElementById("loginForm");
+const registerForm = document.getElementById("registerForm");
+const closeButtons = document.querySelectorAll(".close");
+
+// 🔐 Force Enter key in password field to submit login form
+document.getElementById("loginPassword").addEventListener("keydown", function(e) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    loginForm.dispatchEvent(new Event("submit", { cancelable: true }));
+  }
+});
 
   // Reset modals
   const resetRequestModal = document.getElementById("resetRequestModal");
@@ -257,6 +265,11 @@ document.addEventListener("DOMContentLoaded", function () {
     loginError.textContent = "";
     loginModal.style.display = "block";
     mainMenu.classList.remove("show");
+
+    // Auto-focus email field so Enter works immediately
+    setTimeout(() => {
+      document.getElementById("loginEmail").focus();
+    }, 50);
   });
 
   forgotPasswordLink.addEventListener("click", function(e) {
