@@ -14,7 +14,7 @@ echo "Postgres status:"
 pg_isready -h localhost -p 5432
 
 echo "Activating venv..."
-source venv/bin/activate
+source "$(dirname "$0")/venv/bin/activate"
 
 echo "Starting app..."
 uvicorn main:app --reload
