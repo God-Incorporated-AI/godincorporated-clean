@@ -376,6 +376,28 @@ def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
     finally:
         conn.close()
 
+
+@app.get("/health")
+def health():
+    return {"ok": True, "service": "godinc", "time": str(datetime.datetime.now(timezone.utc))}
+
+
+@app.get("/health/db")
+def health_db():
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 AS ok;")
+            row = cur.fetchone()
+        conn.close()
+        return {"ok": True, "db": True, "result": row}
+    except Exception as e:
+        return JSONResponse(
+            content={"ok": False, "db": False, "error": str(e)},
+            status_code=500
+        )
+
+
 @app.get("/", response_class=HTMLResponse)
 @app.get("/temple", response_class=HTMLResponse)
 def temple_page(request: Request):
