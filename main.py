@@ -342,14 +342,76 @@ def get_current_user(request: Request) -> Optional[dict]:
 def get_question_limit(user: Optional[dict]) -> int:
     """
     Central entitlement authority.
-    Phase 4.5 — Tier-ready enforcement.
+    Monetary plan-driven limits.
     """
 
+    # True anonymous (not logged in, no DB user)
     if not user:
-        return 9  # Anonymous baseline
+        return 9
 
-    # Future: inspect tier/subscription here
-    return 33  # Registered baseline
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT plan_code FROM users WHERE id = %s",
+                (user["user_id"],)
+            )
+            row = cur.fetchone()
+
+            if not row:
+                return 9
+
+            plan = (row.get("plan_code") or "anon").lower()
+
+    finally:
+        conn.close()
+
+    plan_limits = {
+        "anon": 9,           # Registered but unpaid
+        "minerval": 33,
+        "adept": 99,
+        "magus": 333,
+        "ipsissimus": 10000  # Human-scale unlimited
+    }
+
+    return plan_limits.get(plan, 9)
+
+
+# ================================
+# Phase 5 — Title Computation Axis
+# ================================
+
+def compute_scroll_tier(scroll_count: int) -> str:
+    if scroll_count >= 99:
+        return "Ipsissimus"
+    elif scroll_count >= 33:
+        return "Luminary"
+    elif scroll_count >= 9:
+        return "Archivist"
+    else:
+        return "Dormant"
+
+
+def compute_monetary_title(plan_code: str) -> str:
+    mapping = {
+        "anon": "Anon",
+        "minerval": "Minerval",
+        "adept": "Adept",
+        "magus": "Magus",
+        "ipsissimus": "Ipsissimus"
+    }
+    return mapping.get(plan_code, "Anon")
+
+
+def compute_combined_title(scroll_count: int, plan_code: str, authenticated: bool) -> str:
+    scroll_title = compute_scroll_tier(scroll_count)
+
+    if not authenticated:
+        monetary_title = "Anon"
+    else:
+        monetary_title = compute_monetary_title(plan_code)
+
+    return f"{scroll_title} {monetary_title}"
 
 def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
     conn = get_db_connection()
@@ -373,6 +435,7 @@ def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
         limit = get_question_limit(user)
 
         return count < limit
+
     finally:
         conn.close()
 
@@ -727,29 +790,50 @@ def get_me(request: Request):
 
     user = get_current_user(request)
 
-    # Authenticated branch
+        # Authenticated branch
     if user:
         conn = get_db_connection()
         try:
             with conn.cursor() as cur:
+                # Count usage
                 cur.execute(
                     "SELECT COUNT(*) AS total FROM oracle_interactions WHERE user_id = %s",
                     (user["user_id"],)
                 )
                 row = cur.fetchone()
                 questions_asked = row["total"] if row else 0
+
+                # Get scroll + plan metadata
+                cur.execute(
+                    "SELECT scroll_count, plan_code FROM users WHERE id = %s",
+                    (user["user_id"],)
+                )
+                meta = cur.fetchone()
+                scroll_count = meta["scroll_count"] if meta else 0
+                plan_code = (meta["plan_code"] or "anon") if meta else "anon"
+
         finally:
             conn.close()
+
+        combined_title = compute_combined_title(
+            scroll_count,
+            plan_code,
+            authenticated=True
+        )
 
         return {
             "authenticated": True,
             "display_name": user["display_name"],
             "anonymous_user_id": session_id,
+            "scroll_count": scroll_count,
+            "plan_code": plan_code,
+            "title": combined_title,
             "usage": {
                 "questions_asked": questions_asked,
-                "question_limit": 33
+                "question_limit": get_question_limit(user)
             }
         }
+    
 
     # Anonymous branch
     conn = get_db_connection()
@@ -764,9 +848,18 @@ def get_me(request: Request):
     finally:
         conn.close()
 
+    combined_title = compute_combined_title(
+        0,
+        "anon",
+        authenticated=False
+    )
+
     return {
         "authenticated": False,
         "anonymous_user_id": session_id,
+        "scroll_count": 0,
+        "plan_code": None,
+        "title": combined_title,
         "usage": {
             "questions_asked": questions_asked,
             "question_limit": 9
