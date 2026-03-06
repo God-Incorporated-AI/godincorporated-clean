@@ -879,10 +879,16 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
     file_path = os.path.join(UPLOAD_DIR, safe_name)
     with open(file_path, "wb") as f:
         shutil.copyfileobj(scroll.file, f)
-    
+           
+
     # Extract text
     extracted_text = extract_text_from_scroll(file_path)
-    
+
+    text_hash = hashlib.sha256(extracted_text.encode("utf-8")).hexdigest()
+
+    # Determine corpus layer
+    corpus_layer = "personal" if seeker_id else "community"
+
     # Create scroll entry
     scroll_entry = {
         "scroll_id": str(uuid.uuid4()),
@@ -890,22 +896,29 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
         "filename": scroll.filename,  # Original filename for display
         "safe_filename": safe_name,  # Safe filename for storage
         "extracted_text": extracted_text,
-        "timestamp": str(datetime.datetime.now())
+        "timestamp": str(datetime.datetime.now()),
+
+        "corpus_layer": corpus_layer,
+        "moderation_state": "auto",
+        "text_hash": text_hash
     }
-    
+
     # Load existing scrolls, append, save
     scrolls = load_scroll_data()
     scrolls.append(scroll_entry)
     save_scroll_data(scrolls)
-    
+
     # Update seeker scroll_count if seeker_id provided
     if seeker_id:
         conn = get_db_connection()
         with conn.cursor() as cur:
-            cur.execute("UPDATE users SET scroll_count = scroll_count + 1 WHERE seeker_id = %s", (seeker_id,))
+            cur.execute(
+                "UPDATE users SET scroll_count = scroll_count + 1 WHERE seeker_id = %s",
+                (seeker_id,)
+            )
         conn.commit()
         conn.close()
-    
+
     return {"message": "📜 Your scroll has been uploaded.", "scroll_id": scroll_entry["scroll_id"]}
 
 class QuestionInput(BaseModel):
@@ -978,9 +991,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         
         conn = get_db_connection()
         with conn.cursor() as cur:
-            
-        
-            cur.execute(
+            cur.execute( 
                 """
                 INSERT INTO oracle_interactions
                 (session_id, user_id, input_type, question_text, response_text, model_provider, model_name, mode)
