@@ -893,11 +893,10 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
     scroll_entry = {
         "scroll_id": str(uuid.uuid4()),
         "uploader_id": uploader_id,
-        "filename": scroll.filename,  # Original filename for display
-        "safe_filename": safe_name,  # Safe filename for storage
+        "filename": scroll.filename,
+        "safe_filename": safe_name,
         "extracted_text": extracted_text,
         "timestamp": str(datetime.datetime.now()),
-
         "corpus_layer": corpus_layer,
         "moderation_state": "auto",
         "text_hash": text_hash
@@ -907,6 +906,58 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
     scrolls = load_scroll_data()
     scrolls.append(scroll_entry)
     save_scroll_data(scrolls)
+
+    # Insert scroll into database
+    word_count = len(extracted_text.split())
+
+    # Ensure session exists before inserting scroll
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO sessions (id)
+            VALUES (%s)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (anonymous_user_id,),
+        ) 
+    conn.commit()
+    conn.close()
+
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO scrolls (
+                session_id,
+                user_id,
+                source_type,
+                original_filename,
+                mime_type,
+                storage_ref,
+                content_text,
+                content_hash,
+                word_count
+            )
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING id;
+            """,
+            (
+                anonymous_user_id,
+                seeker_id,
+                "file",
+                scroll.filename,
+                scroll.content_type,
+                safe_name,
+                extracted_text,
+                text_hash,
+                word_count
+            )
+        )
+        scroll_id = cur.fetchone()["id"]
+
+    conn.commit()
+    conn.close()
 
     # Update seeker scroll_count if seeker_id provided
     if seeker_id:
