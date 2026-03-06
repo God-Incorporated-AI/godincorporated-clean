@@ -473,11 +473,14 @@ def reset_scrolls():
 
 @app.get("/scrolls")
 def get_scroll_count():
-    scrolls = load_scroll_data()
-    return {
-        "count": len(scrolls),
-        "files": scrolls
-    }
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS count FROM scrolls")
+        result = cur.fetchone()
+
+    conn.close()
+
+    return {"count": result["count"]}
 
 class RegisterInput(BaseModel):
     display_name: Optional[str] = None  # Optional
