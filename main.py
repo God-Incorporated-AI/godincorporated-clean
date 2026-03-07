@@ -30,7 +30,7 @@ from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio
 from services.whisper import transcribe_audio
 from services.mail import send_email
-from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, SCROLL_DB, save_log, load_scroll_data, save_scroll_data
+from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, save_log
 
 load_dotenv()
 
@@ -240,6 +240,41 @@ def architect_observe_v3(question: str, deity: str, session_id: str) -> dict:
             "interaction_id": str(uuid.uuid4())
         }
     }
+
+def search_canonical_scrolls(question: str, limit: int = 3):
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+
+            cur.execute(
+                """
+                SELECT original_filename, content_text
+                FROM scrolls
+                WHERE corpus_layer = 'canonical'
+                AND to_tsvector('english', content_text)
+                @@ plainto_tsquery('english', %s)
+                LIMIT %s
+                """,
+                (question, limit)
+            )
+
+            rows = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    passages = []
+
+    for row in rows:
+        text = row["content_text"]
+
+        passages.append(
+            f"[{row['original_filename']}]\n{text[:800]}"
+        )
+
+    return passages
 
 def extract_text_from_scroll(file_path):
     text = ""
@@ -883,33 +918,17 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
     with open(file_path, "wb") as f:
         shutil.copyfileobj(scroll.file, f)
            
-
     # Extract text
     extracted_text = extract_text_from_scroll(file_path)
 
     text_hash = hashlib.sha256(extracted_text.encode("utf-8")).hexdigest()
 
+    if not extracted_text.strip():
+       raise HTTPException(status_code=400, detail="Could not extract text from scroll")
+
     # Determine corpus layer
-    corpus_layer = "personal" if seeker_id else "community"
-
-    # Create scroll entry
-    scroll_entry = {
-        "scroll_id": str(uuid.uuid4()),
-        "uploader_id": uploader_id,
-        "filename": scroll.filename,
-        "safe_filename": safe_name,
-        "extracted_text": extracted_text,
-        "timestamp": str(datetime.datetime.now()),
-        "corpus_layer": corpus_layer,
-        "moderation_state": "auto",
-        "text_hash": text_hash
-    }
-
-    # Load existing scrolls, append, save
-    scrolls = load_scroll_data()
-    scrolls.append(scroll_entry)
-    save_scroll_data(scrolls)
-
+    corpus_layer = "personal" if seeker_id else "community" 
+    
     # Insert scroll into database
     word_count = len(extracted_text.split())
 
@@ -940,9 +959,10 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
                 storage_ref,
                 content_text,
                 content_hash,
-                word_count
+                word_count,
+                corpus_layer
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             RETURNING id;
             """,
             (
@@ -954,7 +974,8 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
                 safe_name,
                 extracted_text,
                 text_hash,
-                word_count
+                word_count,
+                corpus_layer
             )
         )
         scroll_id = cur.fetchone()["id"]
@@ -973,7 +994,7 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
         conn.commit()
         conn.close()
 
-    return {"message": "📜 Your scroll has been uploaded.", "scroll_id": scroll_entry["scroll_id"]}
+    return {"message": "📜 Your scroll has been uploaded.", "scroll_id": scroll_id}
 
 class QuestionInput(BaseModel):
     question: str
@@ -997,34 +1018,49 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             content={"error": "Usage limit reached. Please log in or try again later."},
             status_code=429
         )
-    
-        
+
     try:
         question = payload.question
         deity = payload.deity
         print("ASK:", deity, "len(question) =", len(question))
 
-        result = await get_oracle_response(question, deity)
+        # --- Canonical retrieval ---
+        canonical_passages = search_canonical_scrolls(question)
+
+        context_block = ""
+        if canonical_passages:
+            context_block = "\n\nRelevant canonical passages:\n\n"
+            context_block += "\n\n".join(canonical_passages)
+
+        enhanced_question = question + context_block
+
+        # --- Oracle response ---
+        result = await get_oracle_response(enhanced_question, deity)
         answer = result["answer"]
         source_model = result["source_model"]
+
         print("ANSWER len =", len(answer))
-        
-        # Phase 3.1: Token metering for anonymous continuity
+
+        # --- Token metering ---
         estimated_tokens = estimate_tokens(question, answer)
         usage_class = "registered" if payload.seeker_id else "anonymous"
-        
+
+        # --- Architect observation ---
         architect_obs = architect_observe_v3(question, deity, session_id)
-        scrolls = load_scroll_data()  # For LLaMA analysis
+
+        # --- LLaMA observation ---
         try:
-            llama_obs = get_llama_observation(question, deity, answer, scrolls)
+            llama_obs = get_llama_observation(question, deity, answer, None)
         except Exception as e:
             print("LLaMA observation error:", str(e))
             llama_obs = None
+
+        # --- Logging ---
         save_log({
             "timestamp": str(datetime.datetime.now()),
             "session_id": session_id,
             "seeker_id": user_id,
-            "anonymous_user_id": session_id,  # Keep for compatibility
+            "anonymous_user_id": session_id,
             "question": question,
             "oracle_used": deity,
             "answer": answer,
@@ -1033,19 +1069,18 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "source_model": source_model,
             "phase": "4.0",
             "corpus_intent": "authoritative_training_data",
-            # Phase 3.1 influence fields (defaults)
             "personal_retrieval_score": None,
             "global_retrieval_score": None,
             "shadow_delta": None,
             "influence_state": "disabled",
-            # Phase 3.1 anonymous metering
             "estimated_tokens": estimated_tokens,
             "usage_class": usage_class
         })
-        
+
+        # --- Database logging ---
         conn = get_db_connection()
         with conn.cursor() as cur:
-            cur.execute( 
+            cur.execute(
                 """
                 INSERT INTO oracle_interactions
                 (session_id, user_id, input_type, question_text, response_text, model_provider, model_name, mode)
@@ -1062,91 +1097,12 @@ async def ask_oracle(request: Request, payload: QuestionInput):
                     deity
                 )
             )
+
         conn.commit()
         conn.close()
-        
+
         return {"answer": answer}
 
     except Exception as e:
         print("Error:", str(e))
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
-@app.post("/whisper")
-async def whisper_audio(request: Request, file: UploadFile = File(...), voice: str = Form("Hathor"), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
-    try:
-        session_id = request.session.get("session_id")
-        if not session_id:
-            session_id = str(uuid.uuid4())
-            request.session["session_id"] = session_id
-
-        user = get_current_user(request)
-        user_id = user["user_id"] if user else None
-       
-        # Usage enforcement
-
-        if not can_user_ask(session_id, user_id):
-            return JSONResponse(content={"error": "Usage limit reached. Please log in or try again later."}, status_code=429)
-        
-        question = transcribe_audio(await file.read())
-        print(f"🎤 Whisper transcription: {question}")
-
-        result_oracle = await get_oracle_response(question, voice)
-        answer = result_oracle["answer"]
-        source_model = result_oracle["source_model"]
-        
-        architect_obs = architect_observe_v3(question, voice, session_id)
-        scrolls = load_scroll_data()  # For LLaMA analysis
-        try:
-            llama_obs = get_llama_observation(question, voice, answer, scrolls)
-        except Exception as e:
-            print("LLaMA observation error:", str(e))
-            llama_obs = None
-        save_log({
-            "timestamp": str(datetime.datetime.now()),
-            "session_id": session_id,
-            "seeker_id": user_id,
-            "anonymous_user_id": session_id,  # Keep for compatibility
-            "question": question,
-            "oracle_used": voice,
-            "answer": answer,
-            "architect_observation": architect_obs,
-            "llama_observation": llama_obs,
-            "source_model": source_model,
-            "phase": "4.0",
-            "corpus_intent": "authoritative_training_data",
-            # Phase 3.1 influence fields (defaults)
-            "personal_retrieval_score": None,
-            "global_retrieval_score": None,
-            "shadow_delta": None,
-            "influence_state": "disabled"
-        })
-        
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-                   
-            cur.execute(
-                """
-                INSERT INTO oracle_interactions
-                (session_id, user_id, input_type, question_text, response_text, model_provider, model_name, mode)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    session_id,
-                    user_id,
-                    "voice",
-                    question,
-                    answer,
-                    "openai",
-                    source_model,
-                    voice
-                )
-            )
-        conn.commit()
-        conn.close()
-        
-        audio_url = generate_tts_audio(answer, voice)
-
-        return {"transcription": question, "answer": answer, "audio_url": audio_url}
-
-    except Exception as e:
         return JSONResponse(content={"error": str(e)}, status_code=500)
