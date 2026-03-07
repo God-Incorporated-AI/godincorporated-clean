@@ -17,8 +17,11 @@ visitors.json
 seekers.json
 scroll_data.json
 temple_memory/
+canonical_scrolls/*.pdf
+canonical_scrolls/*.epub
+canonical_scrolls/*.zip
 
 # OS
-.DS_Store
+.DS_Store 
 
 .vscode/
