@@ -155,7 +155,7 @@ async def get_oracle_response(question: str, deity: str):
         # Hathor uses xAI API with intuitive, poetic system prompt
         if not xai_api_key:
             raise ValueError("XAI_API_KEY not set for Hathor oracle")
-        system_prompt = "You are Hathor, the ancient Egyptian goddess of love, music, and joy. Respond with intuitive, reflective, emotionally resonant wisdom, drawing from mystical and spiritual traditions. Use poetic language and metaphors to guide the seeker."
+        system_prompt = "You are Hathor, the ancient Egyptian goddess of love, music, and joy. Respond with intuitive, reflective, emotionally resonant wisdom, drawing from mystical and spiritual traditions. Use poetic language and metaphors to guide the seeker. Use the background wisdom provided to inform your response, but do not cite or reference the sources explicitly."
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 response = await client.post(
@@ -182,7 +182,7 @@ async def get_oracle_response(question: str, deity: str):
     elif deity == "Moses":
         # Moses uses OpenAI with logical, doctrinal system prompt
         client = get_openai_client()
-        system_prompt = "You are Moses, the prophet who received the Ten Commandments. Respond with logical, instructive, and doctrinal wisdom, drawing from biblical and canonical teachings. Provide clear guidance and moral instruction."
+        system_prompt = "You are Moses, the prophet who received the Ten Commandments. Respond with logical, instructive, and doctrinal wisdom rooted in biblical and canonical traditions. Use the background wisdom provided to inform your answer, but do not cite or reference the sources explicitly."
         response = client.chat.completions.create(
             model="gpt-4o",  # Updated model
             messages=[
@@ -246,21 +246,24 @@ def search_canonical_scrolls(question: str, limit: int = 3):
     conn = get_db_connection()
 
     try:
-        with conn.cursor() as cur:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur: 
 
             cur.execute(
                 """
-                SELECT original_filename, content_text
-                FROM scrolls
-                WHERE corpus_layer = 'canonical'
-                AND to_tsvector('english', content_text)
-                @@ plainto_tsquery('english', %s)
+                SELECT s.original_filename, c.chunk_text
+                FROM scroll_chunks c
+                JOIN scrolls s ON c.scroll_id = s.id
+                WHERE to_tsvector('english', c.chunk_text)
+                @@ websearch_to_tsquery('english', %s)
                 LIMIT %s
                 """,
-                (question, limit)
+                (
+                    question,
+                    limit
+                )
             )
 
-            rows = cur.fetchall()
+            rows = cur.fetchall()   
 
     finally:
         conn.close()
@@ -268,7 +271,7 @@ def search_canonical_scrolls(question: str, limit: int = 3):
     passages = []
 
     for row in rows:
-        text = row["content_text"]
+        text = row["chunk_text"]
 
         passages.append(
             f"[{row['original_filename']}]\n{text[:800]}"
@@ -1021,6 +1024,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
     try:
         question = payload.question
+        question = question[:1000]
         deity = payload.deity
         print("ASK:", deity, "len(question) =", len(question))
 
@@ -1029,15 +1033,17 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         context_block = ""
         if canonical_passages:
-            context_block = "\n\nRelevant canonical passages:\n\n"
+            context_block = "\n\nBackground wisdom for reflection:\n\n"
             context_block += "\n\n".join(canonical_passages)
 
         enhanced_question = question + context_block
 
         # --- Oracle response ---
         result = await get_oracle_response(enhanced_question, deity)
+
         answer = result["answer"]
         source_model = result["source_model"]
+
 
         print("ANSWER len =", len(answer))
 
