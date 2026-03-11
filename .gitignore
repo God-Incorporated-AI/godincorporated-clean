@@ -27,3 +27,5 @@ canonical_scrolls/*.zip
 .vscode/
 canonical_corpus/
 canonical_corpus/
+canonical_corpus/
+*.pdf
