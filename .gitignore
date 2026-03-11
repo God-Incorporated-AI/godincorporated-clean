@@ -25,3 +25,5 @@ canonical_scrolls/*.zip
 .DS_Store 
 
 .vscode/
+canonical_corpus/
+canonical_corpus/
