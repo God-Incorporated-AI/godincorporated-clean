@@ -241,29 +241,27 @@ def architect_observe_v3(question: str, deity: str, session_id: str) -> dict:
         }
     }
 
-def search_canonical_scrolls(question: str, limit: int = 3):
+def search_canonical_scrolls(question: str, limit: int = 6):
 
     conn = get_db_connection()
 
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur: 
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
 
             cur.execute(
                 """
                 SELECT s.original_filename, c.chunk_text
                 FROM scroll_chunks c
                 JOIN scrolls s ON c.scroll_id = s.id
-                WHERE to_tsvector('english', c.chunk_text)
+                WHERE s.corpus_layer = 'canonical'
+                AND to_tsvector('english', c.chunk_text)
                 @@ websearch_to_tsquery('english', %s)
                 LIMIT %s
                 """,
-                (
-                    question,
-                    limit
-                )
+                (question, limit)
             )
 
-            rows = cur.fetchall()   
+            rows = cur.fetchall()
 
     finally:
         conn.close()
@@ -271,14 +269,95 @@ def search_canonical_scrolls(question: str, limit: int = 3):
     passages = []
 
     for row in rows:
-        text = row["chunk_text"]
-
         passages.append(
-            f"[{row['original_filename']}]\n{text[:800]}"
+            f"[{row['original_filename']}]\n{row['chunk_text'][:800]}"
         )
 
     return passages
 
+
+def search_community_scrolls(question: str, limit: int = 2):
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+
+            cur.execute(
+                """
+                SELECT s.original_filename, c.chunk_text
+                FROM scroll_chunks c
+                JOIN scrolls s ON c.scroll_id = s.id
+                WHERE s.corpus_layer = 'community'
+                AND to_tsvector('english', c.chunk_text)
+                @@ websearch_to_tsquery('english', %s)
+                LIMIT %s
+                """,
+                (question, limit)
+            )
+
+            rows = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    passages = []
+
+    for row in rows:
+        passages.append(
+            f"[{row['original_filename']}]\n{row['chunk_text'][:800]}"
+        )
+
+    return passages
+
+
+def search_personal_scrolls(user_id: str, question: str, limit: int = 4):
+
+    if not user_id:
+        return []
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+
+            cur.execute(
+                """
+                SELECT s.original_filename, c.chunk_text
+                FROM scroll_chunks c
+                JOIN scrolls s ON c.scroll_id = s.id
+                WHERE s.user_id = %s
+                AND s.corpus_layer = 'personal'
+                AND to_tsvector('english', c.chunk_text)
+                @@ websearch_to_tsquery('english', %s)
+                LIMIT %s
+                """,
+                (user_id, question, limit)
+            )
+
+            rows = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    passages = []
+
+    for row in rows:
+        passages.append(
+            f"[{row['original_filename']}]\n{row['chunk_text'][:800]}"
+        )
+
+    return passages
+
+
+def retrieve_context(question: str, user_id: Optional[str]):
+
+    personal = search_personal_scrolls(user_id, question, limit=4)
+    canonical = search_canonical_scrolls(question, limit=6)
+    community = search_community_scrolls(question, limit=2)
+
+    return personal + canonical + community
+    
 def extract_text_from_scroll(file_path):
     text = ""
     ext = os.path.splitext(file_path)[1].lower()
@@ -983,6 +1062,30 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
         )
         scroll_id = cur.fetchone()["id"]
 
+        # --- Chunk the uploaded scroll ---
+        CHUNK_SIZE = 1000
+        OVERLAP = 150
+
+        chunks = []
+        start = 0
+        length = len(extracted_text)
+
+        while start < length:
+            end = start + CHUNK_SIZE
+            chunk = extracted_text[start:end]
+            chunks.append(chunk)
+            start += CHUNK_SIZE - OVERLAP
+
+        for i, chunk in enumerate(chunks):
+            cur.execute(
+                """
+                INSERT INTO scroll_chunks
+                (scroll_id, chunk_index, chunk_text)
+                VALUES (%s,%s,%s)
+                """,
+                (scroll_id, i, chunk)
+            )
+
     conn.commit()
     conn.close()
 
@@ -1028,16 +1131,23 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         deity = payload.deity
         print("ASK:", deity, "len(question) =", len(question))
 
-        # --- Canonical retrieval ---
-        canonical_passages = search_canonical_scrolls(question)
+        # --- Layered retrieval ---
+        passages = retrieve_context(question, user_id)
 
         context_block = ""
-        if canonical_passages:
+        if passages:
             context_block = "\n\nBackground wisdom for reflection:\n\n"
-            context_block += "\n\n".join(canonical_passages)
+            context_block += "\n\n".join(passages)
 
-        enhanced_question = question + context_block
+        enhanced_question = f"""
+        Seeker question:
+        {question}
 
+        Relevant passages from the Temple corpus:
+
+        {context_block}
+        """
+        
         # --- Oracle response ---
         result = await get_oracle_response(enhanced_question, deity)
 

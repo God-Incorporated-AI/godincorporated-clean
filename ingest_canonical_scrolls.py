@@ -2,7 +2,7 @@ import os
 import hashlib
 import fitz  # PyMuPDF
 from main import get_db_connection
-
+from docx import Document
 
 CANONICAL_DIR = "canonical_corpus"
 CHUNK_SIZE = 1000
@@ -40,7 +40,17 @@ def extract_pdf(path):
         print(f"PDF read error: {e}")
         return ""
 
+def extract_docx(path):
 
+    doc = Document(path)
+
+    paragraphs = []
+
+    for p in doc.paragraphs:
+        if p.text:
+            paragraphs.append(p.text)
+
+    return "\n".join(paragraphs)
 def normalize_text(text):
 
     text = text.replace("\r", "\n")
@@ -86,6 +96,9 @@ def ingest_file(conn, filepath, filename):
 
     elif ext.endswith(".rtf"):
         text = extract_rtf(filepath)
+
+    elif ext.endswith(".docx"):
+        text = extract_docx(filepath)
 
     else:
         print("Unsupported format")
@@ -142,7 +155,7 @@ def ingest_file(conn, filepath, filename):
             )
         )
 
-        scroll_id = str(cur.fetchone()[0])
+        scroll_id = str(cur.fetchone()["id"])
 
         chunks = chunk_text(text)
 
@@ -166,6 +179,7 @@ def ingest():
 
     conn = get_db_connection()
 
+        # --- Continue ingestion ---
     for filename in os.listdir(CANONICAL_DIR):
 
         if filename.startswith("."):
@@ -178,7 +192,7 @@ def ingest():
 
         except Exception as e:
             print(f"Failed: {filename}")
-            print(e)
+            print("Error:", repr(e))
 
     conn.commit()
     conn.close()
