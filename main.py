@@ -32,6 +32,9 @@ from services.whisper import transcribe_audio
 from services.mail import send_email
 from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, save_log
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 
 def get_ip_hash(request: Request) -> str:
@@ -374,7 +377,7 @@ def extract_text_from_scroll(file_path):
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                 text = f.read()
     except Exception as e:
-        print(f"Failed to extract text: {e}")
+        logger.error(f"Failed to extract text: {e}")
     return text.strip()
 
 def reset_scroll_system():
@@ -1121,15 +1124,17 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
     if not can_user_ask(session_id, user_id):
         return JSONResponse(
-            content={"error": "Usage limit reached. Please log in or try again later."},
-            status_code=429
-        )
+            content={
+            "oracle_message": "The Oracle grows quiet. To continue the dialogue, please log in or support the Temple."
+        },
+        status_code=429        
+        )   
 
     try:
         question = payload.question
         question = question[:1000]
         deity = payload.deity
-        print("ASK:", deity, "len(question) =", len(question))
+        logger.debug(f"ASK deity={deity} len={len(question)}")
 
         # --- Layered retrieval ---
         passages = retrieve_context(question, user_id)
@@ -1154,8 +1159,15 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         answer = result["answer"]
         source_model = result["source_model"]
 
+        answer = f"""Seeker asked:
+        {question}
 
-        print("ANSWER len =", len(answer))
+        Oracle responds:
+
+        {answer}
+        """
+
+        logger.debug(f"ANSWER len={len(answer)}")
 
         # --- Token metering ---
         estimated_tokens = estimate_tokens(question, answer)
@@ -1168,7 +1180,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         try:
             llama_obs = get_llama_observation(question, deity, answer, None)
         except Exception as e:
-            print("LLaMA observation error:", str(e))
+            logger.warning(f"LLaMA observation error: {e}")
             llama_obs = None
 
         # --- Logging ---
@@ -1217,8 +1229,11 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         conn.commit()
         conn.close()
 
-        return {"answer": answer}
+        return {
+            "question": question,
+            "answer": answer
+        }    
 
     except Exception as e:
-        print("Error:", str(e))
+        logger.error(f"Oracle endpoint error: {e}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
