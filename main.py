@@ -352,6 +352,73 @@ def search_personal_scrolls(user_id: str, question: str, limit: int = 4):
 
     return passages
 
+def get_memory_depth(user):
+
+    if not user:
+        return 1
+
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT plan_code FROM users WHERE id=%s",
+            (user["user_id"],)
+        )
+        row = cur.fetchone()
+
+    plan = row["plan_code"] if row else "anon"
+
+    depth_map = {
+        "anon": 1,
+        "minerval": 3,
+        "adept": 7,
+        "magus": 9,
+        "ipsissimus": 33
+    }
+
+    return depth_map.get(plan, 1)
+
+def get_session_memory(session_id: str, depth: Optional[int]):
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+
+            if depth is None:
+                cur.execute(
+                    """
+                    SELECT question_text, response_text
+                    FROM oracle_interactions
+                    WHERE session_id = %s
+                    ORDER BY created_at DESC
+                    """,
+                    (session_id,)
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT question_text, response_text
+                    FROM oracle_interactions
+                    WHERE session_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (session_id, depth)
+                )
+
+            rows = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    history = []
+
+    for r in reversed(rows):
+        history.append(
+            f"Seeker: {r['question_text']}\nOracle: {r['response_text']}"
+        )
+
+    return "\n\n".join(history)
 
 def retrieve_context(question: str, user_id: Optional[str]):
 
@@ -487,11 +554,12 @@ def get_question_limit(user: Optional[dict]) -> int:
         conn.close()
 
     plan_limits = {
-        "anon": 9,           # Registered but unpaid
-        "minerval": 33,
-        "adept": 99,
-        "magus": 333,
-        "ipsissimus": 10000  # Human-scale unlimited
+        "pilgrim": 1,
+        "seeker": 33,
+        "magister": 144,
+        "sovereign": 333,
+        "philosophus": 999999,
+        "theoricus": 999999
     }
 
     return plan_limits.get(plan, 9)
@@ -511,16 +579,19 @@ def compute_scroll_tier(scroll_count: int) -> str:
     else:
         return "Dormant"
 
+def compute_monetary_title(plan_code: str):
 
-def compute_monetary_title(plan_code: str) -> str:
     mapping = {
-        "anon": "Anon",
-        "minerval": "Minerval",
-        "adept": "Adept",
-        "magus": "Magus",
-        "ipsissimus": "Ipsissimus"
+        "anon": "Pilgrim",
+        "pilgrim": "Pilgrim",
+        "seeker": "Seeker",
+        "magister": "Magister",
+        "sovereign": "Sovereign",
+        "philosophus": "Philosophus",
+        "theoricus": "Theoricus"
     }
-    return mapping.get(plan_code, "Anon")
+
+    return mapping.get(plan_code, "Pilgrim")
 
 
 def compute_combined_title(scroll_count: int, plan_code: str, authenticated: bool) -> str:
@@ -532,6 +603,19 @@ def compute_combined_title(scroll_count: int, plan_code: str, authenticated: boo
         monetary_title = compute_monetary_title(plan_code)
 
     return f"{scroll_title} {monetary_title}"
+
+def get_memory_depth(plan_code: str):
+
+    memory_map = {
+        "pilgrim": 1,
+        "seeker": 3,
+        "magister": 7,
+        "sovereign": 9,
+        "philosophus": 33,
+        "theoricus": None
+    }
+
+    return memory_map.get(plan_code, 1)
 
 def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
     conn = get_db_connection()
@@ -1136,6 +1220,28 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         deity = payload.deity
         logger.debug(f"ASK deity={deity} len={len(question)}")
 
+        # --- Resolve title for memory depth ---
+        title = "Anon"
+
+        if user:
+            conn = get_db_connection()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT scroll_count, plan_code FROM users WHERE id=%s",
+                        (user_id,)
+                    )
+                    meta = cur.fetchone()
+            finally:
+                conn.close()
+
+            if meta:
+                plan_code = meta["plan_code"] or "pilgrim"
+                memory_depth = get_memory_depth(plan_code)
+
+        # --- Retrieve conversation memory ---
+        memory = get_session_memory(session_id, memory_depth)
+
         # --- Layered retrieval ---
         passages = retrieve_context(question, user_id)
 
@@ -1145,7 +1251,11 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             context_block += "\n\n".join(passages)
 
         enhanced_question = f"""
-        Seeker question:
+        Recent dialogue:
+
+        {memory}
+
+        Current seeker question:
         {question}
 
         Relevant passages from the Temple corpus:
