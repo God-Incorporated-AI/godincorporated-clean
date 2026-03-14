@@ -352,31 +352,6 @@ def search_personal_scrolls(user_id: str, question: str, limit: int = 4):
 
     return passages
 
-def get_memory_depth(user):
-
-    if not user:
-        return 1
-
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT plan_code FROM users WHERE id=%s",
-            (user["user_id"],)
-        )
-        row = cur.fetchone()
-
-    plan = row["plan_code"] if row else "anon"
-
-    depth_map = {
-        "anon": 1,
-        "minerval": 3,
-        "adept": 7,
-        "magus": 9,
-        "ipsissimus": 33
-    }
-
-    return depth_map.get(plan, 1)
-
 def get_session_memory(session_id: str, depth: Optional[int]):
 
     conn = get_db_connection()
@@ -419,6 +394,53 @@ def get_session_memory(session_id: str, depth: Optional[int]):
         )
 
     return "\n\n".join(history)
+
+def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: int):
+
+    if depth is None:
+        depth = 33
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+
+            if user_id:
+                cur.execute(
+                    """
+                    SELECT question_text, response_text
+                    FROM oracle_interactions
+                    WHERE user_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (user_id, depth)
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT question_text, response_text
+                    FROM oracle_interactions
+                    WHERE session_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (session_id, depth)
+                )
+
+            rows = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    memories = []
+
+    for row in rows:
+        memories.append(
+            f"Seeker previously asked:\n{row['question_text']}\nOracle answered:\n{row['response_text'][:400]}"
+        )
+
+    return memories
 
 def retrieve_context(question: str, user_id: Optional[str]):
 
@@ -1206,6 +1228,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
     user = get_current_user(request)
     user_id = user["user_id"] if user else None
 
+    plan_code = "pilgrim"
+    memory_depth = 1
+
     if not can_user_ask(session_id, user_id):
         return JSONResponse(
             content={
@@ -1219,6 +1244,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         question = question[:1000]
         deity = payload.deity
         logger.debug(f"ASK deity={deity} len={len(question)}")
+        memories = retrieve_seeker_memory(user_id, session_id, memory_depth)
 
         # --- Resolve title for memory depth ---
         title = "Anon"
@@ -1226,7 +1252,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         if user:
             conn = get_db_connection()
             try:
-                with conn.cursor() as cur:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     cur.execute(
                         "SELECT scroll_count, plan_code FROM users WHERE id=%s",
                         (user_id,)
@@ -1250,10 +1276,18 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             context_block = "\n\nBackground wisdom for reflection:\n\n"
             context_block += "\n\n".join(passages)
 
-        enhanced_question = f"""
-        Recent dialogue:
+        memory_block = ""
 
-        {memory}
+        if memory:
+            memory_block += f"Recent dialogue:\n\n{memory}\n\n"
+
+        if memories:
+            memory_block += "Long-term seeker memory:\n\n"
+            memory_block += "\n\n".join(memories)
+            memory_block += "\n\n"
+
+        enhanced_question = f"""
+        {memory_block}
 
         Current seeker question:
         {question}
