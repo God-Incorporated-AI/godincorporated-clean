@@ -32,7 +32,13 @@ from services.whisper import transcribe_audio
 from services.mail import send_email
 from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, save_log
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    filename="temple.log",
+    filemode="a",
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -1243,7 +1249,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         question = payload.question
         question = question[:1000]
         deity = payload.deity
-        logger.debug(f"ASK deity={deity} len={len(question)}")
+        logger.info(f"ASK deity={deity} len={len(question)}")
         memories = retrieve_seeker_memory(user_id, session_id, memory_depth)
 
         # --- Resolve title for memory depth ---
@@ -1321,7 +1327,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         {answer}
         """
 
-        logger.debug(f"ANSWER len={len(answer)}")
+        logger.info(f"ANSWER len={len(answer)}")
 
         # --- Token metering ---
         estimated_tokens = estimate_tokens(question, answer)
