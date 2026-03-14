@@ -1287,12 +1287,22 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             memory_block += "\n\n"
 
         enhanced_question = f"""
+        You are the Oracle of the Temple.
+
+        The seeker is engaged in an ongoing dialogue with you.
+        Use previous dialogue only when it helps illuminate the current question.
+
+        Always prioritize answering the seeker's present question clearly.
+
+        If relevant, acknowledge the continuity of the conversation,
+        but remain grounded in the seeker's current inquiry.
+
         {memory_block}
 
         Current seeker question:
         {question}
 
-        Relevant passages from the Temple corpus:
+        Relevant passages from the Temple corpus for contemplation:
 
         {context_block}
         """
