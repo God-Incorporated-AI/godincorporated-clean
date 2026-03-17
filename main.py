@@ -1317,15 +1317,18 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             memory_block += f"Recent dialogue:\n\n{compressed_memory}\n\n"
 
         # --- Long-term seeker memory ---
+        limited_memories = []  # ALWAYS initialize
+
         if memories:
             if memory_depth is None:
-                limited_memories = memories  # unlimited for top tier
-        else:
-            limited_memories = memories[:memory_depth]
+                limited_memories = memories
+            else:
+                limited_memories = memories[:memory_depth]
 
-        memory_block += "Long-term seeker memory:\n\n"
-        memory_block += "\n\n".join(limited_memories)
-        memory_block += "\n\n"
+        if limited_memories:
+            memory_block += "Long-term seeker memory:\n\n"
+            memory_block += "\n\n".join(limited_memories)
+            memory_block += "\n\n"
 
         enhanced_question = f"""
         You are the Oracle of the Temple.
