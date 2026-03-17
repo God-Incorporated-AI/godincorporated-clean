@@ -483,9 +483,6 @@ def reset_scroll_system():
         if os.path.isfile(file_path):
             os.remove(file_path)
     
-    # Reset scroll_data.json to empty list
-    with open(SCROLL_DB, "w") as f:
-        json.dump([], f)
 
 def ensure_anonymous_user(anonymous_user_id: str):
     """Ensure the anonymous user exists in the database and update last_seen."""
@@ -1223,6 +1220,32 @@ class QuestionInput(BaseModel):
     seeker_id: Optional[str] = None
     anonymous_user_id: Optional[str] = None
 
+def compress_dialogue(memory: str, max_chars: int = 1200) -> str:
+    if not memory:
+        return ""
+
+    if len(memory) <= max_chars:
+        return memory
+
+    # keep most recent portion
+    return "...earlier dialogue omitted...\n\n" + memory[-max_chars:]
+
+def rank_passages(passages: list, query: str, max_items: int = 5) -> list:
+    if not passages:
+        return []
+
+    query_terms = set(query.lower().split())
+
+    scored = []
+    for p in passages:
+        score = sum(1 for word in query_terms if word in p.lower())
+        scored.append((score, p))
+
+    scored.sort(reverse=True, key=lambda x: x[0])
+
+    return [p for _, p in scored[:max_items]]
+
+
 @app.post("/ask")
 async def ask_oracle(request: Request, payload: QuestionInput):
 
@@ -1250,10 +1273,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         question = question[:1000]
         deity = payload.deity
         logger.info(f"ASK deity={deity} len={len(question)}")
-        memories = retrieve_seeker_memory(user_id, session_id, memory_depth)
-
+        
         # --- Resolve title for memory depth ---
-        title = "Anon"
+     
 
         if user:
             conn = get_db_connection()
@@ -1271,11 +1293,15 @@ async def ask_oracle(request: Request, payload: QuestionInput):
                 plan_code = meta["plan_code"] or "pilgrim"
                 memory_depth = get_memory_depth(plan_code)
 
+        # --- Retrieve seeker long-term memory ---
+        memories = retrieve_seeker_memory(user_id, session_id, memory_depth)
+
         # --- Retrieve conversation memory ---
         memory = get_session_memory(session_id, memory_depth)
 
         # --- Layered retrieval ---
         passages = retrieve_context(question, user_id)
+        passages = rank_passages(passages, question)
 
         context_block = ""
         if passages:
@@ -1284,13 +1310,22 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         memory_block = ""
 
-        if memory:
-            memory_block += f"Recent dialogue:\n\n{memory}\n\n"
+        # --- Compress recent dialogue ---
+        compressed_memory = compress_dialogue(memory)
 
+        if compressed_memory:
+            memory_block += f"Recent dialogue:\n\n{compressed_memory}\n\n"
+
+        # --- Long-term seeker memory ---
         if memories:
-            memory_block += "Long-term seeker memory:\n\n"
-            memory_block += "\n\n".join(memories)
-            memory_block += "\n\n"
+            if memory_depth is None:
+                limited_memories = memories  # unlimited for top tier
+        else:
+            limited_memories = memories[:memory_depth]
+
+        memory_block += "Long-term seeker memory:\n\n"
+        memory_block += "\n\n".join(limited_memories)
+        memory_block += "\n\n"
 
         enhanced_question = f"""
         You are the Oracle of the Temple.
@@ -1299,6 +1334,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         Use previous dialogue only when it helps illuminate the current question.
 
         Always prioritize answering the seeker's present question clearly.
+        Keep your response focused and concise, ideally under 300 words.
+        Avoid unnecessary elaboration unless the seeker explicitly asks for depth.
 
         If relevant, acknowledge the continuity of the conversation,
         but remain grounded in the seeker's current inquiry.
