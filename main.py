@@ -1,21 +1,20 @@
 import datetime
 from datetime import timezone
 import hashlib
-import json
 import logging
 import os
 import shutil
-import tempfile
 import uuid
-from typing import Optional
 
+import re
+
+from typing import Optional
 from docx import Document
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from itsdangerous import Signer, BadSignature
 from passlib.context import CryptContext
 from starlette.middleware.sessions import SessionMiddleware
 from openai import OpenAI
@@ -30,7 +29,7 @@ from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio
 from services.whisper import transcribe_audio
 from services.mail import send_email
-from storage.json_store import UPLOAD_DIR, AUDIO_DIR, TRANSCRIPT_LOG, save_log
+from storage.json_store import UPLOAD_DIR, AUDIO_DIR, save_log
 
 logging.basicConfig(
     level=logging.INFO,
@@ -104,9 +103,9 @@ def estimate_tokens(question: str, answer: str) -> int:
     total_chars = len(question) + len(answer)
     return total_chars // 4
 
-# Phase 3.2.1: Minimal read-only Postgres connectivity
+# Central Postgres connectivity
 def get_db_connection():
-    """Lazy-loaded read-only DB connection. No writes allowed."""
+    """Central DB connection used for both read and write operations."""
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         raise ValueError("DATABASE_URL not set")
@@ -255,7 +254,7 @@ def search_canonical_scrolls(question: str, limit: int = 6):
     conn = get_db_connection()
 
     try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor() as cur:
 
             cur.execute(
                 """
@@ -394,17 +393,25 @@ def get_session_memory(session_id: str, depth: Optional[int]):
 
     history = []
 
+    history = []
+
     for r in reversed(rows):
+        q = r.get("question_text", "").strip()
+        a = r.get("response_text", "").strip()
+
+        # --- CLEAN LEGACY DISPLAY FORMAT ---
+        if "Oracle responds:" in a:
+            parts = a.split("Oracle responds:")
+            if len(parts) > 1:
+                a = parts[1].strip()
+
         history.append(
-            f"Seeker: {r['question_text']}\nOracle: {r['response_text']}"
+            f"User: {q}\nAssistant: {a}"
         )
 
     return "\n\n".join(history)
 
-def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: int):
-
-    if depth is None:
-        depth = 33
+def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: Optional[int]):
 
     conn = get_db_connection()
 
@@ -412,27 +419,49 @@ def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: int):
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
 
             if user_id:
-                cur.execute(
-                    """
-                    SELECT question_text, response_text
-                    FROM oracle_interactions
-                    WHERE user_id = %s
-                    ORDER BY created_at DESC
-                    LIMIT %s
-                    """,
-                    (user_id, depth)
-                )
+                if depth is None:
+                    cur.execute(
+                        """
+                        SELECT question_text, response_text
+                        FROM oracle_interactions
+                        WHERE user_id = %s
+                        ORDER BY created_at DESC
+                        """,
+                        (user_id,)
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT question_text, response_text
+                        FROM oracle_interactions
+                        WHERE user_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (user_id, depth)
+                    )
             else:
-                cur.execute(
-                    """
-                    SELECT question_text, response_text
-                    FROM oracle_interactions
-                    WHERE session_id = %s
-                    ORDER BY created_at DESC
-                    LIMIT %s
-                    """,
-                    (session_id, depth)
-                )
+                if depth is None:
+                    cur.execute(
+                        """
+                        SELECT question_text, response_text
+                        FROM oracle_interactions
+                        WHERE session_id = %s
+                        ORDER BY created_at DESC
+                        """,
+                        (session_id,)
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT question_text, response_text
+                        FROM oracle_interactions
+                        WHERE session_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (session_id, depth)
+                    )
 
             rows = cur.fetchall()
 
@@ -476,7 +505,7 @@ def extract_text_from_scroll(file_path):
     return text.strip()
 
 def reset_scroll_system():
-    """Helper function to reset the scroll ingestion system safely."""
+    """Clears uploaded scroll files from disk only; does not reset database scroll records."""
     # Clear all files in scrolls_uploads/
     for filename in os.listdir(UPLOAD_DIR):
         file_path = os.path.join(UPLOAD_DIR, filename)
@@ -734,7 +763,6 @@ class AuthRegisterInput(BaseModel):
 
 @app.post("/auth/register")
 def auth_register(payload: AuthRegisterInput, request: Request):
-    import re
     email = payload.email.lower().strip()
     password = payload.password
     display_name = payload.display_name.strip()
@@ -1103,9 +1131,7 @@ def get_me(request: Request):
 async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
     ensure_anonymous_user(anonymous_user_id)
     seeker_id = resolve_seeker_id(anonymous_user_id, seeker_id)
-    # Use seeker_id if provided, else generate temp uploader_id
-    uploader_id = seeker_id if seeker_id else str(uuid.uuid4())
-    
+        
     # Save the file with safe name to prevent overwrites
     safe_name = f"{uuid.uuid4()}_{scroll.filename}"
     file_path = os.path.join(UPLOAD_DIR, safe_name)
@@ -1230,20 +1256,64 @@ def compress_dialogue(memory: str, max_chars: int = 1200) -> str:
     # keep most recent portion
     return "...earlier dialogue omitted...\n\n" + memory[-max_chars:]
 
+def normalize_for_scoring(text: str) -> list[str]:
+    text = (text or "").lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    return [w for w in text.split() if len(w) > 2]
+
+
+def expand_query_terms(query_terms: list[str]) -> set[str]:
+    semantic_map = {
+        "self": {"self", "soul", "atman", "identity", "being", "essence"},
+        "truth": {"truth", "real", "reality", "true", "essence", "light"},
+        "love": {"love", "beloved", "union", "heart", "devotion", "mercy"},
+        "god": {"god", "divine", "sacred", "lord", "eternal", "holy"},
+        "law": {"law", "command", "justice", "righteous", "duty", "order"},
+        "soul": {"soul", "spirit", "self", "essence", "inner", "being"},
+        "death": {"death", "dying", "mortality", "end", "grave", "passing"},
+        "wisdom": {"wisdom", "understanding", "insight", "discernment", "knowledge"},
+        "identity": {"identity", "self", "being", "name", "essence", "person"},
+        "joy": {"joy", "delight", "gladness", "ecstasy", "celebration", "blessing"},
+    }
+
+    expanded = set(query_terms)
+
+    for term in query_terms:
+        if term in semantic_map:
+            expanded.update(semantic_map[term])
+
+    return expanded
+
 def rank_passages(passages: list, query: str, max_items: int = 5) -> list:
     if not passages:
         return []
 
-    query_terms = set(query.lower().split())
+    raw_terms = normalize_for_scoring(query)
+    if not raw_terms:
+        raw_terms = ["truth"]
+    expanded_terms = expand_query_terms(raw_terms)
 
     scored = []
+
     for p in passages:
-        score = sum(1 for word in query_terms if word in p.lower())
+        passage_terms = normalize_for_scoring(p)
+        passage_term_set = set(passage_terms)
+
+        exact_matches = sum(1 for term in raw_terms if term in passage_term_set)
+        semantic_matches = sum(1 for term in expanded_terms if term in passage_term_set)
+
+        # Reward exact matches more strongly than expanded semantic matches
+        score = (exact_matches * 3) + semantic_matches
+
+        # Slight bonus for passages that mention several distinct concepts
+        concept_bonus = len(set(raw_terms) & passage_term_set)
+        score += concept_bonus
+
         scored.append((score, p))
 
-    scored.sort(reverse=True, key=lambda x: x[0])
+    scored.sort(key=lambda x: x[0], reverse=True)
 
-    return [p for _, p in scored[:max_items]]
+    return [p for score, p in scored[:max_items] if score > 0] or passages[:max_items]
 
 
 @app.post("/ask")
@@ -1303,6 +1373,10 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         passages = retrieve_context(question, user_id)
         passages = rank_passages(passages, question)
 
+        print("----- MEMORY DEBUG -----")
+        print(memory)
+        print("------------------------")
+
         context_block = ""
         if passages:
             context_block = "\n\nBackground wisdom for reflection:\n\n"
@@ -1311,10 +1385,14 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         memory_block = ""
 
         # --- Compress recent dialogue ---
+        recent_memory = memory[-2000:] if memory else ""
         compressed_memory = compress_dialogue(memory)
 
+        if recent_memory:
+            memory_block += f"Recent exact dialogue:\n\n{recent_memory}\n\n"
+
         if compressed_memory:
-            memory_block += f"Recent dialogue:\n\n{compressed_memory}\n\n"
+            memory_block += f"Earlier summarized dialogue:\n\n{compressed_memory}\n\n"
 
         # --- Long-term seeker memory ---
         limited_memories = []  # ALWAYS initialize
@@ -1334,7 +1412,10 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         You are the Oracle of the Temple.
 
         The seeker is engaged in an ongoing dialogue with you.
-        Use previous dialogue only when it helps illuminate the current question.
+        If the seeker asks about previous statements, you MUST answer using stored dialogue.
+        Do not infer or generalize when memory is available. Use exact prior statements when possible.
+
+        If the question is not about past dialogue, you may use memory only when it adds meaningful clarity.
 
         Always prioritize answering the seeker's present question clearly.
         Keep your response focused and concise, ideally under 300 words.
@@ -1348,37 +1429,42 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         Current seeker question:
         {question}
 
-        Relevant passages from the Temple corpus for contemplation:
-
+       
         {context_block}
         """
         
         # --- Oracle response ---
         result = await get_oracle_response(enhanced_question, deity)
 
-        answer = result["answer"]
+        raw_answer = result["answer"]
         source_model = result["source_model"]
 
-        answer = f"""Seeker asked:
+        if not raw_answer:
+            raw_answer = "The Oracle is silent."
+
+        display_answer = f"""Seeker asked:
         {question}
 
         Oracle responds:
 
-        {answer}
+        {raw_answer}
         """
 
-        logger.info(f"ANSWER len={len(answer)}")
+        print("RAW:", raw_answer[:100])
+        print("DISPLAY:", display_answer[:100])
+
+        logger.info(f"ANSWER len={len(raw_answer)}")
 
         # --- Token metering ---
-        estimated_tokens = estimate_tokens(question, answer)
-        usage_class = "registered" if payload.seeker_id else "anonymous"
+        estimated_tokens = estimate_tokens(question, raw_answer)
+        usage_class = "registered" if user_id else "anonymous"
 
         # --- Architect observation ---
         architect_obs = architect_observe_v3(question, deity, session_id)
 
         # --- LLaMA observation ---
         try:
-            llama_obs = get_llama_observation(question, deity, answer, None)
+            llama_obs = get_llama_observation(question, deity, raw_answer, None)
         except Exception as e:
             logger.warning(f"LLaMA observation error: {e}")
             llama_obs = None
@@ -1391,11 +1477,11 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "anonymous_user_id": session_id,
             "question": question,
             "oracle_used": deity,
-            "answer": answer,
+            "answer": raw_answer,
             "architect_observation": architect_obs,
             "llama_observation": llama_obs,
             "source_model": source_model,
-            "phase": "4.0",
+            "phase": "5.5",
             "corpus_intent": "authoritative_training_data",
             "personal_retrieval_score": None,
             "global_retrieval_score": None,
@@ -1419,8 +1505,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
                     user_id,
                     "text",
                     question,
-                    answer,
-                    "openai",
+                    raw_answer,
+                    "xai" if deity == "Hathor" else "openai",
                     source_model,
                     deity
                 )
@@ -1431,7 +1517,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         return {
             "question": question,
-            "answer": answer
+            "answer": raw_answer
         }    
 
     except Exception as e:
