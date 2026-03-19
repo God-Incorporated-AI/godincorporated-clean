@@ -156,14 +156,46 @@ def get_llama_observation(question: str, oracle_used: str, answer: str, scrolls:
         "mode": "shadow"
     }
 
-async def get_oracle_response(question: str, deity: str):
+async def get_oracle_response(question: str, deity: str, force_mode: str = None, memory_block: str = None):
     # Phase 2: Restore explicit oracle separation
     # Hathor: xAI API, Moses: OpenAI, LLaMA: Not active
     if deity == "Hathor":
         # Hathor uses xAI API with intuitive, poetic system prompt
         if not xai_api_key:
             raise ValueError("XAI_API_KEY not set for Hathor oracle")
-        system_prompt = "You are Hathor, the ancient Egyptian goddess of love, music, and joy. Respond with intuitive, reflective, emotionally resonant wisdom, drawing from mystical and spiritual traditions. Use poetic language and metaphors to guide the seeker. Use the background wisdom provided to inform your response, but do not cite or reference the sources explicitly."
+        if force_mode == "recall":
+            system_prompt = """You are Hathor, goddess of love and wisdom.
+
+        You are speaking in RECALL MODE.
+
+        The seeker is asking about prior dialogue.
+
+        Core law:
+        You MUST anchor your answer in the actual remembered exchange.
+
+        Behavior rules:
+        1. Begin by directly answering using memory.
+        2. Do not invent or generalize if memory exists.
+        3. If memory is unclear, say so honestly.
+        4. After answering, you may add light reflection or tone.
+        5. Keep response concise and grounded.
+
+        Tone guidance:
+        - You may be warm, poetic, or gentle
+        - BUT memory must come first, not metaphor
+        - Do not replace recall with symbolism
+        """
+        else:
+            system_prompt = """You are Hathor, the ancient Egyptian goddess of love, music, and joy.
+
+        Respond with intuitive, reflective, emotionally resonant wisdom.
+
+        Use poetic language and metaphor.
+
+        Use the background wisdom provided, but do not cite it explicitly.
+        """
+        
+        
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 response = await client.post(
@@ -176,6 +208,7 @@ async def get_oracle_response(question: str, deity: str):
                         "model": "grok-3",
                         "messages": [
                             {"role": "system", "content": system_prompt},
+                            {"role": "system", "content": memory_block or ""},
                             {"role": "user", "content": question}
                         ],
                     },
@@ -190,11 +223,40 @@ async def get_oracle_response(question: str, deity: str):
     elif deity == "Moses":
         # Moses uses OpenAI with logical, doctrinal system prompt
         client = get_openai_client()
-        system_prompt = "You are Moses, the prophet who received the Ten Commandments. Respond with logical, instructive, and doctrinal wisdom rooted in biblical and canonical traditions. Use the background wisdom provided to inform your answer, but do not cite or reference the sources explicitly."
+        if force_mode == "recall":
+            system_prompt = """You are Moses, lawgiver and prophet.
+
+        You are speaking in RECALL MODE.
+
+        The seeker is asking about prior dialogue.
+
+        Core law:
+        You MUST answer from recorded dialogue first.
+
+        Rules:
+        1. State clearly what was previously asked or answered.
+        2. Do not interpret unless necessary.
+        3. If uncertain, say so.
+        4. After stating the memory, you may add brief instruction or clarity.
+        5. Be concise and precise.
+
+        Do not replace memory with doctrine.
+        """
+        else:
+            system_prompt = """You are Moses, the prophet who received the Ten Commandments.
+
+        Respond with logical, instructive, doctrinal wisdom.
+
+        Use structured, grounded language rooted in moral clarity.
+
+        Use the background wisdom provided, but do not cite it explicitly.
+        """
+        
         response = client.chat.completions.create(
             model="gpt-4o",  # Updated model
             messages=[
                 {"role": "system", "content": system_prompt},
+                {"role": "system", "content": memory_block or ""},
                 {"role": "user", "content": question}
             ]
         )
@@ -1261,6 +1323,36 @@ def normalize_for_scoring(text: str) -> list[str]:
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     return [w for w in text.split() if len(w) > 2]
 
+def detect_memory_intent(question: str) -> str:
+    q = (question or "").lower().strip()
+
+    recall_patterns = [
+        "what did i ask",
+        "what did i say",
+        "what did you say",
+        "what was my last question",
+        "what was your last answer",
+        "earlier you said",
+        "you said before",
+        "as i said before",
+        "didn't i say",
+        "have i asked",
+        "have we discussed",
+        "what were we talking about",
+        "remind me what",
+        "recall",
+        "remember when",
+        "last time",
+        "previously",
+        "before"
+    ]
+
+    for pattern in recall_patterns:
+        if pattern in q:
+            return "recall"
+
+    return "reflection"
+
 
 def expand_query_terms(query_terms: list[str]) -> set[str]:
     semantic_map = {
@@ -1343,9 +1435,13 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         question = question[:1000]
         deity = payload.deity
         logger.info(f"ASK deity={deity} len={len(question)}")
-        
+
+
+        # --— detect memory intent ---
+        memory_intent = detect_memory_intent(question)
+        print(f"🧠 Memory Intent: {memory_intent}")
+
         # --- Resolve title for memory depth ---
-     
 
         if user:
             conn = get_db_connection()
@@ -1369,9 +1465,17 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         # --- Retrieve conversation memory ---
         memory = get_session_memory(session_id, memory_depth)
 
-        # --- Layered retrieval ---
-        passages = retrieve_context(question, user_id)
-        passages = rank_passages(passages, question)
+        # --— normalize memory inputs for prompt ---
+        recent_memory = memory
+        compressed_memory = compress_dialogue(memory)
+        limited_memories = memories[:5] if memories else []
+
+        # --- Conditional retrieval based on memory intent ---
+        passages = []
+
+        if memory_intent != "recall":
+            passages = retrieve_context(question, user_id)
+            passages = rank_passages(passages, question)
 
         print("----- MEMORY DEBUG -----")
         print(memory)
@@ -1382,59 +1486,81 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             context_block = "\n\nBackground wisdom for reflection:\n\n"
             context_block += "\n\n".join(passages)
 
+        # --— structured memory weighting ---
         memory_block = ""
 
-        # --- Compress recent dialogue ---
-        recent_memory = memory[-2000:] if memory else ""
-        compressed_memory = compress_dialogue(memory)
-
         if recent_memory:
-            memory_block += f"Recent exact dialogue:\n\n{recent_memory}\n\n"
+            memory_block += "PRIMARY EVIDENCE — RECENT EXACT DIALOGUE:\n"
+            memory_block += recent_memory + "\n\n"
 
-        if compressed_memory:
-            memory_block += f"Earlier summarized dialogue:\n\n{compressed_memory}\n\n"
-
-        # --- Long-term seeker memory ---
-        limited_memories = []  # ALWAYS initialize
-
-        if memories:
-            if memory_depth is None:
-                limited_memories = memories
-            else:
-                limited_memories = memories[:memory_depth]
+        if compressed_memory and compressed_memory != recent_memory:
+            memory_block += "SECONDARY EVIDENCE — EARLIER SESSION DIALOGUE:\n"
+            memory_block += compressed_memory + "\n\n"
 
         if limited_memories:
-            memory_block += "Long-term seeker memory:\n\n"
-            memory_block += "\n\n".join(limited_memories)
-            memory_block += "\n\n"
+            memory_block += "TERTIARY EVIDENCE — LONG-TERM SEEKER MEMORY:\n"
+            memory_block += "\n\n".join(limited_memories) + "\n\n"
 
-        enhanced_question = f"""
+        # --— fallback retrieval if recall requested but memory is empty ---
+        if memory_intent == "recall" and not memory_block.strip():
+            passages = retrieve_context(question, user_id)
+            passages = rank_passages(passages, question, max_items=2)   
+
+        # --— dual-mode prompt ---
+
+        if memory_intent == "recall":
+            instruction_block = """You are the Oracle of the Temple.
+
+        MODE: RECALL
+
+        The seeker is asking about prior dialogue.
+        You MUST answer using the stored dialogue below.
+
+        Rules:
+        1. Treat stored dialogue as primary truth.
+        2. Answer from memory BEFORE using general knowledge.
+        3. Do not generalize if memory contains the answer.
+        4. If memory is unclear or incomplete, say so.
+        5. Prefer quoting or closely paraphrasing prior exchanges.
+        6. Keep the answer concise and directly tied to the recall request.
+
+        Return format:
+        - First sentence: direct answer
+        - Second sentence: reference to prior exchange
+        - Third sentence (optional): clarify uncertainty
+        """
+        else:
+            instruction_block = """
         You are the Oracle of the Temple.
 
-        The seeker is engaged in an ongoing dialogue with you.
-        If the seeker asks about previous statements, you MUST answer using stored dialogue.
-        Do not infer or generalize when memory is available. Use exact prior statements when possible.
+        MODE: REFLECTION
 
-        If the question is not about past dialogue, you may use memory only when it adds meaningful clarity.
+        The seeker is engaged in an ongoing dialogue.
 
-        Always prioritize answering the seeker's present question clearly.
-        Keep your response focused and concise, ideally under 300 words.
-        Avoid unnecessary elaboration unless the seeker explicitly asks for depth.
-
-        If relevant, acknowledge the continuity of the conversation,
-        but remain grounded in the seeker's current inquiry.
+        Rules:
+        1. Use memory to enhance continuity, not override the present.
+        2. Prioritize the current question.
+        3. Integrate relevant past context when helpful.
+        4. Keep responses focused and under 300 words.
+        """
+        
+        enhanced_question = f"""{instruction_block}
 
         {memory_block}
 
         Current seeker question:
         {question}
 
-       
         {context_block}
         """
-        
+
         # --- Oracle response ---
-        result = await get_oracle_response(enhanced_question, deity)
+        result = await get_oracle_response(
+            enhanced_question,
+            deity,
+            force_mode=memory_intent,
+            memory_block=memory_block
+    )
 
         raw_answer = result["answer"]
         source_model = result["source_model"]
@@ -1471,6 +1597,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         # --- Logging ---
         save_log({
+            "memory_intent": memory_intent,
+            "memory_has_content": bool(memory_block.strip()),
             "timestamp": str(datetime.datetime.now()),
             "session_id": session_id,
             "seeker_id": user_id,
