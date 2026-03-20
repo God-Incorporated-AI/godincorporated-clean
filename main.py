@@ -493,8 +493,7 @@ def get_session_memory(session_id: str, depth: Optional[int]):
     finally:
         conn.close()
 
-    history = []
-
+   
     history = []
 
     for r in reversed(rows):
