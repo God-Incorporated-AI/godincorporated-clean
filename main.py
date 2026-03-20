@@ -1476,10 +1476,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         deity = payload.deity
         logger.info(f"ASK deity={deity} len={len(question)}")
 
-
         # --— detect memory intent ---
         memory_intent = detect_memory_intent(question)
-        print(f"🧠 Memory Intent: {memory_intent}")
+
 
         # --- Resolve title for memory depth ---
 
@@ -1517,15 +1516,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             passages = retrieve_context(question, user_id)
             passages = rank_passages(passages, question)
 
-        print("----- MEMORY DEBUG -----")
-        print(memory)
-        print("------------------------")
 
-        context_block = ""
-        if passages:
-            context_block = "\n\nBackground wisdom for reflection:\n\n"
-            context_block += "\n\n".join(passages)
-
+        
         # --— structured memory weighting ---
         memory_block = ""
 
@@ -1545,6 +1537,11 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         if memory_intent == "recall" and not memory_block.strip():
             passages = retrieve_context(question, user_id)
             passages = rank_passages(passages, question, max_items=2)   
+
+        context_block = ""
+        if passages:
+            context_block = "\n\nBackground wisdom for reflection:\n\n"
+            context_block += "\n\n".join(passages)
 
         # --— dual-mode prompt ---
 
@@ -1607,18 +1604,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         if not raw_answer:
             raw_answer = "The Oracle is silent."
-
-        display_answer = f"""Seeker asked:
-        {question}
-
-        Oracle responds:
-
-        {raw_answer}
-        """
-
-        print("RAW:", raw_answer[:100])
-        print("DISPLAY:", display_answer[:100])
-
+           
         logger.info(f"ANSWER len={len(raw_answer)}")
 
         # --- Token metering ---
@@ -1686,8 +1672,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         return {
             "question": question,
             "answer": raw_answer
-        }    
-
+        }
+       
     except Exception as e:
         logger.error(f"Oracle endpoint error: {e}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
