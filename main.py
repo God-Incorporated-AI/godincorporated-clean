@@ -156,6 +156,36 @@ def get_llama_observation(question: str, oracle_used: str, answer: str, scrolls:
         "mode": "shadow"
     }
 
+def enforce_recall_structure(answer: str, memory_block: str) -> str:
+    """
+    Ensures first sentence is grounded in actual memory.
+    """
+
+    if not memory_block or not answer:
+        return answer
+
+    # Extract a simple recall line from memory_block
+    lines = [l.strip() for l in memory_block.split("\n") if l.strip()]
+
+    # Find a usable memory line
+    recall_line = None
+    for line in lines:
+        if "User:" in line or "Seeker:" in line:
+            recall_line = line.replace("User:", "").replace("Seeker:", "").strip()
+            break
+
+    if not recall_line:
+        return answer
+
+    # Build enforced first sentence
+    enforced = f"You asked: \"{recall_line}\"."
+
+    # Avoid duplication
+    if recall_line.lower() in answer.lower():
+        return answer
+
+    return enforced + "\n\n" + answer
+
 async def get_oracle_response(question: str, deity: str, force_mode: str = None, memory_block: str = None):
     # Phase 2: Restore explicit oracle separation
     # Hathor: xAI API, Moses: OpenAI, LLaMA: Not active
@@ -215,7 +245,12 @@ async def get_oracle_response(question: str, deity: str, force_mode: str = None,
                 )
             if response.status_code == 200:
                 data = response.json()
-                return {"answer": data["choices"][0]["message"]["content"], "source_model": "xAI"}
+                raw_answer = data["choices"][0]["message"]["content"]
+
+                if force_mode == "recall":
+                    raw_answer = enforce_recall_structure(raw_answer, memory_block)
+
+                return {"answer": raw_answer, "source_model": "xAI"}
             else:
                 raise ValueError(f"XAI API error: {response.status_code} - {response.text}")
         except Exception as e:
@@ -260,7 +295,12 @@ async def get_oracle_response(question: str, deity: str, force_mode: str = None,
                 {"role": "user", "content": question}
             ]
         )
-        return {"answer": response.choices[0].message.content, "source_model": "OpenAI"}
+        raw_answer = response.choices[0].message.content
+
+        if force_mode == "recall":
+            raw_answer = enforce_recall_structure(raw_answer, memory_block)
+
+        return {"answer": raw_answer, "source_model": "OpenAI"}
     elif deity == "Llama":
         # LLaMA is NOT a responder in Phase 2
         raise ValueError("LLaMA is not yet active as a responder in Phase 2. It will be introduced later as a learner/router.")
@@ -1552,7 +1592,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         {question}
 
         {context_block}
-        """
+        """ 
 
         # --- Oracle response ---
         result = await get_oracle_response(
@@ -1560,7 +1600,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             deity,
             force_mode=memory_intent,
             memory_block=memory_block
-    )
+        )
 
         raw_answer = result["answer"]
         source_model = result["source_model"]
