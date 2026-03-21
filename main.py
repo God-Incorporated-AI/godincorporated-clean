@@ -41,12 +41,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 load_dotenv()
+EMBEDDINGS_ENABLED = os.getenv("EMBEDDINGS_ENABLED", "false").lower() == "true"
 
 def get_ip_hash(request: Request) -> str:
     ip = request.client.host if request.client else "unknown"
     return hashlib.sha256(ip.encode()).hexdigest()
 
-
+def should_use_embeddings() -> bool:
+    return EMBEDDINGS_ENABLED
 
 app = FastAPI()
 
@@ -102,6 +104,23 @@ def estimate_tokens(question: str, answer: str) -> int:
     """Rough token estimation for metering. ~4 chars per token."""
     total_chars = len(question) + len(answer)
     return total_chars // 4
+
+def generate_text_embedding(text: str) -> list[float] | None:
+    """
+    Phase 6.2 helper for generating a single embedding vector.
+
+    Returns None for empty text so callers can safely skip bad inputs.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+
+    client = get_openai_client()
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=text
+    )
+    return response.data[0].embedding
 
 # Central Postgres connectivity
 def get_db_connection():
@@ -578,7 +597,23 @@ def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: Optio
 
     return memories
 
+def retrieve_context_embeddings(question: str, user_id: Optional[str]):
+    """
+    Phase 6.2 placeholder for embedding-based retrieval.
+
+    For now, this safely falls back to the current keyword retrieval path.
+    We will replace the body later once vector storage/backfill is ready.
+    """
+    personal = search_personal_scrolls(user_id, question, limit=4)
+    canonical = search_canonical_scrolls(question, limit=6)
+    community = search_community_scrolls(question, limit=2)
+
+    return personal + canonical + community
+
 def retrieve_context(question: str, user_id: Optional[str]):
+
+    if should_use_embeddings():
+        return retrieve_context_embeddings(question, user_id)
 
     personal = search_personal_scrolls(user_id, question, limit=4)
     canonical = search_canonical_scrolls(question, limit=6)
