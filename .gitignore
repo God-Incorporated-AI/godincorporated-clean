@@ -29,3 +29,4 @@ canonical_corpus/
 canonical_corpus/
 canonical_corpus/
 *.pdf
+embedding_cache.json
