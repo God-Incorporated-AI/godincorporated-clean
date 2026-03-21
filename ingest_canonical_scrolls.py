@@ -7,7 +7,7 @@ from docx import Document
 CANONICAL_DIR = "canonical_corpus"
 CHUNK_SIZE = 1000
 OVERLAP = 150
-
+CANONICAL_SESSION_ID = "00000000-0000-0000-0000-000000000000"
 
 def extract_txt(path):
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -81,6 +81,17 @@ def chunk_text(text):
 
     return chunks
 
+def ensure_canonical_session(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO sessions (id)
+            VALUES (%s)
+            ON CONFLICT (id) DO NOTHING
+            """,
+            (CANONICAL_SESSION_ID,)
+        )
+    conn.commit()
 
 def ingest_file(conn, filepath, filename):
 
@@ -142,7 +153,7 @@ def ingest_file(conn, filepath, filename):
             RETURNING id
             """,
             (
-                "00000000-0000-0000-0000-000000000000",
+                CANONICAL_SESSION_ID,
                 None,
                 "file",
                 filename,
@@ -178,6 +189,7 @@ def ingest_file(conn, filepath, filename):
 def ingest():
 
     conn = get_db_connection()
+    ensure_canonical_session(conn)
 
         # --- Continue ingestion ---
     for filename in os.listdir(CANONICAL_DIR):
@@ -191,6 +203,7 @@ def ingest():
             ingest_file(conn, filepath, filename)
 
         except Exception as e:
+            conn.rollback()
             print(f"Failed: {filename}")
             print("Error:", repr(e))
 

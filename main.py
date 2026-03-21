@@ -546,7 +546,11 @@ def search_personal_scrolls(user_id: str, question: str, limit: int = 4):
 
     return passages
 
-def fetch_scroll_chunk_candidates(user_id: Optional[str], limit: int = 200):
+def fetch_scroll_chunk_candidates(
+    user_id: Optional[str],
+    limit: int = 200,
+    offset: int = 0
+):
     """
     Phase 6.2 helper:
     Fetch raw scroll chunk candidates for later embedding scoring.
@@ -569,9 +573,9 @@ def fetch_scroll_chunk_candidates(user_id: Optional[str], limit: int = 200):
                     WHERE s.user_id = %s
                        OR s.corpus_layer IN ('canonical', 'community')
                     ORDER BY s.created_at DESC NULLS LAST, c.id DESC
-                    LIMIT %s
+                    LIMIT %s OFFSET %s
                     """,
-                    (user_id, limit)
+                    (user_id, limit, offset)
                 )
             else:
                 cur.execute(
@@ -581,9 +585,9 @@ def fetch_scroll_chunk_candidates(user_id: Optional[str], limit: int = 200):
                     JOIN scrolls s ON c.scroll_id = s.id
                     WHERE s.corpus_layer IN ('canonical', 'community')
                     ORDER BY s.created_at DESC NULLS LAST, c.id DESC
-                    LIMIT %s
+                    LIMIT %s OFFSET %s
                     """,
-                    (limit,)
+                    (limit, offset)
                 )
 
             rows = cur.fetchall()
@@ -593,14 +597,14 @@ def fetch_scroll_chunk_candidates(user_id: Optional[str], limit: int = 200):
 
     return rows
 
-def backfill_embedding_cache(limit: int = 500) -> dict:
+def backfill_embedding_cache(limit: int = 500, offset: int = 0) -> dict:
     """
     Phase 6.2.1 helper:
     Warm the local embedding cache for existing scroll chunks.
     """
-    rows = fetch_scroll_chunk_candidates(user_id=None, limit=limit)
+    rows = fetch_scroll_chunk_candidates(user_id=None, limit=limit, offset=offset)
     if not rows:
-        return {"processed": 0, "cached": 0, "skipped": 0}
+        return {"processed": 0, "cached": 0, "skipped": 0, "offset": offset}
 
     cache = load_embedding_cache()
     cache_changed = False
@@ -637,7 +641,8 @@ def backfill_embedding_cache(limit: int = 500) -> dict:
     return {
         "processed": processed,
         "cached": cached,
-        "skipped": skipped
+        "skipped": skipped,
+        "offset": offset
     }
 
 def retrieve_context_embeddings_ranked(
@@ -1084,7 +1089,7 @@ def health_db():
         )
 
 @app.post("/admin/backfill_embeddings")
-def admin_backfill_embeddings(limit: int = 500):
+def admin_backfill_embeddings(limit: int = 500, offset: int = 0):
     if not should_use_embeddings():
         return JSONResponse(
             content={"ok": False, "error": "Embeddings are disabled."},
@@ -1092,7 +1097,7 @@ def admin_backfill_embeddings(limit: int = 500):
         )
 
     try:
-        result = backfill_embedding_cache(limit=limit)
+        result = backfill_embedding_cache(limit=limit, offset=offset)
         return {"ok": True, "result": result}
     except Exception as e:
         logger.error(f"Backfill embeddings error: {e}")
@@ -1605,7 +1610,10 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
                 """,
                 (scroll_id, i, chunk)
             )
-            cache_chunk_embedding(chunk)
+            try:
+                cache_chunk_embedding(chunk)
+            except Exception as e:
+                logger.warning(f"Chunk embedding cache warm failed: {e}")
 
     conn.commit()
     conn.close()
