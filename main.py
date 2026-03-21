@@ -1,6 +1,7 @@
 import datetime
 from datetime import timezone
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -41,7 +42,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-EMBEDDINGS_ENABLED = os.getenv("EMBEDDINGS_ENABLED", "false").lower() == "true"
+EMBEDDINGS_ENABLED = os.getenv("EMBEDDINGS_ENABLED", "true").lower() == "true"
+EMBEDDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "embedding_cache.json")
 
 def get_ip_hash(request: Request) -> str:
     ip = request.client.host if request.client else "unknown"
@@ -49,6 +51,52 @@ def get_ip_hash(request: Request) -> str:
 
 def should_use_embeddings() -> bool:
     return EMBEDDINGS_ENABLED
+
+def load_embedding_cache() -> dict:
+    if not os.path.exists(EMBEDDING_CACHE_PATH):
+        return {}
+
+    try:
+        with open(EMBEDDING_CACHE_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load embedding cache: {e}")
+        return {}
+
+def save_embedding_cache(cache: dict) -> None:
+    try:
+        with open(EMBEDDING_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+    except Exception as e:
+        logger.warning(f"Failed to save embedding cache: {e}")
+
+def get_embedding_cache_key(text: str) -> str:
+    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+def cache_chunk_embedding(chunk_text: str) -> None:
+    """
+    Store one chunk embedding in the local cache if it is not already present.
+    Safe no-op when embeddings are disabled or text is empty.
+    """
+    if not should_use_embeddings():
+        return
+
+    chunk_text = (chunk_text or "").strip()
+    if not chunk_text:
+        return
+
+    cache_key = get_embedding_cache_key(chunk_text)
+    cache = load_embedding_cache()
+
+    if cache_key in cache:
+        return
+
+    embedding = generate_text_embedding(chunk_text[:2000])
+    if not embedding:
+        return
+
+    cache[cache_key] = embedding
+    save_embedding_cache(cache)
 
 app = FastAPI()
 
@@ -121,6 +169,26 @@ def generate_text_embedding(text: str) -> list[float] | None:
         input=text
     )
     return response.data[0].embedding
+
+def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
+    """
+    Compute cosine similarity between two embedding vectors.
+    Returns 0.0 if either vector is missing or invalid.
+    """
+    if not vec_a or not vec_b:
+        return 0.0
+
+    if len(vec_a) != len(vec_b):
+        return 0.0
+
+    dot_product = sum(a * b for a, b in zip(vec_a, vec_b))
+    norm_a = sum(a * a for a in vec_a) ** 0.5
+    norm_b = sum(b * b for b in vec_b) ** 0.5
+
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+
+    return dot_product / (norm_a * norm_b)
 
 # Central Postgres connectivity
 def get_db_connection():
@@ -478,6 +546,157 @@ def search_personal_scrolls(user_id: str, question: str, limit: int = 4):
 
     return passages
 
+def fetch_scroll_chunk_candidates(user_id: Optional[str], limit: int = 200):
+    """
+    Phase 6.2 helper:
+    Fetch raw scroll chunk candidates for later embedding scoring.
+
+    Returns rows with:
+    - original_filename
+    - chunk_text
+    - corpus_layer
+    """
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            if user_id:
+                cur.execute(
+                    """
+                    SELECT s.original_filename, s.corpus_layer, c.chunk_text
+                    FROM scroll_chunks c
+                    JOIN scrolls s ON c.scroll_id = s.id
+                    WHERE s.user_id = %s
+                       OR s.corpus_layer IN ('canonical', 'community')
+                    ORDER BY s.created_at DESC NULLS LAST, c.id DESC
+                    LIMIT %s
+                    """,
+                    (user_id, limit)
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT s.original_filename, s.corpus_layer, c.chunk_text
+                    FROM scroll_chunks c
+                    JOIN scrolls s ON c.scroll_id = s.id
+                    WHERE s.corpus_layer IN ('canonical', 'community')
+                    ORDER BY s.created_at DESC NULLS LAST, c.id DESC
+                    LIMIT %s
+                    """,
+                    (limit,)
+                )
+
+            rows = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    return rows
+
+def backfill_embedding_cache(limit: int = 500) -> dict:
+    """
+    Phase 6.2.1 helper:
+    Warm the local embedding cache for existing scroll chunks.
+    """
+    rows = fetch_scroll_chunk_candidates(user_id=None, limit=limit)
+    if not rows:
+        return {"processed": 0, "cached": 0, "skipped": 0}
+
+    cache = load_embedding_cache()
+    cache_changed = False
+
+    processed = 0
+    cached = 0
+    skipped = 0
+
+    for row in rows:
+        chunk_text = (row.get("chunk_text") or "").strip()
+        if not chunk_text:
+            skipped += 1
+            continue
+
+        processed += 1
+        cache_key = get_embedding_cache_key(chunk_text)
+
+        if cache_key in cache:
+            skipped += 1
+            continue
+
+        embedding = generate_text_embedding(chunk_text[:2000])
+        if not embedding:
+            skipped += 1
+            continue
+
+        cache[cache_key] = embedding
+        cached += 1
+        cache_changed = True
+
+    if cache_changed:
+        save_embedding_cache(cache)
+
+    return {
+        "processed": processed,
+        "cached": cached,
+        "skipped": skipped
+    }
+
+def retrieve_context_embeddings_ranked(
+    question: str,
+    user_id: Optional[str],
+    candidate_limit: int = 200,
+    top_k: int = 8
+):
+    """
+    Phase 6.2 helper:
+    Rank candidate scroll chunks by embedding similarity to the question.
+
+    Uses a local cache so chunk embeddings do not need to be regenerated
+    on every request.
+    """
+    question_embedding = generate_text_embedding(question)
+    if not question_embedding:
+        return []
+
+    candidates = fetch_scroll_chunk_candidates(user_id, limit=candidate_limit)
+    if not candidates:
+        return []
+
+    cache = load_embedding_cache()
+    cache_changed = False
+    scored = []
+
+    for row in candidates:
+        chunk_text = (row.get("chunk_text") or "").strip()
+        if not chunk_text:
+            continue
+
+        cache_key = get_embedding_cache_key(chunk_text)
+        chunk_embedding = cache.get(cache_key)
+
+        if not chunk_embedding:
+            chunk_embedding = generate_text_embedding(chunk_text[:2000])
+            if not chunk_embedding:
+                continue
+
+            cache[cache_key] = chunk_embedding
+            cache_changed = True
+
+        score = cosine_similarity(question_embedding, chunk_embedding)
+
+        scored.append(
+            (
+                score,
+                f"[{row['original_filename']} | {row['corpus_layer']}]\n{chunk_text[:800]}"
+            )
+        )
+
+    if cache_changed:
+        save_embedding_cache(cache)
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+
+    return [passage for score, passage in scored[:top_k] if score > 0]
+
 def get_session_memory(session_id: str, depth: Optional[int]):
 
     conn = get_db_connection()
@@ -599,11 +818,21 @@ def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: Optio
 
 def retrieve_context_embeddings(question: str, user_id: Optional[str]):
     """
-    Phase 6.2 placeholder for embedding-based retrieval.
+    Phase 6.2 embedding retrieval path.
 
-    For now, this safely falls back to the current keyword retrieval path.
-    We will replace the body later once vector storage/backfill is ready.
+    Uses embedding similarity ranking first.
+    Falls back to keyword retrieval if embedding ranking returns nothing.
     """
+    ranked_passages = retrieve_context_embeddings_ranked(
+        question,
+        user_id,
+        candidate_limit=200,
+        top_k=8
+    )
+
+    if ranked_passages:
+        return ranked_passages
+
     personal = search_personal_scrolls(user_id, question, limit=4)
     canonical = search_canonical_scrolls(question, limit=6)
     community = search_community_scrolls(question, limit=2)
@@ -854,6 +1083,23 @@ def health_db():
             status_code=500
         )
 
+@app.post("/admin/backfill_embeddings")
+def admin_backfill_embeddings(limit: int = 500):
+    if not should_use_embeddings():
+        return JSONResponse(
+            content={"ok": False, "error": "Embeddings are disabled."},
+            status_code=400
+        )
+
+    try:
+        result = backfill_embedding_cache(limit=limit)
+        return {"ok": True, "result": result}
+    except Exception as e:
+        logger.error(f"Backfill embeddings error: {e}")
+        return JSONResponse(
+            content={"ok": False, "error": str(e)},
+            status_code=500
+        )
 
 @app.get("/", response_class=HTMLResponse)
 @app.get("/temple", response_class=HTMLResponse)
@@ -1359,6 +1605,7 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
                 """,
                 (scroll_id, i, chunk)
             )
+            cache_chunk_embedding(chunk)
 
     conn.commit()
     conn.close()
