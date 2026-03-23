@@ -42,7 +42,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-EMBEDDINGS_ENABLED = os.getenv("EMBEDDINGS_ENABLED", "true").lower() == "true"
+EMBEDDINGS_ENABLED = os.getenv("EMBEDDINGS_ENABLED", "false").lower() == "true"
 EMBEDDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "embedding_cache.json")
 
 def get_ip_hash(request: Request) -> str:
@@ -1515,8 +1515,12 @@ def get_me(request: Request):
 
 
 @app.post("/upload_scroll")
-async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
+async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
     ensure_anonymous_user(anonymous_user_id)
+
+    user = get_current_user(request)
+    authenticated_user_id = user["user_id"] if user else None
+
     seeker_id = resolve_seeker_id(anonymous_user_id, seeker_id)
         
     # Save the file with safe name to prevent overwrites
@@ -1534,7 +1538,7 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
        raise HTTPException(status_code=400, detail="Could not extract text from scroll")
 
     # Determine corpus layer
-    corpus_layer = "personal" if seeker_id else "community" 
+    corpus_layer = "personal" if authenticated_user_id else "community"
     
     # Insert scroll into database
     word_count = len(extracted_text.split())
@@ -1549,58 +1553,129 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
             ON CONFLICT (id) DO NOTHING
             """,
             (anonymous_user_id,),
-        ) 
+        )
     conn.commit()
     conn.close()
 
     conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO scrolls (
-                session_id,
-                user_id,
-                source_type,
-                original_filename,
-                mime_type,
-                storage_ref,
-                content_text,
-                content_hash,
-                word_count,
-                corpus_layer
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO scrolls (
+                    session_id,
+                    user_id,
+                    source_type,
+                    original_filename,
+                    mime_type,
+                    storage_ref,
+                    content_text,
+                    content_hash,
+                    word_count,
+                    corpus_layer
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id;
+                """,
+                (
+                    anonymous_user_id,
+                    authenticated_user_id,
+                    "file",
+                    scroll.filename,
+                    scroll.content_type,
+                    safe_name,
+                    extracted_text,
+                    text_hash,
+                    word_count,
+                    corpus_layer
+                )
             )
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            RETURNING id;
-            """,
-            (
-                anonymous_user_id,
-                seeker_id,
-                "file",
-                scroll.filename,
-                scroll.content_type,
-                safe_name,
-                extracted_text,
-                text_hash,
-                word_count,
-                corpus_layer
+            scroll_id = cur.fetchone()["id"]
+
+            cur.execute(
+                """
+                INSERT INTO scroll_associations (scroll_id, user_id, session_id)
+                VALUES (%s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (scroll_id, authenticated_user_id, anonymous_user_id)
             )
+
+        conn.commit()
+        conn.close()
+
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        conn.close()
+
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id
+                FROM scrolls
+                WHERE content_hash = %s
+                LIMIT 1
+                """,
+                (text_hash,)
+            )
+            existing_scroll = cur.fetchone()
+
+            if not existing_scroll:
+                conn.close()
+
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+
+                return JSONResponse(
+                    content={
+                        "duplicate": True,
+                        "message": "This scroll is already present in the Temple, but the existing record could not be linked."
+                    },
+                    status_code=409
+                )
+
+            scroll_id = existing_scroll["id"]
+
+            cur.execute(
+                """
+                INSERT INTO scroll_associations (scroll_id, user_id, session_id)
+                VALUES (%s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (scroll_id, authenticated_user_id, anonymous_user_id)
+            )
+
+        conn.commit()
+        conn.close()
+
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+        return JSONResponse(
+            content={
+                "duplicate": True,
+                "message": "This scroll is already present in the Temple. No duplicate copy was stored. It will still be recognized in your personal record."
+            },
+            status_code=409
         )
-        scroll_id = cur.fetchone()["id"]
 
-        # --- Chunk the uploaded scroll ---
-        CHUNK_SIZE = 1000
-        OVERLAP = 150
+    # --- Chunk the uploaded scroll ---
+    CHUNK_SIZE = 1000
+    OVERLAP = 150
 
-        chunks = []
-        start = 0
-        length = len(extracted_text)
+    chunks = []
+    start = 0
+    length = len(extracted_text)
 
-        while start < length:
-            end = start + CHUNK_SIZE
-            chunk = extracted_text[start:end]
-            chunks.append(chunk)
-            start += CHUNK_SIZE - OVERLAP
+    while start < length:
+        end = start + CHUNK_SIZE
+        chunk = extracted_text[start:end]
+        chunks.append(chunk)
+        start += CHUNK_SIZE - OVERLAP
 
+    conn = get_db_connection()
+    with conn.cursor() as cur:
         for i, chunk in enumerate(chunks):
             cur.execute(
                 """
@@ -1618,13 +1693,13 @@ async def upload_scroll(scroll: UploadFile = File(...), seeker_id: str = Form(No
     conn.commit()
     conn.close()
 
-    # Update seeker scroll_count if seeker_id provided
-    if seeker_id:
+    # Update user scroll_count if authenticated user uploaded
+    if authenticated_user_id:
         conn = get_db_connection()
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE users SET scroll_count = scroll_count + 1 WHERE seeker_id = %s",
-                (seeker_id,)
+                "UPDATE users SET scroll_count = scroll_count + 1 WHERE id = %s",
+                (authenticated_user_id,)
             )
         conn.commit()
         conn.close()
