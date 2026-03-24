@@ -932,22 +932,33 @@ def validate_reset_token(token: str) -> Optional[str]:
     return None
 
 def get_current_user(request: Request) -> Optional[dict]:
-    """Get current authenticated user from session."""
+    """Get current authenticated user from session.
+    Only verified users count as authenticated.
+    """
     user_id = request.session.get("user_id")
-    if user_id:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, email, seeker_id, display_name, email_verified FROM users WHERE id = %s", (user_id,))
-            result = cur.fetchone()
-        conn.close()
-        if result:
-            return {
-                "user_id": result['id'],
-                "email": result['email'],
-                "seeker_id": result['seeker_id'],
-                "display_name": result['display_name'],
-                "is_verified": result['email_verified']
-            }
+    if not user_id:
+        return None
+
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, email, seeker_id, display_name, email_verified FROM users WHERE id = %s",
+            (user_id,)
+        )
+        result = cur.fetchone()
+    conn.close()
+
+    if result and result["email_verified"]:
+        return {
+            "user_id": result["id"],
+            "email": result["email"],
+            "seeker_id": result["seeker_id"],
+            "display_name": result["display_name"],
+            "is_verified": result["email_verified"]
+        }
+
+    request.session.pop("user_id", None)
+    request.session.pop("display_name", None)
     return None
 
 def get_question_limit(user: Optional[dict]) -> int:
@@ -1067,6 +1078,316 @@ def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
     finally:
         conn.close()
 
+def get_or_create_session_id(request: Request) -> str:
+    session_id = request.session.get("session_id")
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        request.session["session_id"] = session_id
+    return session_id
+
+
+def refresh_user_scroll_count(user_id: str) -> int:
+    """
+    Treat scroll_associations as authoritative for seeker-facing scroll ownership.
+    users.scroll_count becomes a cached summary we refresh from associations.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(DISTINCT scroll_id) AS total
+                FROM scroll_associations
+                WHERE user_id = %s
+                """,
+                (user_id,)
+            )
+            row = cur.fetchone()
+            total = row["total"] if row else 0
+
+            cur.execute(
+                "UPDATE users SET scroll_count = %s WHERE id = %s",
+                (total, user_id)
+            )
+
+        conn.commit()
+        return total
+    finally:
+        conn.close()
+
+
+def merge_anonymous_history_into_user(session_id: Optional[str], user_id: str) -> None:
+    """
+    Merge this browser's anonymous history into the authenticated user record.
+    This fixes /me skew after login/register in the same browser.
+    """
+    if not session_id:
+        return
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE oracle_interactions
+                SET user_id = %s
+                WHERE session_id = %s
+                  AND user_id IS NULL
+                """,
+                (user_id, session_id)
+            )
+
+            cur.execute(
+                """
+                UPDATE scroll_associations
+                SET user_id = %s
+                WHERE session_id = %s
+                  AND (user_id IS NULL OR user_id <> %s)
+                """,
+                (user_id, session_id, user_id)
+            )
+
+            cur.execute(
+                """
+                UPDATE scrolls
+                SET user_id = %s,
+                    corpus_layer = CASE
+                        WHEN corpus_layer = 'community' THEN 'personal'
+                        ELSE corpus_layer
+                    END
+                WHERE session_id = %s
+                  AND user_id IS NULL
+                """,
+                (user_id, session_id)
+            )
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    refresh_user_scroll_count(user_id)
+
+def get_user_donation_stats(user_id: str) -> dict:
+    """
+    Preferred authority: donations table.
+    Fallback: users.donation_total if donations table/columns are not yet aligned.
+    Assumes donations has columns: user_id, amount.
+    If your amount column uses a different name, only change that one query.
+    """
+    conn = get_db_connection()
+    try:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*) AS donation_count,
+                        COALESCE(SUM(amount), 0) AS money_donated
+                    FROM donations
+                    WHERE user_id = %s
+                    """,
+                    (user_id,)
+                )
+                row = cur.fetchone() or {}
+                return {
+                    "donation_count": row.get("donation_count", 0) or 0,
+                    "money_donated": float(row.get("money_donated", 0) or 0),
+                    "donation_source": "donations"
+                }
+        except Exception:
+            conn.rollback()
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COALESCE(donation_total, 0) AS money_donated
+                FROM users
+                WHERE id = %s
+                """,
+                (user_id,)
+            )
+            row = cur.fetchone() or {}
+            return {
+                "donation_count": 0,
+                "money_donated": float(row.get("money_donated", 0) or 0),
+                "donation_source": "users.donation_total_fallback"
+            }
+    finally:
+        conn.close()
+
+
+def build_authenticated_me_response(user: dict, session_id: str) -> dict:
+    donation_stats = get_user_donation_stats(user["user_id"])
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    email,
+                    display_name,
+                    email_verified,
+                    last_login,
+                    COALESCE(plan_code, 'anon') AS plan_code,
+                    COALESCE(scroll_count, 0) AS legacy_scroll_count
+                FROM users
+                WHERE id = %s
+                """,
+                (user["user_id"],)
+            )
+            user_row = cur.fetchone() or {}
+
+            cur.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM oracle_interactions
+                WHERE user_id = %s
+                """,
+                (user["user_id"],)
+            )
+            usage_row = cur.fetchone()
+            questions_used = usage_row["total"] if usage_row else 0
+
+            cur.execute(
+                """
+                SELECT mode, COUNT(*) AS total
+                FROM oracle_interactions
+                WHERE user_id = %s
+                GROUP BY mode
+                """,
+                (user["user_id"],)
+            )
+            mode_rows = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT COUNT(DISTINCT scroll_id) AS total
+                FROM scroll_associations
+                WHERE user_id = %s
+                """,
+                (user["user_id"],)
+            )
+            scroll_row = cur.fetchone()
+            authoritative_scroll_count = scroll_row["total"] if scroll_row else 0
+    finally:
+        conn.close()
+
+    plan_code = user_row.get("plan_code") or "anon"
+    question_limit = get_question_limit(user)
+    mode_counts = {row["mode"]: row["total"] for row in mode_rows}
+    combined_title = compute_combined_title(
+        authoritative_scroll_count,
+        plan_code,
+        authenticated=True
+    )
+
+    return {
+        "authenticated": True,
+        "display_name": user_row.get("display_name"),
+        "email": user_row.get("email"),
+        "email_verified": user_row.get("email_verified"),
+        "last_login": user_row.get("last_login").isoformat() if user_row.get("last_login") else None,
+        "seeker_id": user.get("seeker_id"),
+        "anonymous_user_id": session_id,
+        "scroll_count": authoritative_scroll_count,
+        "scrolls_donated": authoritative_scroll_count,
+        "legacy_scroll_count": user_row.get("legacy_scroll_count", 0),
+        "plan_code": plan_code,
+        "title": combined_title,
+        "combined_title": combined_title,
+        "money_donated": donation_stats["money_donated"],
+        "donation_count": donation_stats["donation_count"],
+        "donation_source": donation_stats["donation_source"],
+        "memory_depth": get_memory_depth(plan_code),
+        "usage": {
+            "questions_asked": questions_used,
+            "questions_used": questions_used,
+            "question_limit": question_limit,
+            "questions_remaining": max(question_limit - questions_used, 0),
+            "hathor_questions": mode_counts.get("Hathor", 0),
+            "moses_questions": mode_counts.get("Moses", 0)
+        }
+    }
+
+
+def build_anonymous_me_response(session_id: str) -> dict:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM oracle_interactions
+                WHERE session_id = %s
+                """,
+                (session_id,)
+            )
+            usage_row = cur.fetchone()
+            questions_used = usage_row["total"] if usage_row else 0
+
+            cur.execute(
+                """
+                SELECT mode, COUNT(*) AS total
+                FROM oracle_interactions
+                WHERE session_id = %s
+                GROUP BY mode
+                """,
+                (session_id,)
+            )
+            mode_rows = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT COUNT(DISTINCT scroll_id) AS total
+                FROM scroll_associations
+                WHERE session_id = %s
+                """,
+                (session_id,)
+            )
+            scroll_row = cur.fetchone()
+            session_scroll_count = scroll_row["total"] if scroll_row else 0
+    finally:
+        conn.close()
+
+    question_limit = 9
+    mode_counts = {row["mode"]: row["total"] for row in mode_rows}
+    combined_title = compute_combined_title(
+        session_scroll_count,
+        "anon",
+        authenticated=False
+    )
+
+    return {
+        "authenticated": False,
+        "display_name": None,
+        "email": None,
+        "email_verified": False,
+        "last_login": None,
+        "seeker_id": None,
+        "anonymous_user_id": session_id,
+        "scroll_count": session_scroll_count,
+        "scrolls_donated": session_scroll_count,
+        "plan_code": None,
+        "title": combined_title,
+        "combined_title": combined_title,
+        "money_donated": 0,
+        "donation_count": 0,
+        "donation_source": "none",
+        "memory_depth": 1,
+        "usage": {
+            "questions_asked": questions_used,
+            "questions_used": questions_used,
+            "question_limit": question_limit,
+            "questions_remaining": max(question_limit - questions_used, 0),
+            "hathor_questions": mode_counts.get("Hathor", 0),
+            "moses_questions": mode_counts.get("Moses", 0)
+        }
+    }
 
 @app.get("/health")
 def health():
@@ -1128,21 +1449,14 @@ def get_scroll_count():
     return {"count": result["count"]}
 
 class RegisterInput(BaseModel):
-    display_name: Optional[str] = None  # Optional
+    display_name: Optional[str] = None
 
 @app.post("/register")
 def register_seeker(payload: RegisterInput):
-    seeker_id = str(uuid.uuid4())
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO users (id, seeker_id, display_name, display_name_lower, title, scroll_count, donation_total, influence_state, eligibility_flags, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (seeker_id, seeker_id, payload.display_name, (payload.display_name or "").lower(), "Seeker", 0, 0, "disabled", [], datetime.datetime.now(timezone.utc)))
-    conn.commit()
-    conn.close()
-    return {"seeker_id": seeker_id, "message": "Registration successful. Welcome to the temple."}
-
+    return JSONResponse(
+        content={"error": "Legacy /register is retired. Use /auth/register instead."},
+        status_code=410
+    )
 class AuthRegisterInput(BaseModel):
     email: str
     password: str
@@ -1203,8 +1517,8 @@ def auth_register(payload: AuthRegisterInput, request: Request):
     conn.close()
     
     # Build verification link
-    base_url = os.getenv("BASE_URL", "http://localhost:8000")
-    verification_link = f"{base_url}/auth/verify-email?token={verification_token}"
+    app_base_url = os.getenv("APP_BASE_URL", os.getenv("BASE_URL", "http://localhost:8000"))
+    verification_link = f"{app_base_url}/auth/verify-email?token={verification_token}"
     
     # Send verification email
     try:
@@ -1220,14 +1534,16 @@ def auth_register(payload: AuthRegisterInput, request: Request):
         )
     except Exception as e:
         print(f"Failed to send verification email to {email}: {str(e)}")
-        return JSONResponse(content={"error": "Registration successful, but failed to send verification email. Please contact support."}, status_code=500)
-    
-    # Set session
-    request.session["user_id"] = user_id
-    
-       
-    return {"message": "Registration successful. Please check your email for verification link.", "user_id": user_id}
+        return JSONResponse(
+            content={"error": "Registration successful, but failed to send verification email. Please contact support."},
+            status_code=500
+        )
 
+    return {
+        "message": "Registration successful. Please check your email for verification link.",
+        "user_id": user_id,
+        "email_verified": False
+    }
 class AuthLoginInput(BaseModel):
     email: str
     password: str
@@ -1236,7 +1552,7 @@ class AuthLoginInput(BaseModel):
 def auth_login(payload: AuthLoginInput, request: Request):
     email = payload.email.lower().strip()
     password = payload.password
-    
+
     conn = get_db_connection()
     with conn.cursor() as cur:
         cur.execute(
@@ -1245,32 +1561,34 @@ def auth_login(payload: AuthLoginInput, request: Request):
         )
         result = cur.fetchone()
 
-        if not result or not verify_password(password, result['password_hash']):
+        if not result or not verify_password(password, result["password_hash"]):
             conn.close()
             return JSONResponse(content={"error": "Invalid email or password"}, status_code=401)
-        
-        if not result['email_verified']:
+
+        if not result["email_verified"]:
             conn.close()
             return JSONResponse(content={"error": "Please verify your email before logging in."}, status_code=403)
-        
-        user_id = result['id']
 
-        # Update last login
+        user_id = result["id"]
+        display_name = result["display_name"]
+
         cur.execute(
             "UPDATE users SET last_login = %s WHERE id = %s",
             (datetime.datetime.now(timezone.utc), user_id)
         )
 
-        # 🔐 Establish session
-        request.session["user_id"] = user_id
-        request.session["display_name"] = result["display_name"]
-
     conn.commit()
     conn.close()
 
+    session_id = get_or_create_session_id(request)
+    request.session["user_id"] = user_id
+    request.session["display_name"] = display_name
+
+    merge_anonymous_history_into_user(session_id, user_id)
+
     return {"message": "Login successful"}
-    
-    
+
+       
 @app.post("/auth/logout")
 def auth_logout(request: Request):
     request.session.clear()
@@ -1285,16 +1603,18 @@ def auth_verify_email(token: str = Query(...)):
         if not result:
             conn.close()
             return JSONResponse(content={"error": "Invalid verification token"}, status_code=400)
-        
-        user_id = result['id']
-        email = result['email']
-        
-        # Mark user as verified and clear token
-        cur.execute("UPDATE users SET email_verified = true, verification_token = null WHERE id = %s", (user_id,))
+
+        user_id = result["id"]
+        email = result["email"]
+
+        cur.execute(
+            "UPDATE users SET email_verified = true, verification_token = null WHERE id = %s",
+            (user_id,)
+        )
+
     conn.commit()
     conn.close()
-    
-    # Send confirmation email
+
     try:
         send_email(
             email,
@@ -1303,8 +1623,7 @@ def auth_verify_email(token: str = Query(...)):
         )
     except Exception as e:
         logging.error(f"Failed to send email verification confirmation to {email}: {e}")
-        # Log the error but continue, as verification succeeded
-    
+
     return {"message": "Email verified successfully. You can now log in."}
 
 class AuthResetPasswordInput(BaseModel):
@@ -1341,31 +1660,35 @@ def auth_reset_password(
 ):
     if not token or not new_password:
         return JSONResponse(content={"error": "Token and new_password are required"}, status_code=400)
-    
-    # Validate password
+
     if len(new_password) < 8:
         return JSONResponse(content={"error": "Password must be at least 8 characters"}, status_code=400)
-    
+
     if len(new_password.encode("utf-8")) > 72:
         return JSONResponse(content={"error": "Password must be 72 bytes or fewer."}, status_code=400)
-    
+
     conn = get_db_connection()
     with conn.cursor() as cur:
-        cur.execute("SELECT id, email FROM users WHERE reset_token = %s AND reset_token_expires_at > %s", (token, datetime.datetime.now(timezone.utc)))
+        cur.execute(
+            "SELECT id, email FROM users WHERE reset_token = %s AND reset_token_expires_at > %s",
+            (token, datetime.datetime.now(timezone.utc))
+        )
         result = cur.fetchone()
         if not result:
             conn.close()
             return JSONResponse(content={"error": "Invalid or expired reset token"}, status_code=400)
-        
-        user_id = result['id']
-        email = result['email']
-        
-        # Update password and clear token
-        cur.execute("UPDATE users SET password_hash = %s, reset_token = null, reset_token_expires_at = null WHERE id = %s", (hash_password(new_password), user_id))
+
+        user_id = result["id"]
+        email = result["email"]
+
+        cur.execute(
+            "UPDATE users SET password_hash = %s, reset_token = null, reset_token_expires_at = null WHERE id = %s",
+            (hash_password(new_password), user_id)
+        )
+
     conn.commit()
     conn.close()
-    
-    # Send confirmation email
+
     try:
         send_email(
             email,
@@ -1374,11 +1697,7 @@ def auth_reset_password(
         )
     except Exception as e:
         logging.error(f"Failed to send password reset confirmation email to {email}: {e}")
-        # Log the error but continue, as password reset succeeded
-    
-    # Invalidate sessions (clear session store - since we use in-memory, this is a no-op for now)
-    # In a real app, you'd clear all sessions for this user
-    
+
     return {"message": "Password reset successfully. Please log in with your new password."}
 
 @app.post("/auth/request-password-reset")
@@ -1392,13 +1711,16 @@ def auth_request_password_reset(payload: PasswordResetRequestInput):
     
     # Always return success to prevent user enumeration
     if result:
-        user_id = result['id']
-        # Create reset token
+        user_id = result["id"]
+
         token = str(uuid.uuid4())
         expires_at = datetime.datetime.now(timezone.utc) + datetime.timedelta(minutes=30)
-        
+
         with conn.cursor() as cur:
-            cur.execute("UPDATE users SET reset_token = %s, reset_token_expires_at = %s WHERE id = %s", (token, expires_at, user_id))
+            cur.execute(
+                "UPDATE users SET reset_token = %s, reset_token_expires_at = %s WHERE id = %s",
+                (token, expires_at, user_id)
+            )
         conn.commit()
         
         # Build reset link
@@ -1428,91 +1750,13 @@ def auth_request_password_reset(payload: PasswordResetRequestInput):
 
 @app.get("/me")
 def get_me(request: Request):
-
-    # Ensure stable anonymous session_id
-    session_id = request.session.get("session_id")
-    if not session_id:
-        session_id = str(uuid.uuid4())
-        request.session["session_id"] = session_id
-
+    session_id = get_or_create_session_id(request)
     user = get_current_user(request)
 
-        # Authenticated branch
     if user:
-        conn = get_db_connection()
-        try:
-            with conn.cursor() as cur:
-                # Count usage
-                cur.execute(
-                    "SELECT COUNT(*) AS total FROM oracle_interactions WHERE user_id = %s",
-                    (user["user_id"],)
-                )
-                row = cur.fetchone()
-                questions_asked = row["total"] if row else 0
+        return build_authenticated_me_response(user, session_id)
 
-                # Get scroll + plan metadata
-                cur.execute(
-                    "SELECT scroll_count, plan_code FROM users WHERE id = %s",
-                    (user["user_id"],)
-                )
-                meta = cur.fetchone()
-                scroll_count = meta["scroll_count"] if meta else 0
-                plan_code = (meta["plan_code"] or "anon") if meta else "anon"
-
-        finally:
-            conn.close()
-
-        combined_title = compute_combined_title(
-            scroll_count,
-            plan_code,
-            authenticated=True
-        )
-
-        return {
-            "authenticated": True,
-            "display_name": user["display_name"],
-            "anonymous_user_id": session_id,
-            "scroll_count": scroll_count,
-            "plan_code": plan_code,
-            "title": combined_title,
-            "usage": {
-                "questions_asked": questions_asked,
-                "question_limit": get_question_limit(user)
-            }
-        }
-    
-
-    # Anonymous branch
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT COUNT(*) AS total FROM oracle_interactions WHERE session_id = %s",
-                (session_id,)
-            )
-            row = cur.fetchone()
-            questions_asked = row["total"] if row else 0
-    finally:
-        conn.close()
-
-    combined_title = compute_combined_title(
-        0,
-        "anon",
-        authenticated=False
-    )
-
-    return {
-        "authenticated": False,
-        "anonymous_user_id": session_id,
-        "scroll_count": 0,
-        "plan_code": None,
-        "title": combined_title,
-        "usage": {
-            "questions_asked": questions_asked,
-            "question_limit": 9
-        }
-    }
-
+    return build_anonymous_me_response(session_id)
 
 @app.post("/upload_scroll")
 async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
@@ -1627,6 +1871,9 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
                 if os.path.exists(file_path):
                     os.remove(file_path)
 
+                if authenticated_user_id:
+                    refresh_user_scroll_count(authenticated_user_id)
+
                 return JSONResponse(
                     content={
                         "duplicate": True,
@@ -1651,6 +1898,9 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
 
         if os.path.exists(file_path):
             os.remove(file_path)
+
+        if authenticated_user_id:
+            refresh_user_scroll_count(authenticated_user_id)
 
         return JSONResponse(
             content={
@@ -1693,16 +1943,9 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
     conn.commit()
     conn.close()
 
-    # Update user scroll_count if authenticated user uploaded
+    # Refresh cached user scroll_count from authoritative scroll_associations
     if authenticated_user_id:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE users SET scroll_count = scroll_count + 1 WHERE id = %s",
-                (authenticated_user_id,)
-            )
-        conn.commit()
-        conn.close()
+        refresh_user_scroll_count(authenticated_user_id)
 
     return {"message": "📜 Your scroll has been uploaded.", "scroll_id": scroll_id}
 

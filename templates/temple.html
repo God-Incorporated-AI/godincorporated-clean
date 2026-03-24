@@ -13,17 +13,30 @@
       <div class="brand-name">GODINCORPORATED.AI</div>
       <div class="header-actions">
         <button id="menuToggle" class="menu-toggle">☰</button>
-        <nav id="mainMenu" class="main-menu">
+                <nav id="mainMenu" class="main-menu">
           <div id="menuAnonymous" class="menu-section">
             <button id="loginBtn">Log in</button>
             <button id="registerBtn">Create account</button>
-            <button id="supportBtn">Support the Temple</button>
+            <button id="supportBtnAnonymous">Support the Temple</button>
           </div>
+
           <div id="menuAuthenticated" class="menu-section" style="display: none;">
             <div id="userInfo">Welcome, <span id="userDisplayName"></span></div>
-            <div id="usageInfo">Questions used: <span id="usageCount">0</span></div>
+
+            <div id="profileSummary" class="profile-summary">
+              <div>Title: <span id="userCombinedTitle"></span></div>
+              <div>Plan: <span id="userPlanCode"></span></div>
+              <div>Scrolls donated: <span id="userScrollCount">0</span></div>
+              <div>Money donated: <span id="userMoneyDonated">0</span></div>
+              <div>Donation count: <span id="userDonationCount">0</span></div>
+              <div>Questions used: <span id="userQuestionsUsed">0</span></div>
+              <div>Question limit: <span id="userQuestionLimit">0</span></div>
+              <div>Questions remaining: <span id="userQuestionsRemaining">0</span></div>
+              <div>Email verified: <span id="userEmailVerified"></span></div>
+            </div>
+
             <button id="logoutBtn">Log out</button>
-            <button id="supportBtn">Support the Temple</button>
+            <button id="supportBtnAuthenticated">Support the Temple</button>
           </div>
         </nav>
       </div>

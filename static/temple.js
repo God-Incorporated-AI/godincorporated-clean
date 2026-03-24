@@ -1,11 +1,7 @@
 document.addEventListener("DOMContentLoaded", function () {
   // Check for reset token in URL
   const urlParams = new URLSearchParams(window.location.search);
-  const resetToken = urlParams.get('token');
-  if (resetToken && window.location.pathname === '/auth/reset-password') {
-    document.getElementById("resetToken").value = resetToken;
-    resetPasswordModal.style.display = "block";
-  }
+  const resetToken = urlParams.get("token");
   // Documentation: Identity States and Unified /ask Contract
   //
   // The system supports three seeker states:
@@ -213,12 +209,23 @@ document.addEventListener("DOMContentLoaded", function () {
   const mainMenu = document.getElementById("mainMenu");
   const menuAnonymous = document.getElementById("menuAnonymous");
   const menuAuthenticated = document.getElementById("menuAuthenticated");
+
   const userDisplayName = document.getElementById("userDisplayName");
-  const usageCount = document.getElementById("usageCount");
+  const userCombinedTitle = document.getElementById("userCombinedTitle");
+  const userPlanCode = document.getElementById("userPlanCode");
+  const userScrollCount = document.getElementById("userScrollCount");
+  const userMoneyDonated = document.getElementById("userMoneyDonated");
+  const userDonationCount = document.getElementById("userDonationCount");
+  const userQuestionsUsed = document.getElementById("userQuestionsUsed");
+  const userQuestionLimit = document.getElementById("userQuestionLimit");
+  const userQuestionsRemaining = document.getElementById("userQuestionsRemaining");
+  const userEmailVerified = document.getElementById("userEmailVerified");
+
   const loginBtn = document.getElementById("loginBtn");
   const registerBtn = document.getElementById("registerBtn");
   const logoutBtn = document.getElementById("logoutBtn");
-  const supportBtn = document.getElementById("supportBtn");
+  const supportBtnAnonymous = document.getElementById("supportBtnAnonymous");
+  const supportBtnAuthenticated = document.getElementById("supportBtnAuthenticated");
   const forgotPasswordLink = document.getElementById("forgotPasswordLink");
 
   // Phase 4.2.1: Modal elements
@@ -241,6 +248,11 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
   const resetPasswordModal = document.getElementById("resetPasswordModal");
   const resetRequestForm = document.getElementById("resetRequestForm");
   const resetPasswordForm = document.getElementById("resetPasswordForm");
+
+  if (resetToken && window.location.pathname === "/auth/reset-password") {
+    document.getElementById("resetToken").value = resetToken;
+    resetPasswordModal.style.display = "block";
+  }
 
   // Error elements
   const loginError = document.getElementById("loginError");
@@ -285,9 +297,17 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     mainMenu.classList.remove("show");
   });
 
-  supportBtn.addEventListener("click", function() {
-    // Support functionality coming soon
-  });
+  if (supportBtnAnonymous) {
+    supportBtnAnonymous.addEventListener("click", function() {
+      // Support functionality coming soon
+    });
+  }
+
+  if (supportBtnAuthenticated) {
+    supportBtnAuthenticated.addEventListener("click", function() {
+      // Support functionality coming soon
+    });
+  }
 
   // Close modals
   closeButtons.forEach(btn => {
@@ -398,6 +418,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       if (response.ok) {
         // Success
         registerModal.style.display = "none";
+        alert("Account created. Please check your email and verify your account before logging in.");
         updateIdentityDisplay();
       } else {
         // Error
@@ -434,7 +455,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       if (response.ok) {
         // Success
         resetRequestModal.style.display = "none";
-        alert("If an account with that email exists, a reset link has been sent. Check the console.");
+        alert("If an account with that email exists, a reset link has been sent to that email address.");
       } else {
         // Error
         resetRequestError.textContent = data.error || "Request failed";
@@ -453,27 +474,28 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     const newPassword = document.getElementById("newPassword").value;
     if (!token || !newPassword) return;
 
-    // Clear previous error
     resetPasswordError.textContent = "";
 
-    // Disable button
     const submitBtn = resetPasswordForm.querySelector("button");
     submitBtn.disabled = true;
     submitBtn.textContent = "Resetting...";
 
     try {
+      const formData = new FormData();
+      formData.append("token", token);
+      formData.append("new_password", newPassword);
+
       const response = await fetch("/auth/reset-password", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, new_password: newPassword })
+        body: formData
       });
+
       const data = await safeReadJson(response);
+
       if (response.ok) {
-        // Success
         resetPasswordModal.style.display = "none";
         alert("Password reset successfully. Please log in with your new password.");
       } else {
-        // Error
         resetPasswordError.textContent = data.error || "Reset failed";
       }
     } catch (err) {
@@ -499,19 +521,27 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       }
       
       if (data.authenticated) {
-        // Authenticated user
-        visitorId = data.anonymous_user_id || null; // In case
+        visitorId = data.anonymous_user_id || null;
         menuAnonymous.style.display = "none";
         menuAuthenticated.style.display = "flex";
-        userDisplayName.textContent = data.display_name;
-        usageCount.textContent = data.usage.questions_asked;
-        
-        // Logout handler
-        logoutBtn.addEventListener("click", async function() {
+
+        userDisplayName.textContent = data.display_name || "";
+        userCombinedTitle.textContent = data.combined_title || "";
+        userPlanCode.textContent = data.plan_code || "";
+        userScrollCount.textContent = data.scrolls_donated ?? 0;
+        userMoneyDonated.textContent = data.money_donated ?? 0;
+        userDonationCount.textContent = data.donation_count ?? 0;
+        userQuestionsUsed.textContent = data.usage?.questions_used ?? 0;
+        userQuestionLimit.textContent = data.usage?.question_limit ?? 0;
+        userQuestionsRemaining.textContent = data.usage?.questions_remaining ?? 0;
+        userEmailVerified.textContent = data.email_verified ? "Yes" : "No";
+
+        logoutBtn.onclick = async function() {
           await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
           location.reload();
-        });
+        };
       } else {
+
         // Anonymous user
         visitorId = data.anonymous_user_id;
         menuAnonymous.style.display = "flex";
