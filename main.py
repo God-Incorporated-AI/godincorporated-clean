@@ -961,6 +961,185 @@ def get_current_user(request: Request) -> Optional[dict]:
     request.session.pop("display_name", None)
     return None
 
+PLAN_LIMITS = {
+    "anon": 9,
+    "pilgrim": 1,
+    "seeker": 33,
+    "magister": 144,
+    "sovereign": 333,
+    "philosophus": 999999,
+    "theoricus": 999999,
+}
+
+PLAN_MEMORY_DEPTH = {
+    "anon": 1,
+    "pilgrim": 1,
+    "seeker": 3,
+    "magister": 7,
+    "sovereign": 9,
+    "philosophus": 33,
+    "theoricus": None,
+}
+
+
+def normalize_plan_code(plan_code: Optional[str]) -> str:
+    plan = (plan_code or "anon").lower()
+    return plan if plan in PLAN_LIMITS else "anon"
+
+
+def serialize_dt(value):
+    return value.isoformat() if value else None
+
+
+def get_user_entitlement_snapshot(user_id: str) -> dict:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(plan_code, 'anon') AS raw_plan_code,
+                    COALESCE(entitlement_status, 'none') AS entitlement_status,
+                    subscription_started_at,
+                    current_period_started_at,
+                    subscription_renews_at,
+                    subscription_expires_at,
+                    grace_period_ends_at,
+                    COALESCE(cancel_at_period_end, false) AS cancel_at_period_end
+                FROM users
+                WHERE id = %s
+                """,
+                (user_id,)
+            )
+            row = cur.fetchone() or {}
+    finally:
+        conn.close()
+
+    now = datetime.datetime.now(timezone.utc)
+    raw_plan_code = normalize_plan_code(row.get("raw_plan_code"))
+    entitlement_status = (row.get("entitlement_status") or "none").lower()
+
+    expires_at = row.get("subscription_expires_at")
+    grace_ends_at = row.get("grace_period_ends_at")
+
+    is_in_grace = (
+        entitlement_status == "grace"
+        and grace_ends_at is not None
+        and now <= grace_ends_at
+    )
+
+    is_active_paid = (
+        entitlement_status == "active"
+        and (expires_at is None or now <= expires_at)
+    )
+
+    if is_active_paid or is_in_grace:
+        effective_plan_code = raw_plan_code
+        is_entitled = raw_plan_code != "anon"
+    else:
+        if expires_at and now > expires_at and (not grace_ends_at or now > grace_ends_at):
+            entitlement_status = "expired"
+        effective_plan_code = "anon"
+        is_entitled = False
+
+    return {
+        "raw_plan_code": raw_plan_code,
+        "effective_plan_code": effective_plan_code,
+        "entitlement_status": entitlement_status,
+        "subscription_started_at": row.get("subscription_started_at"),
+        "current_period_started_at": row.get("current_period_started_at"),
+        "subscription_renews_at": row.get("subscription_renews_at"),
+        "subscription_expires_at": expires_at,
+        "grace_period_ends_at": grace_ends_at,
+        "cancel_at_period_end": row.get("cancel_at_period_end", False),
+        "is_entitled": is_entitled,
+        "is_in_grace": is_in_grace,
+        "downgraded_for_access": raw_plan_code != effective_plan_code,
+    }
+
+
+def get_oracle_usage_counts(
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    window_start: Optional[datetime.datetime] = None
+) -> dict:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            if user_id:
+                if window_start:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) AS total
+                        FROM oracle_interactions
+                        WHERE user_id = %s
+                          AND created_at >= %s
+                        """,
+                        (user_id, window_start)
+                    )
+                    usage_row = cur.fetchone()
+
+                    cur.execute(
+                        """
+                        SELECT mode, COUNT(*) AS total
+                        FROM oracle_interactions
+                        WHERE user_id = %s
+                          AND created_at >= %s
+                        GROUP BY mode
+                        """,
+                        (user_id, window_start)
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) AS total
+                        FROM oracle_interactions
+                        WHERE user_id = %s
+                        """,
+                        (user_id,)
+                    )
+                    usage_row = cur.fetchone()
+
+                    cur.execute(
+                        """
+                        SELECT mode, COUNT(*) AS total
+                        FROM oracle_interactions
+                        WHERE user_id = %s
+                        GROUP BY mode
+                        """,
+                        (user_id,)
+                    )
+            else:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM oracle_interactions
+                    WHERE session_id = %s
+                    """,
+                    (session_id,)
+                )
+                usage_row = cur.fetchone()
+
+                cur.execute(
+                    """
+                    SELECT mode, COUNT(*) AS total
+                    FROM oracle_interactions
+                    WHERE session_id = %s
+                    GROUP BY mode
+                    """,
+                    (session_id,)
+                )
+
+            mode_rows = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    return {
+        "questions_used": usage_row["total"] if usage_row else 0,
+        "mode_counts": {row["mode"]: row["total"] for row in mode_rows},
+    }
+
 def get_question_limit(user: Optional[dict]) -> int:
     """
     Central entitlement authority.
@@ -1051,16 +1230,7 @@ def compute_combined_title(scroll_count: int, plan_code: str, authenticated: boo
 
 
 def get_memory_depth(plan_code: str):
-    memory_map = {
-        "pilgrim": 1,
-        "seeker": 3,
-        "magister": 7,
-        "sovereign": 9,
-        "philosophus": 33,
-        "theoricus": None
-    }
-
-    return memory_map.get((plan_code or "anon").lower(), 1)
+    return PLAN_MEMORY_DEPTH.get(normalize_plan_code(plan_code), 1)
 
 
 def get_question_display(plan_code: str, questions_used: int, question_limit: int) -> dict:
@@ -1086,30 +1256,20 @@ def get_question_display(plan_code: str, questions_used: int, question_limit: in
     }
 
 def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            if user_id:
-                cur.execute(
-                    "SELECT COUNT(*) AS total FROM oracle_interactions WHERE user_id = %s",
-                    (user_id,)
-                )
-            else:
-                cur.execute(
-                    "SELECT COUNT(*) AS total FROM oracle_interactions WHERE session_id = %s",
-                    (session_id,)
-                )
+    if user_id:
+        entitlement = get_user_entitlement_snapshot(user_id)
+        usage = get_oracle_usage_counts(
+            user_id=user_id,
+            window_start=entitlement["current_period_started_at"]
+        )
+        limit = PLAN_LIMITS.get(
+            entitlement["effective_plan_code"],
+            PLAN_LIMITS["anon"]
+        )
+        return usage["questions_used"] < limit
 
-            row = cur.fetchone()
-            count = row["total"] if row else 0
-
-        user = {"user_id": user_id} if user_id else None
-        limit = get_question_limit(user)
-
-        return count < limit
-
-    finally:
-        conn.close()
+    usage = get_oracle_usage_counts(session_id=session_id)
+    return usage["questions_used"] < PLAN_LIMITS["anon"]
 
 def get_or_create_session_id(request: Request) -> str:
     session_id = request.session.get("session_id")
@@ -1254,6 +1414,11 @@ def get_user_donation_stats(user_id: str) -> dict:
 
 def build_authenticated_me_response(user: dict, session_id: str) -> dict:
     donation_stats = get_user_donation_stats(user["user_id"])
+    entitlement = get_user_entitlement_snapshot(user["user_id"])
+    usage = get_oracle_usage_counts(
+        user_id=user["user_id"],
+        window_start=entitlement["current_period_started_at"]
+    )
 
     conn = get_db_connection()
     try:
@@ -1266,7 +1431,7 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
                     display_name,
                     email_verified,
                     last_login,
-                    COALESCE(plan_code, 'anon') AS plan_code,
+                    COALESCE(plan_code, 'anon') AS stored_plan_code,
                     COALESCE(scroll_count, 0) AS legacy_scroll_count
                 FROM users
                 WHERE id = %s
@@ -1274,28 +1439,6 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
                 (user["user_id"],)
             )
             user_row = cur.fetchone() or {}
-
-            cur.execute(
-                """
-                SELECT COUNT(*) AS total
-                FROM oracle_interactions
-                WHERE user_id = %s
-                """,
-                (user["user_id"],)
-            )
-            usage_row = cur.fetchone()
-            questions_used = usage_row["total"] if usage_row else 0
-
-            cur.execute(
-                """
-                SELECT mode, COUNT(*) AS total
-                FROM oracle_interactions
-                WHERE user_id = %s
-                GROUP BY mode
-                """,
-                (user["user_id"],)
-            )
-            mode_rows = cur.fetchall()
 
             cur.execute(
                 """
@@ -1310,10 +1453,12 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
     finally:
         conn.close()
 
-    plan_code = user_row.get("plan_code") or "anon"
-    question_limit = get_question_limit(user)
+    plan_code = entitlement["effective_plan_code"]
+    questions_used = usage["questions_used"]
+    question_limit = PLAN_LIMITS.get(plan_code, PLAN_LIMITS["anon"])
     question_display = get_question_display(plan_code, questions_used, question_limit)
-    mode_counts = {row["mode"]: row["total"] for row in mode_rows}
+    mode_counts = usage["mode_counts"]
+
     combined_title = compute_combined_title(
         authoritative_scroll_count,
         plan_code,
@@ -1332,12 +1477,27 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
         "scrolls_donated": authoritative_scroll_count,
         "legacy_scroll_count": user_row.get("legacy_scroll_count", 0),
         "plan_code": plan_code,
+        "stored_plan_code": entitlement["raw_plan_code"],
         "title": combined_title,
         "combined_title": combined_title,
         "money_donated": donation_stats["money_donated"],
         "donation_count": donation_stats["donation_count"],
         "donation_source": donation_stats["donation_source"],
         "memory_depth": get_memory_depth(plan_code),
+        "entitlement": {
+            "status": entitlement["entitlement_status"],
+            "raw_plan_code": entitlement["raw_plan_code"],
+            "effective_plan_code": entitlement["effective_plan_code"],
+            "subscription_started_at": serialize_dt(entitlement["subscription_started_at"]),
+            "current_period_started_at": serialize_dt(entitlement["current_period_started_at"]),
+            "renewal_date": serialize_dt(entitlement["subscription_renews_at"]),
+            "expiry_date": serialize_dt(entitlement["subscription_expires_at"]),
+            "grace_period_ends_at": serialize_dt(entitlement["grace_period_ends_at"]),
+            "cancel_at_period_end": entitlement["cancel_at_period_end"],
+            "is_entitled": entitlement["is_entitled"],
+            "is_in_grace": entitlement["is_in_grace"],
+            "downgraded_for_access": entitlement["downgraded_for_access"]
+        },
         "usage": {
             "questions_asked": questions_used,
             "questions_used": questions_used,
@@ -1346,6 +1506,7 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
             "question_limit_display": question_display["question_limit_display"],
             "questions_remaining_display": question_display["questions_remaining_display"],
             "is_unlimited_questions": question_display["is_unlimited_questions"],
+            "usage_window_started_at": serialize_dt(entitlement["current_period_started_at"]),
             "hathor_questions": mode_counts.get("Hathor", 0),
             "moses_questions": mode_counts.get("Moses", 0)
         }
@@ -2106,7 +2267,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
     user = get_current_user(request)
     user_id = user["user_id"] if user else None
 
-    plan_code = "pilgrim"
+    plan_code = "anon"
     memory_depth = 1
 
     if not can_user_ask(session_id, user_id):
@@ -2130,20 +2291,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         # --- Resolve title for memory depth ---
 
         if user:
-            conn = get_db_connection()
-            try:
-                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                    cur.execute(
-                        "SELECT scroll_count, plan_code FROM users WHERE id=%s",
-                        (user_id,)
-                    )
-                    meta = cur.fetchone()
-            finally:
-                conn.close()
-
-            if meta:
-                plan_code = meta["plan_code"] or "pilgrim"
-                memory_depth = get_memory_depth(plan_code)
+            entitlement = get_user_entitlement_snapshot(user_id)
+            plan_code = entitlement["effective_plan_code"]
+            memory_depth = get_memory_depth(plan_code)
 
         # --- Retrieve seeker long-term memory ---
         memories = retrieve_seeker_memory(user_id, session_id, memory_depth)
