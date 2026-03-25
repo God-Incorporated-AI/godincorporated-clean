@@ -965,9 +965,9 @@ def get_question_limit(user: Optional[dict]) -> int:
     """
     Central entitlement authority.
     Monetary plan-driven limits.
+    These are backend enforcement limits, not necessarily seeker-facing display text.
     """
 
-    # True anonymous (not logged in, no DB user)
     if not user:
         return 9
 
@@ -1005,17 +1005,27 @@ def get_question_limit(user: Optional[dict]) -> int:
 # ================================
 
 def compute_scroll_tier(scroll_count: int) -> str:
+    """
+    User title ladder:
+    0 = Dormant
+    1-8 = Scribe
+    9-32 = Builder
+    33-98 = Archivist
+    99+ = Luminary
+    """
     if scroll_count >= 99:
-        return "Ipsissimus"
-    elif scroll_count >= 33:
         return "Luminary"
-    elif scroll_count >= 9:
+    elif scroll_count >= 33:
         return "Archivist"
+    elif scroll_count >= 9:
+        return "Builder"
+    elif scroll_count >= 1:
+        return "Scribe"
     else:
         return "Dormant"
 
-def compute_monetary_title(plan_code: str):
 
+def compute_monetary_title(plan_code: str):
     mapping = {
         "anon": "Pilgrim",
         "pilgrim": "Pilgrim",
@@ -1026,7 +1036,7 @@ def compute_monetary_title(plan_code: str):
         "theoricus": "Theoricus"
     }
 
-    return mapping.get(plan_code, "Pilgrim")
+    return mapping.get((plan_code or "anon").lower(), "Pilgrim")
 
 
 def compute_combined_title(scroll_count: int, plan_code: str, authenticated: bool) -> str:
@@ -1039,8 +1049,8 @@ def compute_combined_title(scroll_count: int, plan_code: str, authenticated: boo
 
     return f"{scroll_title} {monetary_title}"
 
-def get_memory_depth(plan_code: str):
 
+def get_memory_depth(plan_code: str):
     memory_map = {
         "pilgrim": 1,
         "seeker": 3,
@@ -1050,7 +1060,30 @@ def get_memory_depth(plan_code: str):
         "theoricus": None
     }
 
-    return memory_map.get(plan_code, 1)
+    return memory_map.get((plan_code or "anon").lower(), 1)
+
+
+def get_question_display(plan_code: str, questions_used: int, question_limit: int) -> dict:
+    """
+    Seeker-facing display rules.
+
+    Backend enforcement can remain numeric, but the UI should not show
+    a fake countdown for unlimited-style plans.
+    """
+    plan = (plan_code or "anon").lower()
+
+    if plan == "theoricus":
+        return {
+            "question_limit_display": None,
+            "questions_remaining_display": "Unlimited",
+            "is_unlimited_questions": True
+        }
+
+    return {
+        "question_limit_display": str(question_limit),
+        "questions_remaining_display": str(max(question_limit - questions_used, 0)),
+        "is_unlimited_questions": False
+    }
 
 def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
     conn = get_db_connection()
@@ -1279,6 +1312,7 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
 
     plan_code = user_row.get("plan_code") or "anon"
     question_limit = get_question_limit(user)
+    question_display = get_question_display(plan_code, questions_used, question_limit)
     mode_counts = {row["mode"]: row["total"] for row in mode_rows}
     combined_title = compute_combined_title(
         authoritative_scroll_count,
@@ -1309,11 +1343,13 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
             "questions_used": questions_used,
             "question_limit": question_limit,
             "questions_remaining": max(question_limit - questions_used, 0),
+            "question_limit_display": question_display["question_limit_display"],
+            "questions_remaining_display": question_display["questions_remaining_display"],
+            "is_unlimited_questions": question_display["is_unlimited_questions"],
             "hathor_questions": mode_counts.get("Hathor", 0),
             "moses_questions": mode_counts.get("Moses", 0)
         }
     }
-
 
 def build_anonymous_me_response(session_id: str) -> dict:
     conn = get_db_connection()
@@ -1355,6 +1391,7 @@ def build_anonymous_me_response(session_id: str) -> dict:
         conn.close()
 
     question_limit = 9
+    question_display = get_question_display("anon", questions_used, question_limit)
     mode_counts = {row["mode"]: row["total"] for row in mode_rows}
     combined_title = compute_combined_title(
         session_scroll_count,
@@ -1384,6 +1421,9 @@ def build_anonymous_me_response(session_id: str) -> dict:
             "questions_used": questions_used,
             "question_limit": question_limit,
             "questions_remaining": max(question_limit - questions_used, 0),
+            "question_limit_display": question_display["question_limit_display"],
+            "questions_remaining_display": question_display["questions_remaining_display"],
+            "is_unlimited_questions": question_display["is_unlimited_questions"],
             "hathor_questions": mode_counts.get("Hathor", 0),
             "moses_questions": mode_counts.get("Moses", 0)
         }

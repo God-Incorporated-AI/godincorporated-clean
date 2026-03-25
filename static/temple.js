@@ -212,14 +212,11 @@ document.addEventListener("DOMContentLoaded", function () {
 
   const userDisplayName = document.getElementById("userDisplayName");
   const userCombinedTitle = document.getElementById("userCombinedTitle");
-  const userPlanCode = document.getElementById("userPlanCode");
   const userScrollCount = document.getElementById("userScrollCount");
   const userMoneyDonated = document.getElementById("userMoneyDonated");
-  const userDonationCount = document.getElementById("userDonationCount");
   const userQuestionsUsed = document.getElementById("userQuestionsUsed");
   const userQuestionLimit = document.getElementById("userQuestionLimit");
   const userQuestionsRemaining = document.getElementById("userQuestionsRemaining");
-  const userEmailVerified = document.getElementById("userEmailVerified");
 
   const loginBtn = document.getElementById("loginBtn");
   const registerBtn = document.getElementById("registerBtn");
@@ -520,21 +517,29 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
         return;
       }
       
-      if (data.authenticated) {
+        if (data.authenticated) {
         visitorId = data.anonymous_user_id || null;
         menuAnonymous.style.display = "none";
         menuAuthenticated.style.display = "flex";
 
         userDisplayName.textContent = data.display_name || "";
         userCombinedTitle.textContent = data.combined_title || "";
-        userPlanCode.textContent = data.plan_code || "";
         userScrollCount.textContent = data.scrolls_donated ?? 0;
         userMoneyDonated.textContent = data.money_donated ?? 0;
-        userDonationCount.textContent = data.donation_count ?? 0;
         userQuestionsUsed.textContent = data.usage?.questions_used ?? 0;
-        userQuestionLimit.textContent = data.usage?.question_limit ?? 0;
-        userQuestionsRemaining.textContent = data.usage?.questions_remaining ?? 0;
-        userEmailVerified.textContent = data.email_verified ? "Yes" : "No";
+
+        const unlimitedQuestions = Boolean(data.usage?.is_unlimited_questions);
+
+        if (userQuestionLimit && userQuestionLimit.parentElement) {
+          userQuestionLimit.parentElement.style.display = unlimitedQuestions ? "none" : "";
+        }
+
+        userQuestionLimit.textContent =
+          data.usage?.question_limit_display ?? data.usage?.question_limit ?? 0;
+
+        userQuestionsRemaining.textContent =
+          data.usage?.questions_remaining_display ?? data.usage?.questions_remaining ?? 0;
+
 
         logoutBtn.onclick = async function() {
           await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
