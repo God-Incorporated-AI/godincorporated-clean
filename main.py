@@ -942,7 +942,17 @@ def get_current_user(request: Request) -> Optional[dict]:
     conn = get_db_connection()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, email, seeker_id, display_name, email_verified FROM users WHERE id = %s",
+            """
+            SELECT
+                id,
+                email,
+                seeker_id,
+                display_name,
+                email_verified,
+                COALESCE(role, 'user') AS role
+            FROM users
+            WHERE id = %s
+            """,
             (user_id,)
         )
         result = cur.fetchone()
@@ -954,12 +964,35 @@ def get_current_user(request: Request) -> Optional[dict]:
             "email": result["email"],
             "seeker_id": result["seeker_id"],
             "display_name": result["display_name"],
-            "is_verified": result["email_verified"]
+            "is_verified": result["email_verified"],
+            "role": result["role"]
         }
 
     request.session.pop("user_id", None)
     request.session.pop("display_name", None)
     return None
+
+VALID_USER_ROLES = {"user", "support", "admin", "owner"}
+
+
+def normalize_user_role(role: Optional[str]) -> str:
+    normalized = (role or "user").lower()
+    return normalized if normalized in VALID_USER_ROLES else "user"
+
+
+def user_has_admin_access(user: Optional[dict]) -> bool:
+    if not user:
+        return False
+    return normalize_user_role(user.get("role")) in {"admin", "owner"}
+
+
+def require_admin(request: Request) -> dict:
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    if not user_has_admin_access(user):
+        raise HTTPException(status_code=403, detail="Admin access required.")
+    return user
 
 PLAN_LIMITS = {
     "anon": 9,
@@ -1057,6 +1090,212 @@ def get_user_entitlement_snapshot(user_id: str) -> dict:
         "downgraded_for_access": raw_plan_code != effective_plan_code,
     }
 
+DEFAULT_BILLING_CYCLE_DAYS = 30
+DEFAULT_GRACE_DAYS = 3
+VALID_ENTITLEMENT_STATUSES = {
+    "none",
+    "active",
+    "grace",
+    "expired",
+    "cancelled",
+}
+
+
+def utc_now() -> datetime.datetime:
+    return datetime.datetime.now(timezone.utc)
+
+
+def normalize_entitlement_status(status: Optional[str]) -> str:
+    normalized = (status or "none").lower()
+    if normalized not in VALID_ENTITLEMENT_STATUSES:
+        raise ValueError(f"Invalid entitlement_status: {status}")
+    return normalized
+
+
+def apply_subscription_renewal_success(
+    user_id: str,
+    plan_code: str,
+    cycle_days: int = DEFAULT_BILLING_CYCLE_DAYS
+) -> None:
+    now = utc_now()
+    normalized_plan = normalize_plan_code(plan_code)
+    next_renewal = now + datetime.timedelta(days=cycle_days)
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET
+                    plan_code = %s,
+                    entitlement_status = 'active',
+                    subscription_started_at = COALESCE(subscription_started_at, %s),
+                    current_period_started_at = %s,
+                    subscription_renews_at = %s,
+                    subscription_expires_at = %s,
+                    grace_period_ends_at = NULL,
+                    cancel_at_period_end = FALSE
+                WHERE id = %s
+                """,
+                (
+                    normalized_plan,
+                    now,
+                    now,
+                    next_renewal,
+                    next_renewal,
+                    user_id
+                )
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def apply_subscription_renewal_failure_to_grace(
+    user_id: str,
+    grace_days: int = DEFAULT_GRACE_DAYS
+) -> None:
+    now = utc_now()
+    grace_ends_at = now + datetime.timedelta(days=grace_days)
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET
+                    entitlement_status = 'grace',
+                    subscription_expires_at = CASE
+                        WHEN subscription_expires_at IS NULL OR subscription_expires_at < %s
+                            THEN %s
+                        ELSE subscription_expires_at
+                    END,
+                    grace_period_ends_at = %s
+                WHERE id = %s
+                """,
+                (
+                    now,
+                    now,
+                    grace_ends_at,
+                    user_id
+                )
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def apply_grace_expiry_downgrade(user_id: str) -> None:
+    now = utc_now()
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET entitlement_status = 'expired'
+                WHERE id = %s
+                  AND grace_period_ends_at IS NOT NULL
+                  AND grace_period_ends_at <= %s
+                """,
+                (user_id, now)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_cancel_at_period_end(user_id: str, should_cancel: bool) -> None:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET cancel_at_period_end = %s
+                WHERE id = %s
+                """,
+                (should_cancel, user_id)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def apply_cancel_at_period_end_downgrade(user_id: str) -> None:
+    now = utc_now()
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET
+                    entitlement_status = 'cancelled',
+                    cancel_at_period_end = FALSE,
+                    grace_period_ends_at = NULL
+                WHERE id = %s
+                  AND cancel_at_period_end = TRUE
+                  AND subscription_expires_at IS NOT NULL
+                  AND subscription_expires_at <= %s
+                """,
+                (user_id, now)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def apply_admin_entitlement_override(
+    user_id: str,
+    plan_code: str,
+    entitlement_status: str,
+    current_period_started_at: Optional[datetime.datetime] = None,
+    subscription_renews_at: Optional[datetime.datetime] = None,
+    subscription_expires_at: Optional[datetime.datetime] = None,
+    grace_period_ends_at: Optional[datetime.datetime] = None,
+    cancel_at_period_end: bool = False
+) -> None:
+    normalized_plan = normalize_plan_code(plan_code)
+    normalized_status = normalize_entitlement_status(entitlement_status)
+    now = utc_now()
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET
+                    plan_code = %s,
+                    entitlement_status = %s,
+                    subscription_started_at = COALESCE(subscription_started_at, %s),
+                    current_period_started_at = %s,
+                    subscription_renews_at = %s,
+                    subscription_expires_at = %s,
+                    grace_period_ends_at = %s,
+                    cancel_at_period_end = %s
+                WHERE id = %s
+                """,
+                (
+                    normalized_plan,
+                    normalized_status,
+                    now,
+                    current_period_started_at,
+                    subscription_renews_at,
+                    subscription_expires_at,
+                    grace_period_ends_at,
+                    cancel_at_period_end,
+                    user_id
+                )
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 def get_oracle_usage_counts(
     session_id: Optional[str] = None,
@@ -1142,41 +1381,17 @@ def get_oracle_usage_counts(
 
 def get_question_limit(user: Optional[dict]) -> int:
     """
-    Central entitlement authority.
-    Monetary plan-driven limits.
-    These are backend enforcement limits, not necessarily seeker-facing display text.
+    Keep this helper aligned with effective entitlement,
+    not raw stored plan_code.
     """
-
     if not user:
-        return 9
+        return PLAN_LIMITS["anon"]
 
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT plan_code FROM users WHERE id = %s",
-                (user["user_id"],)
-            )
-            row = cur.fetchone()
-
-            if not row:
-                return 9
-
-            plan = (row.get("plan_code") or "anon").lower()
-
-    finally:
-        conn.close()
-
-    plan_limits = {
-        "pilgrim": 1,
-        "seeker": 33,
-        "magister": 144,
-        "sovereign": 333,
-        "philosophus": 999999,
-        "theoricus": 999999
-    }
-
-    return plan_limits.get(plan, 9)
+    entitlement = get_user_entitlement_snapshot(user["user_id"])
+    return PLAN_LIMITS.get(
+        entitlement["effective_plan_code"],
+        PLAN_LIMITS["anon"]
+    )
 
 
 # ================================
@@ -1611,7 +1826,9 @@ def health_db():
         )
 
 @app.post("/admin/backfill_embeddings")
-def admin_backfill_embeddings(limit: int = 500, offset: int = 0):
+def admin_backfill_embeddings(request: Request, limit: int = 500, offset: int = 0):
+    admin_user = require_admin(request)
+
     if not should_use_embeddings():
         return JSONResponse(
             content={"ok": False, "error": "Embeddings are disabled."},
@@ -1620,13 +1837,30 @@ def admin_backfill_embeddings(limit: int = 500, offset: int = 0):
 
     try:
         result = backfill_embedding_cache(limit=limit, offset=offset)
-        return {"ok": True, "result": result}
+        return {
+            "ok": True,
+            "admin_user_id": admin_user["user_id"],
+            "result": result
+        }
     except Exception as e:
         logger.error(f"Backfill embeddings error: {e}")
         return JSONResponse(
             content={"ok": False, "error": str(e)},
             status_code=500
         )
+
+@app.get("/admin/me")
+def admin_me(request: Request):
+    admin_user = require_admin(request)
+    return {
+        "ok": True,
+        "admin": {
+            "user_id": admin_user["user_id"],
+            "email": admin_user["email"],
+            "display_name": admin_user["display_name"],
+            "role": normalize_user_role(admin_user.get("role"))
+        }
+    }
 
 @app.get("/", response_class=HTMLResponse)
 @app.get("/temple", response_class=HTMLResponse)
@@ -1711,9 +1945,43 @@ def auth_register(payload: AuthRegisterInput, request: Request):
     
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO users (id, email, password_hash, seeker_id, display_name, display_name_lower, email_verified, verification_token, created_at, last_login, title, scroll_count, donation_total, influence_state, eligibility_flags)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (user_id, email, hashed_password, seeker_id, display_name, display_name.lower(), False, verification_token, created_at, None, "Seeker", 0, 0, "disabled", []))
+            INSERT INTO users (
+                id,
+                email,
+                password_hash,
+                seeker_id,
+                display_name,
+                display_name_lower,
+                email_verified,
+                verification_token,
+                created_at,
+                last_login,
+                title,
+                scroll_count,
+                donation_total,
+                influence_state,
+                eligibility_flags,
+                role
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            user_id,
+            email,
+            hashed_password,
+            seeker_id,
+            display_name,
+            display_name.lower(),
+            False,
+            verification_token,
+            created_at,
+            None,
+            "Seeker",
+            0,
+            0,
+            "disabled",
+            [],
+            "user"
+        ))
     conn.commit()
     conn.close()
     
@@ -1949,6 +2217,75 @@ def auth_request_password_reset(payload: PasswordResetRequestInput):
     conn.close()
     return {"message": "If that email exists, a reset link has been sent."}
 
+@app.get("/admin/users/search")
+def admin_search_users(
+    request: Request,
+    email: Optional[str] = Query(None),
+    display_name: Optional[str] = Query(None),
+    seeker_id: Optional[str] = Query(None),
+    limit: int = Query(25, ge=1, le=100)
+):
+    require_admin(request)
+
+    if not any([email, display_name, seeker_id]):
+        return JSONResponse(
+            content={"error": "Provide email, display_name, or seeker_id."},
+            status_code=400
+        )
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            conditions = []
+            params = []
+
+            if email:
+                conditions.append("LOWER(email) LIKE %s")
+                params.append(f"%{email.lower().strip()}%")
+
+            if display_name:
+                conditions.append("LOWER(display_name) LIKE %s")
+                params.append(f"%{display_name.lower().strip()}%")
+
+            if seeker_id:
+                conditions.append("seeker_id = %s")
+                params.append(seeker_id.strip())
+
+            where_sql = " OR ".join(conditions)
+
+            cur.execute(
+                f"""
+                SELECT
+                    id,
+                    email,
+                    display_name,
+                    seeker_id,
+                    email_verified,
+                    COALESCE(role, 'user') AS role,
+                    COALESCE(plan_code, 'anon') AS plan_code,
+                    COALESCE(entitlement_status, 'none') AS entitlement_status,
+                    current_period_started_at,
+                    subscription_renews_at,
+                    subscription_expires_at,
+                    grace_period_ends_at,
+                    COALESCE(cancel_at_period_end, false) AS cancel_at_period_end,
+                    last_login
+                FROM users
+                WHERE {where_sql}
+                ORDER BY created_at DESC NULLS LAST
+                LIMIT %s
+                """,
+                (*params, limit)
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    return {
+        "ok": True,
+        "results": rows
+    }
+
 @app.get("/me")
 def get_me(request: Request):
     session_id = get_or_create_session_id(request)
@@ -1958,6 +2295,43 @@ def get_me(request: Request):
         return build_authenticated_me_response(user, session_id)
 
     return build_anonymous_me_response(session_id)
+
+class AdminSetRoleInput(BaseModel):
+    user_id: str
+    role: str
+
+
+@app.post("/admin/users/set-role")
+def admin_set_user_role(request: Request, payload: AdminSetRoleInput):
+    admin_user = require_admin(request)
+    target_role = normalize_user_role(payload.role)
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET role = %s
+                WHERE id = %s
+                RETURNING id, email, display_name, COALESCE(role, 'user') AS role
+                """,
+                (target_role, payload.user_id)
+            )
+            row = cur.fetchone()
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    if not row:
+        return JSONResponse(content={"error": "User not found."}, status_code=404)
+
+    return {
+        "ok": True,
+        "updated_by": admin_user["user_id"],
+        "user": row
+    }
 
 @app.post("/upload_scroll")
 async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
@@ -2150,6 +2524,51 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
 
     return {"message": "📜 Your scroll has been uploaded.", "scroll_id": scroll_id}
 
+class AdminEntitlementOverrideInput(BaseModel):
+    user_id: str
+    plan_code: str
+    entitlement_status: str
+    current_period_started_at: Optional[datetime.datetime] = None
+    subscription_renews_at: Optional[datetime.datetime] = None
+    subscription_expires_at: Optional[datetime.datetime] = None
+    grace_period_ends_at: Optional[datetime.datetime] = None
+    cancel_at_period_end: bool = False
+
+
+@app.post("/admin/users/entitlement/override")
+def admin_override_entitlement(request: Request, payload: AdminEntitlementOverrideInput):
+    admin_user = require_admin(request)
+
+    apply_admin_entitlement_override(
+        user_id=payload.user_id,
+        plan_code=payload.plan_code,
+        entitlement_status=payload.entitlement_status,
+        current_period_started_at=payload.current_period_started_at,
+        subscription_renews_at=payload.subscription_renews_at,
+        subscription_expires_at=payload.subscription_expires_at,
+        grace_period_ends_at=payload.grace_period_ends_at,
+        cancel_at_period_end=payload.cancel_at_period_end
+    )
+
+    entitlement = get_user_entitlement_snapshot(payload.user_id)
+
+    return {
+        "ok": True,
+        "updated_by": admin_user["user_id"],
+        "user_id": payload.user_id,
+        "entitlement": {
+            "raw_plan_code": entitlement["raw_plan_code"],
+            "effective_plan_code": entitlement["effective_plan_code"],
+            "entitlement_status": entitlement["entitlement_status"],
+            "subscription_started_at": serialize_dt(entitlement["subscription_started_at"]),
+            "current_period_started_at": serialize_dt(entitlement["current_period_started_at"]),
+            "subscription_renews_at": serialize_dt(entitlement["subscription_renews_at"]),
+            "subscription_expires_at": serialize_dt(entitlement["subscription_expires_at"]),
+            "grace_period_ends_at": serialize_dt(entitlement["grace_period_ends_at"]),
+            "cancel_at_period_end": entitlement["cancel_at_period_end"]
+        }
+    }
+
 class QuestionInput(BaseModel):
     question: str
     deity: str = "Hathor"  # Default to Hathor
@@ -2255,6 +2674,89 @@ def rank_passages(passages: list, query: str, max_items: int = 5) -> list:
 
     return [p for score, p in scored[:max_items] if score > 0] or passages[:max_items]
 
+class AdminLifecycleUserInput(BaseModel):
+    user_id: str
+
+
+class AdminCancelAtPeriodEndInput(BaseModel):
+    user_id: str
+    cancel_at_period_end: bool
+
+
+@app.post("/admin/users/renewal-success")
+def admin_apply_renewal_success(
+    request: Request,
+    user_id: str = Form(...),
+    plan_code: str = Form(...)
+):
+    admin_user = require_admin(request)
+    apply_subscription_renewal_success(user_id=user_id, plan_code=plan_code)
+
+    entitlement = get_user_entitlement_snapshot(user_id)
+
+    return {
+        "ok": True,
+        "updated_by": admin_user["user_id"],
+        "user_id": user_id,
+        "entitlement": entitlement
+    }
+
+
+@app.post("/admin/users/renewal-failure-to-grace")
+def admin_apply_renewal_failure_to_grace(
+    request: Request,
+    payload: AdminLifecycleUserInput
+):
+    admin_user = require_admin(request)
+    apply_subscription_renewal_failure_to_grace(user_id=payload.user_id)
+
+    entitlement = get_user_entitlement_snapshot(payload.user_id)
+
+    return {
+        "ok": True,
+        "updated_by": admin_user["user_id"],
+        "user_id": payload.user_id,
+        "entitlement": entitlement
+    }
+
+
+@app.post("/admin/users/set-cancel-at-period-end")
+def admin_set_cancel_at_period_end(
+    request: Request,
+    payload: AdminCancelAtPeriodEndInput
+):
+    admin_user = require_admin(request)
+    set_cancel_at_period_end(
+        user_id=payload.user_id,
+        should_cancel=payload.cancel_at_period_end
+    )
+
+    entitlement = get_user_entitlement_snapshot(payload.user_id)
+
+    return {
+        "ok": True,
+        "updated_by": admin_user["user_id"],
+        "user_id": payload.user_id,
+        "entitlement": entitlement
+    }
+
+
+@app.post("/admin/users/apply-grace-expiry")
+def admin_apply_grace_expiry(
+    request: Request,
+    payload: AdminLifecycleUserInput
+):
+    admin_user = require_admin(request)
+    apply_grace_expiry_downgrade(user_id=payload.user_id)
+
+    entitlement = get_user_entitlement_snapshot(payload.user_id)
+
+    return {
+        "ok": True,
+        "updated_by": admin_user["user_id"],
+        "user_id": payload.user_id,
+        "entitlement": entitlement
+    }
 
 @app.post("/ask")
 async def ask_oracle(request: Request, payload: QuestionInput):
