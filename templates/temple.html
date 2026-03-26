@@ -12,15 +12,15 @@
     <header class="branding">
       <div class="brand-name">GODINCORPORATED.AI</div>
       <div class="header-actions">
-        <button id="menuToggle" class="menu-toggle">☰</button>
-                <nav id="mainMenu" class="main-menu">
+        <button type="button" id="menuToggle" class="menu-toggle" aria-label="Open menu">☰</button>
+        <nav id="mainMenu" class="main-menu">
           <div id="menuAnonymous" class="menu-section">
-            <button id="loginBtn">Log in</button>
-            <button id="registerBtn">Create account</button>
-            <button id="supportBtnAnonymous">Support the Temple</button>
+            <button type="button" id="loginBtn">Log in</button>
+            <button type="button" id="registerBtn">Create account</button>
+            <button type="button" id="supportBtnAnonymous">Support the Temple</button>
           </div>
 
-          <div id="menuAuthenticated" class="menu-section" style="display: none;">
+          <div id="menuAuthenticated" class="menu-section" hidden>
             <div id="userInfo">Welcome, <span id="userDisplayName"></span></div>
 
             <div id="profileSummary" class="profile-summary">
@@ -31,21 +31,23 @@
               <div>Question limit: <span id="userQuestionLimit">0</span></div>
               <div>Questions remaining: <span id="userQuestionsRemaining">0</span></div>
             </div>
-            
-            <button id="logoutBtn">Log out</button>
-            <button id="supportBtnAuthenticated">Support the Temple</button>
+
+            <button type="button" id="logoutBtn">Log out</button>
+            <button type="button" id="supportBtnAuthenticated">Support the Temple</button>
           </div>
         </nav>
       </div>
+    </div>
       <h1> The Temple of Hathor </h1>
      
     </header>
 
-    <section class="scroll-upload">
+        <section class="scroll-upload">
       <h2>📜 Offer a Sacred Scroll</h2>
-       <div class="temple-subtitle">All scrolls will be used to inform future Oracle answers.</div>
-       
+      <div class="temple-subtitle">All scrolls will be used to inform future Oracle answers.</div>
+
       <form id="scrollForm">
+        <label for="scroll">Choose a scroll file:</label>
         <input type="file" id="scroll" name="scroll" accept=".txt,.pdf,.md,.docx,.rtf" required />
         <button type="submit">Upload</button>
       </form>
@@ -53,12 +55,14 @@
     </section>
 
     <section class="oracle-consult">
+
       <h2>🔮 Ask the Oracle</h2>
       <form id="oracleForm">
         <label for="seekerInput">Your question:</label>
         <textarea id="seekerInput" placeholder="What are you seeking clarity on?" rows="4" required></textarea>
         <div class="input-row">
-          <select id="voiceSelect">
+          <label for="voiceSelect">Oracle voice:</label>
+          <select id="voiceSelect" name="deity">
             <option value="Hathor">Voice of Hathor</option>
             <option value="Moses">Voice of Moses</option>
           </select>
