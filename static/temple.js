@@ -246,9 +246,49 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
   const resetRequestForm = document.getElementById("resetRequestForm");
   const resetPasswordForm = document.getElementById("resetPasswordForm");
 
+  function openModal(modal) {
+    if (!modal) return;
+    modal.style.display = "block";
+    modal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeModal(modal) {
+    if (!modal) return;
+    modal.style.display = "none";
+    modal.setAttribute("aria-hidden", "true");
+  }
+
+  function showMenuSection(element, displayValue = "flex") {
+    if (!element) return;
+    element.hidden = false;
+    element.style.display = displayValue;
+  }
+
+  function hideMenuSection(element) {
+    if (!element) return;
+    element.hidden = true;
+    element.style.display = "none";
+  }
+
+  function setAuthenticatedMenuState(isAuthenticated) {
+    if (isAuthenticated) {
+      hideMenuSection(menuAnonymous);
+      showMenuSection(menuAuthenticated, "flex");
+    } else {
+      showMenuSection(menuAnonymous, "flex");
+      hideMenuSection(menuAuthenticated);
+    }
+  }
+
+  function setQuestionLimitVisibility(isUnlimited) {
+    if (!userQuestionLimit || !userQuestionLimit.parentElement) return;
+    userQuestionLimit.parentElement.hidden = isUnlimited;
+    userQuestionLimit.parentElement.style.display = isUnlimited ? "none" : "";
+  }
+
   if (resetToken && window.location.pathname === "/auth/reset-password") {
     document.getElementById("resetToken").value = resetToken;
-    resetPasswordModal.style.display = "block";
+    openModal(resetPasswordModal);
   }
 
   // Error elements
@@ -256,6 +296,21 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
   const registerError = document.getElementById("registerError");
   const resetRequestError = document.getElementById("resetRequestError");
   const resetPasswordError = document.getElementById("resetPasswordError");
+
+  function clearAuthErrors() {
+    loginError.textContent = "";
+    registerError.textContent = "";
+    resetRequestError.textContent = "";
+    resetPasswordError.textContent = "";
+  }
+
+  function closeAllModals() {
+    closeModal(loginModal);
+    closeModal(registerModal);
+    closeModal(resetRequestModal);
+    closeModal(resetPasswordModal);
+    clearAuthErrors();
+  }
 
   // Toggle menu visibility
   menuToggle.addEventListener("click", function() {
@@ -271,11 +326,10 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
 
   // Modal event listeners
   loginBtn.addEventListener("click", function() {
-    loginError.textContent = "";
-    loginModal.style.display = "block";
+    clearAuthErrors();
+    openModal(loginModal);
     mainMenu.classList.remove("show");
 
-    // Auto-focus email field so Enter works immediately
     setTimeout(() => {
       document.getElementById("loginEmail").focus();
     }, 50);
@@ -284,13 +338,13 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
   forgotPasswordLink.addEventListener("click", function(e) {
     e.preventDefault();
     resetRequestError.textContent = "";
-    resetRequestModal.style.display = "block";
-    loginModal.style.display = "none";
+    closeModal(loginModal);
+    openModal(resetRequestModal);
   });
 
   registerBtn.addEventListener("click", function() {
-    registerError.textContent = "";
-    registerModal.style.display = "block";
+    clearAuthErrors();
+    openModal(registerModal);
     mainMenu.classList.remove("show");
   });
 
@@ -306,37 +360,20 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     });
   }
 
-  // Close modals
   closeButtons.forEach(btn => {
     btn.addEventListener("click", function() {
-      loginModal.style.display = "none";
-      registerModal.style.display = "none";
-      resetRequestModal.style.display = "none";
-      resetPasswordModal.style.display = "none";
-      loginError.textContent = "";
-      registerError.textContent = "";
-      resetRequestError.textContent = "";
-      resetPasswordError.textContent = "";
+      closeAllModals();
     });
   });
 
-  // Close modal when clicking outside
   window.addEventListener("click", function(e) {
-    if (e.target === loginModal) {
-      loginModal.style.display = "none";
-      loginError.textContent = "";
-    }
-    if (e.target === registerModal) {
-      registerModal.style.display = "none";
-      registerError.textContent = "";
-    }
-    if (e.target === resetRequestModal) {
-      resetRequestModal.style.display = "none";
-      resetRequestError.textContent = "";
-    }
-    if (e.target === resetPasswordModal) {
-      resetPasswordModal.style.display = "none";
-      resetPasswordError.textContent = "";
+    if (
+      e.target === loginModal ||
+      e.target === registerModal ||
+      e.target === resetRequestModal ||
+      e.target === resetPasswordModal
+    ) {
+      closeAllModals();
     }
   });
 
@@ -370,7 +407,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       }
       if (response.ok) {
         // Success
-        loginModal.style.display = "none";
+        closeModal(loginModal);
         updateIdentityDisplay();
       } else {
         // Error
@@ -414,7 +451,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       }
       if (response.ok) {
         // Success
-        registerModal.style.display = "none";
+        closeModal(registerModal);
         alert("Account created. Please check your email and verify your account before logging in.");
         updateIdentityDisplay();
       } else {
@@ -451,7 +488,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       const data = await safeReadJson(response);
       if (response.ok) {
         // Success
-        resetRequestModal.style.display = "none";
+        closeModal(resetRequestModal);
         alert("If an account with that email exists, a reset link has been sent to that email address.");
       } else {
         // Error
@@ -490,7 +527,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       const data = await safeReadJson(response);
 
       if (response.ok) {
-        resetPasswordModal.style.display = "none";
+        closeModal(resetPasswordModal);
         alert("Password reset successfully. Please log in with your new password.");
       } else {
         resetPasswordError.textContent = data.error || "Reset failed";
@@ -508,19 +545,17 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     try {
       const response = await fetch("/me", { credentials: "same-origin" });
       const data = await safeReadJson(response);
+
       if (response.status === 401 || response.status === 403 || data.error) {
-        // Treat as anonymous
         visitorId = null;
         seekerId = localStorage.getItem("seeker_id") || null;
-        menuAnonymous.style.display = "flex";
-        menuAuthenticated.style.display = "none";
+        setAuthenticatedMenuState(false);
         return;
       }
-      
-        if (data.authenticated) {
+
+      if (data.authenticated) {
         visitorId = data.anonymous_user_id || null;
-        menuAnonymous.style.display = "none";
-        menuAuthenticated.style.display = "flex";
+        setAuthenticatedMenuState(true);
 
         userDisplayName.textContent = data.display_name || "";
         userCombinedTitle.textContent = data.combined_title || "";
@@ -529,10 +564,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
         userQuestionsUsed.textContent = data.usage?.questions_used ?? 0;
 
         const unlimitedQuestions = Boolean(data.usage?.is_unlimited_questions);
-
-        if (userQuestionLimit && userQuestionLimit.parentElement) {
-          userQuestionLimit.parentElement.style.display = unlimitedQuestions ? "none" : "";
-        }
+        setQuestionLimitVisibility(unlimitedQuestions);
 
         userQuestionLimit.textContent =
           data.usage?.question_limit_display ?? data.usage?.question_limit ?? 0;
@@ -540,23 +572,18 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
         userQuestionsRemaining.textContent =
           data.usage?.questions_remaining_display ?? data.usage?.questions_remaining ?? 0;
 
-
         logoutBtn.onclick = async function() {
           await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
           location.reload();
         };
       } else {
-
-        // Anonymous user
-        visitorId = data.anonymous_user_id;
-        menuAnonymous.style.display = "flex";
-        menuAuthenticated.style.display = "none";
+        visitorId = data.anonymous_user_id || null;
+        setAuthenticatedMenuState(false);
       }
     } catch (err) {
       console.error("Failed to fetch identity:", err);
-      // Fallback to anonymous without id
-      menuAnonymous.style.display = "flex";
-      menuAuthenticated.style.display = "none";
+      visitorId = null;
+      setAuthenticatedMenuState(false);
     }
   }
 
