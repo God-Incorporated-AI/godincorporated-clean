@@ -1626,6 +1626,263 @@ def get_user_donation_stats(user_id: str) -> dict:
     finally:
         conn.close()
 
+def log_admin_action(
+    admin_user_id: str,
+    action_type: str,
+    target_user_id: Optional[str] = None,
+    payload: Optional[dict] = None
+) -> None:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO admin_action_logs (
+                    id,
+                    admin_user_id,
+                    target_user_id,
+                    action_type,
+                    action_payload
+                )
+                VALUES (%s, %s, %s, %s, %s::jsonb)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    admin_user_id,
+                    target_user_id,
+                    action_type,
+                    json.dumps(payload or {})
+                )
+            )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Failed to write admin action log: {e}")
+    finally:
+        conn.close()
+
+
+def get_admin_user_detail(target_user_id: str) -> dict:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    email,
+                    display_name,
+                    seeker_id,
+                    email_verified,
+                    created_at,
+                    last_login,
+                    COALESCE(role, 'user') AS role,
+                    COALESCE(plan_code, 'anon') AS stored_plan_code,
+                    COALESCE(scroll_count, 0) AS legacy_scroll_count
+                FROM users
+                WHERE id = %s
+                """,
+                (target_user_id,)
+            )
+            user_row = cur.fetchone()
+
+            if not user_row:
+                raise HTTPException(status_code=404, detail="User not found.")
+
+            cur.execute(
+                """
+                SELECT COUNT(DISTINCT scroll_id) AS total
+                FROM scroll_associations
+                WHERE user_id = %s
+                """,
+                (target_user_id,)
+            )
+            scroll_row = cur.fetchone()
+            authoritative_scroll_count = scroll_row["total"] if scroll_row else 0
+    finally:
+        conn.close()
+
+    donation_stats = get_user_donation_stats(target_user_id)
+    entitlement = get_user_entitlement_snapshot(target_user_id)
+    current_usage = get_oracle_usage_counts(
+        user_id=target_user_id,
+        window_start=entitlement["current_period_started_at"]
+    )
+    lifetime_usage = get_oracle_usage_counts(user_id=target_user_id)
+
+    effective_plan_code = entitlement["effective_plan_code"]
+    question_limit = PLAN_LIMITS.get(effective_plan_code, PLAN_LIMITS["anon"])
+    question_display = get_question_display(
+        effective_plan_code,
+        current_usage["questions_used"],
+        question_limit
+    )
+
+    combined_title = compute_combined_title(
+        authoritative_scroll_count,
+        effective_plan_code,
+        authenticated=True
+    )
+
+    return {
+        "id": user_row["id"],
+        "email": user_row["email"],
+        "display_name": user_row["display_name"],
+        "seeker_id": user_row["seeker_id"],
+        "email_verified": user_row["email_verified"],
+        "created_at": serialize_dt(user_row.get("created_at")),
+        "last_login": serialize_dt(user_row.get("last_login")),
+        "role": user_row["role"],
+        "title": combined_title,
+        "combined_title": combined_title,
+        "scrolls": {
+            "authoritative_scroll_count": authoritative_scroll_count,
+            "legacy_scroll_count": user_row.get("legacy_scroll_count", 0)
+        },
+        "donations": donation_stats,
+        "entitlement": {
+            "raw_plan_code": entitlement["raw_plan_code"],
+            "effective_plan_code": entitlement["effective_plan_code"],
+            "entitlement_status": entitlement["entitlement_status"],
+            "subscription_started_at": serialize_dt(entitlement["subscription_started_at"]),
+            "current_period_started_at": serialize_dt(entitlement["current_period_started_at"]),
+            "subscription_renews_at": serialize_dt(entitlement["subscription_renews_at"]),
+            "subscription_expires_at": serialize_dt(entitlement["subscription_expires_at"]),
+            "grace_period_ends_at": serialize_dt(entitlement["grace_period_ends_at"]),
+            "cancel_at_period_end": entitlement["cancel_at_period_end"],
+            "is_entitled": entitlement["is_entitled"],
+            "is_in_grace": entitlement["is_in_grace"],
+            "downgraded_for_access": entitlement["downgraded_for_access"]
+        },
+        "usage": {
+            "current_period_questions_used": current_usage["questions_used"],
+            "lifetime_questions_used": lifetime_usage["questions_used"],
+            "question_limit": question_limit,
+            "question_limit_display": question_display["question_limit_display"],
+            "questions_remaining_display": question_display["questions_remaining_display"],
+            "is_unlimited_questions": question_display["is_unlimited_questions"],
+            "current_period_mode_counts": current_usage["mode_counts"],
+            "lifetime_mode_counts": lifetime_usage["mode_counts"]
+        }
+    }
+
+
+def get_admin_reporting_overview(days: int = 30) -> dict:
+    window_start = datetime.datetime.now(timezone.utc) - datetime.timedelta(days=days)
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_users,
+                    COUNT(*) FILTER (WHERE email_verified = true) AS verified_users,
+                    COUNT(*) FILTER (WHERE created_at >= %s) AS users_created_in_window,
+                    COUNT(*) FILTER (WHERE last_login >= %s) AS users_logged_in_in_window
+                FROM users
+                """,
+                (window_start, window_start)
+            )
+            user_summary = cur.fetchone() or {}
+
+            cur.execute(
+                """
+                SELECT COALESCE(role, 'user') AS role, COUNT(*) AS total
+                FROM users
+                GROUP BY COALESCE(role, 'user')
+                ORDER BY total DESC, role ASC
+                """
+            )
+            role_rows = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT COALESCE(entitlement_status, 'none') AS entitlement_status, COUNT(*) AS total
+                FROM users
+                GROUP BY COALESCE(entitlement_status, 'none')
+                ORDER BY total DESC, entitlement_status ASC
+                """
+            )
+            entitlement_rows = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT COALESCE(plan_code, 'anon') AS plan_code, COUNT(*) AS total
+                FROM users
+                GROUP BY COALESCE(plan_code, 'anon')
+                ORDER BY total DESC, plan_code ASC
+                """
+            )
+            plan_rows = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_questions,
+                    COUNT(*) FILTER (WHERE user_id IS NOT NULL) AS authenticated_questions,
+                    COUNT(*) FILTER (WHERE user_id IS NULL) AS anonymous_questions,
+                    COUNT(DISTINCT user_id) FILTER (WHERE user_id IS NOT NULL) AS distinct_authenticated_users,
+                    COUNT(DISTINCT session_id) FILTER (WHERE user_id IS NULL) AS distinct_anonymous_sessions
+                FROM oracle_interactions
+                WHERE created_at >= %s
+                """,
+                (window_start,)
+            )
+            question_summary = cur.fetchone() or {}
+
+            cur.execute(
+                """
+                SELECT mode, COUNT(*) AS total
+                FROM oracle_interactions
+                WHERE created_at >= %s
+                GROUP BY mode
+                ORDER BY total DESC, mode ASC
+                """,
+                (window_start,)
+            )
+            mode_rows = cur.fetchall()
+
+            try:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS total_admin_actions
+                    FROM admin_action_logs
+                    WHERE created_at >= %s
+                    """,
+                    (window_start,)
+                )
+                admin_action_summary = cur.fetchone() or {}
+            except Exception:
+                conn.rollback()
+                admin_action_summary = {"total_admin_actions": None}
+    finally:
+        conn.close()
+
+    return {
+        "window_days": days,
+        "window_start": serialize_dt(window_start),
+        "users": {
+            "total_users": user_summary.get("total_users", 0),
+            "verified_users": user_summary.get("verified_users", 0),
+            "users_created_in_window": user_summary.get("users_created_in_window", 0),
+            "users_logged_in_in_window": user_summary.get("users_logged_in_in_window", 0),
+            "roles": role_rows,
+            "entitlement_statuses": entitlement_rows,
+            "stored_plan_codes": plan_rows
+        },
+        "oracle": {
+            "total_questions": question_summary.get("total_questions", 0),
+            "authenticated_questions": question_summary.get("authenticated_questions", 0),
+            "anonymous_questions": question_summary.get("anonymous_questions", 0),
+            "distinct_authenticated_users": question_summary.get("distinct_authenticated_users", 0),
+            "distinct_anonymous_sessions": question_summary.get("distinct_anonymous_sessions", 0),
+            "mode_counts": mode_rows
+        },
+        "admin": {
+            "total_admin_actions": admin_action_summary.get("total_admin_actions")
+        }
+    }
 
 def build_authenticated_me_response(user: dict, session_id: str) -> dict:
     donation_stats = get_user_donation_stats(user["user_id"])
@@ -1837,11 +2094,23 @@ def admin_backfill_embeddings(request: Request, limit: int = 500, offset: int = 
 
     try:
         result = backfill_embedding_cache(limit=limit, offset=offset)
+
+        log_admin_action(
+            admin_user_id=admin_user["user_id"],
+            action_type="admin.backfill_embeddings",
+            payload={
+                "limit": limit,
+                "offset": offset,
+                "result": result
+            }
+        )
+
         return {
             "ok": True,
             "admin_user_id": admin_user["user_id"],
             "result": result
         }
+    
     except Exception as e:
         logger.error(f"Backfill embeddings error: {e}")
         return JSONResponse(
@@ -2217,6 +2486,56 @@ def auth_request_password_reset(payload: PasswordResetRequestInput):
     conn.close()
     return {"message": "If that email exists, a reset link has been sent."}
 
+@app.get("/admin/reports/overview")
+def admin_reports_overview(
+    request: Request,
+    days: int = Query(30, ge=1, le=365)
+):
+    admin_user = require_admin(request)
+    report = get_admin_reporting_overview(days=days)
+
+    return {
+        "ok": True,
+        "requested_by": admin_user["user_id"],
+        "report": report
+    }
+
+
+@app.get("/admin/reports/admin-actions")
+def admin_reports_admin_actions(
+    request: Request,
+    limit: int = Query(100, ge=1, le=500)
+):
+    admin_user = require_admin(request)
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    admin_user_id,
+                    target_user_id,
+                    action_type,
+                    action_payload,
+                    created_at
+                FROM admin_action_logs
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (limit,)
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    return {
+        "ok": True,
+        "requested_by": admin_user["user_id"],
+        "results": rows
+    }
+
 @app.get("/admin/users/search")
 def admin_search_users(
     request: Request,
@@ -2286,6 +2605,17 @@ def admin_search_users(
         "results": rows
     }
 
+@app.get("/admin/users/{user_id}/detail")
+def admin_get_user_detail(request: Request, user_id: uuid.UUID):
+    admin_user = require_admin(request)
+    detail = get_admin_user_detail(str(user_id))
+
+    return {
+        "ok": True,
+        "requested_by": admin_user["user_id"],
+        "user": detail
+    }
+
 @app.get("/me")
 def get_me(request: Request):
     session_id = get_or_create_session_id(request)
@@ -2326,6 +2656,15 @@ def admin_set_user_role(request: Request, payload: AdminSetRoleInput):
 
     if not row:
         return JSONResponse(content={"error": "User not found."}, status_code=404)
+
+    log_admin_action(
+        admin_user_id=admin_user["user_id"],
+        action_type="admin.users.set_role",
+        target_user_id=payload.user_id,
+        payload={
+            "new_role": row["role"]
+        }
+    )
 
     return {
         "ok": True,
@@ -2552,6 +2891,21 @@ def admin_override_entitlement(request: Request, payload: AdminEntitlementOverri
 
     entitlement = get_user_entitlement_snapshot(payload.user_id)
 
+    log_admin_action(
+        admin_user_id=admin_user["user_id"],
+        action_type="admin.users.entitlement_override",
+        target_user_id=payload.user_id,
+        payload={
+            "plan_code": payload.plan_code,
+            "entitlement_status": payload.entitlement_status,
+            "current_period_started_at": serialize_dt(payload.current_period_started_at),
+            "subscription_renews_at": serialize_dt(payload.subscription_renews_at),
+            "subscription_expires_at": serialize_dt(payload.subscription_expires_at),
+            "grace_period_ends_at": serialize_dt(payload.grace_period_ends_at),
+            "cancel_at_period_end": payload.cancel_at_period_end
+        }
+    )
+
     return {
         "ok": True,
         "updated_by": admin_user["user_id"],
@@ -2694,6 +3048,15 @@ def admin_apply_renewal_success(
 
     entitlement = get_user_entitlement_snapshot(user_id)
 
+    log_admin_action(
+        admin_user_id=admin_user["user_id"],
+        action_type="admin.users.renewal_success",
+        target_user_id=user_id,
+        payload={
+            "plan_code": plan_code
+        }
+    )
+
     return {
         "ok": True,
         "updated_by": admin_user["user_id"],
@@ -2711,6 +3074,13 @@ def admin_apply_renewal_failure_to_grace(
     apply_subscription_renewal_failure_to_grace(user_id=payload.user_id)
 
     entitlement = get_user_entitlement_snapshot(payload.user_id)
+
+    log_admin_action(
+        admin_user_id=admin_user["user_id"],
+        action_type="admin.users.renewal_failure_to_grace",
+        target_user_id=payload.user_id,
+        payload={}
+    )
 
     return {
         "ok": True,
@@ -2733,6 +3103,15 @@ def admin_set_cancel_at_period_end(
 
     entitlement = get_user_entitlement_snapshot(payload.user_id)
 
+    log_admin_action(
+        admin_user_id=admin_user["user_id"],
+        action_type="admin.users.set_cancel_at_period_end",
+        target_user_id=payload.user_id,
+        payload={
+            "cancel_at_period_end": payload.cancel_at_period_end
+        }
+    )
+
     return {
         "ok": True,
         "updated_by": admin_user["user_id"],
@@ -2750,6 +3129,13 @@ def admin_apply_grace_expiry(
     apply_grace_expiry_downgrade(user_id=payload.user_id)
 
     entitlement = get_user_entitlement_snapshot(payload.user_id)
+
+    log_admin_action(
+        admin_user_id=admin_user["user_id"],
+        action_type="admin.users.apply_grace_expiry",
+        target_user_id=payload.user_id,
+        payload={}
+    )
 
     return {
         "ok": True,
