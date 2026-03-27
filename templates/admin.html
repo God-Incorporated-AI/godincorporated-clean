@@ -6,74 +6,289 @@
   <title>God Incorporated Admin</title>
   <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
   <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    body {
+      margin: 0;
+    }
+
+    main.admin-console {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    .admin-header {
+      margin-bottom: 24px;
+    }
+
+    .admin-subtitle {
+      opacity: 0.8;
+      margin-top: 8px;
+    }
+
+    .admin-grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .admin-panel {
+      grid-column: span 12;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      border-radius: 12px;
+      padding: 16px;
+      background: rgba(255, 255, 255, 0.7);
+    }
+
+    .admin-panel h2,
+    .admin-panel h3 {
+      margin-top: 0;
+    }
+
+    .admin-panel.compact {
+      padding: 14px;
+    }
+
+    .span-4 {
+      grid-column: span 4;
+    }
+
+    .span-6 {
+      grid-column: span 6;
+    }
+
+    .span-8 {
+      grid-column: span 8;
+    }
+
+    .span-12 {
+      grid-column: span 12;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+
+    .metric-card {
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      border-radius: 10px;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.75);
+    }
+
+    .metric-label {
+      font-size: 0.9rem;
+      opacity: 0.75;
+      margin-bottom: 6px;
+    }
+
+    .metric-value {
+      font-size: 1.4rem;
+      font-weight: 700;
+    }
+
+    .control-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: end;
+      margin-bottom: 12px;
+    }
+
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 180px;
+    }
+
+    .control-group input {
+      padding: 8px 10px;
+    }
+
+    button {
+      padding: 9px 14px;
+      cursor: pointer;
+    }
+
+    .results-list,
+    .detail-grid,
+    .action-list,
+    .summary-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .result-card,
+    .detail-card,
+    .action-card,
+    .summary-card {
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      border-radius: 10px;
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.75);
+    }
+
+    .detail-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 8px;
+      margin: 6px 0;
+    }
+
+    .kv .label {
+      font-weight: 600;
+      opacity: 0.85;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      word-break: break-word;
+    }
+
+    .muted {
+      opacity: 0.72;
+    }
+
+    .status-line {
+      min-height: 24px;
+      margin-top: 8px;
+    }
+
+    details {
+      margin-top: 12px;
+    }
+
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-x: auto;
+      background: rgba(0, 0, 0, 0.04);
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    @media (max-width: 960px) {
+      .span-4,
+      .span-6,
+      .span-8,
+      .span-12 {
+        grid-column: span 12;
+      }
+
+      .metric-grid,
+      .detail-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .kv {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
 </head>
 <body>
-  <main>
-    <header class="branding">
+  <main class="admin-console">
+    <header class="admin-header">
       <div class="brand-name">GODINCORPORATED.AI</div>
       <h1>Admin Console</h1>
-      <p id="adminIdentity">Loading admin identity...</p>
+      <div id="adminIdentity" class="admin-subtitle">Loading admin identity...</div>
     </header>
 
-    <section>
-      <h2>System Overview</h2>
-      <div>
-        <label for="overviewDays">Window (days):</label>
-        <input type="number" id="overviewDays" value="30" min="1" max="365" />
-        <button type="button" id="refreshOverviewBtn">Refresh Overview</button>
-      </div>
-      <pre id="overviewOutput">Loading overview...</pre>
-    </section>
-
-    <section>
-      <h2>User Search</h2>
-      <form id="adminSearchForm">
-        <div>
-          <label for="searchEmail">Email</label>
-          <input type="text" id="searchEmail" name="email" />
+    <div class="admin-grid">
+      <section class="admin-panel span-12">
+        <div class="control-row">
+          <div class="control-group">
+            <label for="overviewDays">Overview window (days)</label>
+            <input type="number" id="overviewDays" value="30" min="1" max="365" />
+          </div>
+          <button type="button" id="refreshOverviewBtn">Refresh Overview</button>
+          <button type="button" id="refreshAdminActionsBtn">Refresh Admin Actions</button>
         </div>
+        <div id="overviewStatus" class="status-line muted">Loading overview...</div>
+        <div class="metric-grid" id="overviewMetrics"></div>
+      </section>
 
-        <div>
-          <label for="searchDisplayName">Display name</label>
-          <input type="text" id="searchDisplayName" name="display_name" />
+      <section class="admin-panel span-6">
+        <h2>User Search</h2>
+        <form id="adminSearchForm">
+          <div class="control-row">
+            <div class="control-group">
+              <label for="searchEmail">Email</label>
+              <input type="text" id="searchEmail" name="email" />
+            </div>
+
+            <div class="control-group">
+              <label for="searchDisplayName">Display name</label>
+              <input type="text" id="searchDisplayName" name="display_name" />
+            </div>
+
+            <div class="control-group">
+              <label for="searchSeekerId">Seeker ID</label>
+              <input type="text" id="searchSeekerId" name="seeker_id" />
+            </div>
+
+            <div class="control-group">
+              <label for="searchLimit">Limit</label>
+              <input type="number" id="searchLimit" name="limit" value="25" min="1" max="100" />
+            </div>
+
+            <button type="submit">Search</button>
+          </div>
+        </form>
+        <div id="searchStatus" class="status-line muted">No search run yet.</div>
+        <div id="searchResults" class="results-list"></div>
+        <details>
+          <summary>Raw search JSON</summary>
+          <pre id="searchRaw">No search run yet.</pre>
+        </details>
+      </section>
+
+      <section class="admin-panel span-6">
+        <h2>User Detail</h2>
+        <div class="control-row">
+          <div class="control-group" style="flex: 1 1 320px;">
+            <label for="detailUserId">User ID</label>
+            <input type="text" id="detailUserId" />
+          </div>
+          <button type="button" id="loadDetailBtn">Load Detail</button>
         </div>
+        <div id="detailStatus" class="status-line muted">No user loaded yet.</div>
+        <div id="detailCards" class="detail-grid"></div>
+        <details>
+          <summary>Raw user JSON</summary>
+          <pre id="detailRaw">No user loaded yet.</pre>
+        </details>
+      </section>
 
-        <div>
-          <label for="searchSeekerId">Seeker ID</label>
-          <input type="text" id="searchSeekerId" name="seeker_id" />
+      <section class="admin-panel span-6">
+        <h2>Overview Breakdown</h2>
+        <div id="overviewBreakdown" class="summary-list"></div>
+      </section>
+
+      <section class="admin-panel span-6">
+        <h2>Recent Admin Actions</h2>
+        <div class="control-row">
+          <div class="control-group">
+            <label for="adminActionsLimit">Limit</label>
+            <input type="number" id="adminActionsLimit" value="100" min="1" max="500" />
+          </div>
         </div>
-
-        <div>
-          <label for="searchLimit">Limit</label>
-          <input type="number" id="searchLimit" name="limit" value="25" min="1" max="100" />
-        </div>
-
-        <button type="submit">Search</button>
-      </form>
-
-      <div id="searchStatus"></div>
-      <pre id="searchResults">No search run yet.</pre>
-    </section>
-
-    <section>
-      <h2>User Detail</h2>
-      <div>
-        <label for="detailUserId">User ID</label>
-        <input type="text" id="detailUserId" />
-        <button type="button" id="loadDetailBtn">Load Detail</button>
-      </div>
-      <pre id="detailOutput">No user loaded yet.</pre>
-    </section>
-
-    <section>
-      <h2>Recent Admin Actions</h2>
-      <div>
-        <label for="adminActionsLimit">Limit</label>
-        <input type="number" id="adminActionsLimit" value="100" min="1" max="500" />
-        <button type="button" id="refreshAdminActionsBtn">Refresh Admin Actions</button>
-      </div>
-      <pre id="adminActionsOutput">Loading admin actions...</pre>
-    </section>
+        <div id="adminActionsStatus" class="status-line muted">Loading admin actions...</div>
+        <div id="adminActionsList" class="action-list"></div>
+        <details>
+          <summary>Raw admin actions JSON</summary>
+          <pre id="adminActionsRaw">Loading admin actions...</pre>
+        </details>
+      </section>
+    </div>
   </main>
 
   <script src="/static/admin.js"></script>
