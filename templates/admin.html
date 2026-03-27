@@ -7,9 +7,7 @@
   <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
   <link rel="stylesheet" href="/static/style.css" />
   <style>
-    body {
-      margin: 0;
-    }
+    body { margin: 0; }
 
     main.admin-console {
       max-width: 1280px;
@@ -17,14 +15,8 @@
       padding: 24px;
     }
 
-    .admin-header {
-      margin-bottom: 24px;
-    }
-
-    .admin-subtitle {
-      opacity: 0.8;
-      margin-top: 8px;
-    }
+    .admin-header { margin-bottom: 24px; }
+    .admin-subtitle { opacity: 0.8; margin-top: 8px; }
 
     .admin-grid {
       display: grid;
@@ -45,25 +37,9 @@
       margin-top: 0;
     }
 
-    .admin-panel.compact {
-      padding: 14px;
-    }
-
-    .span-4 {
-      grid-column: span 4;
-    }
-
-    .span-6 {
-      grid-column: span 6;
-    }
-
-    .span-8 {
-      grid-column: span 8;
-    }
-
-    .span-12 {
-      grid-column: span 12;
-    }
+    .span-4 { grid-column: span 4; }
+    .span-6 { grid-column: span 6; }
+    .span-12 { grid-column: span 12; }
 
     .metric-grid {
       display: grid;
@@ -72,7 +48,11 @@
       margin-top: 12px;
     }
 
-    .metric-card {
+    .metric-card,
+    .result-card,
+    .detail-card,
+    .action-card,
+    .summary-card {
       border: 1px solid rgba(0, 0, 0, 0.08);
       border-radius: 10px;
       padding: 12px;
@@ -105,7 +85,8 @@
       min-width: 180px;
     }
 
-    .control-group input {
+    .control-group input,
+    .control-group select {
       padding: 8px 10px;
     }
 
@@ -122,18 +103,8 @@
       gap: 10px;
     }
 
-    .result-card,
-    .detail-card,
-    .action-card,
-    .summary-card {
-      border: 1px solid rgba(0, 0, 0, 0.08);
-      border-radius: 10px;
-      padding: 12px;
-      background: rgba(255, 255, 255, 0.75);
-    }
-
     .detail-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-columns: 1fr;
     }
 
     .kv {
@@ -153,18 +124,18 @@
       word-break: break-word;
     }
 
-    .muted {
-      opacity: 0.72;
+    .muted { opacity: 0.72; }
+    .status-line { min-height: 24px; margin-top: 8px; }
+    .status-ok { color: #1b5e20; }
+    .status-error { color: #8b1e1e; }
+
+    .mutation-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
     }
 
-    .status-line {
-      min-height: 24px;
-      margin-top: 8px;
-    }
-
-    details {
-      margin-top: 12px;
-    }
+    details { margin-top: 12px; }
 
     pre {
       white-space: pre-wrap;
@@ -178,13 +149,13 @@
     @media (max-width: 960px) {
       .span-4,
       .span-6,
-      .span-8,
       .span-12 {
         grid-column: span 12;
       }
 
       .metric-grid,
-      .detail-grid {
+      .detail-grid,
+      .mutation-grid {
         grid-template-columns: 1fr;
       }
 
@@ -265,6 +236,131 @@
         <details>
           <summary>Raw user JSON</summary>
           <pre id="detailRaw">No user loaded yet.</pre>
+        </details>
+      </section>
+
+      <section class="admin-panel span-12">
+        <h2>Mutation Controls</h2>
+        <div id="mutationTarget" class="status-line muted">Load a user first.</div>
+
+        <div class="mutation-grid">
+          <div class="summary-card">
+            <h3>Set Role</h3>
+            <div class="control-row">
+              <div class="control-group">
+                <label for="setRoleValue">Role</label>
+                <select id="setRoleValue">
+                  <option value="user">user</option>
+                  <option value="support">support</option>
+                  <option value="admin">admin</option>
+                  <option value="owner">owner</option>
+                </select>
+              </div>
+              <button type="button" id="applyRoleBtn">Apply Role</button>
+            </div>
+          </div>
+
+          <div class="summary-card">
+            <h3>Renewal Success</h3>
+            <div class="control-row">
+              <div class="control-group">
+                <label for="renewalPlanCode">Plan code</label>
+                <select id="renewalPlanCode">
+                  <option value="anon">anon</option>
+                  <option value="pilgrim">pilgrim</option>
+                  <option value="seeker">seeker</option>
+                  <option value="magister">magister</option>
+                  <option value="sovereign">sovereign</option>
+                  <option value="philosophus">philosophus</option>
+                  <option value="theoricus">theoricus</option>
+                </select>
+              </div>
+              <button type="button" id="applyRenewalSuccessBtn">Apply Renewal Success</button>
+            </div>
+          </div>
+
+          <div class="summary-card">
+            <h3>Renewal Failure / Grace</h3>
+            <div class="control-row">
+              <button type="button" id="applyRenewalFailureBtn">Move to Grace</button>
+              <button type="button" id="applyGraceExpiryBtn">Apply Grace Expiry</button>
+            </div>
+          </div>
+
+          <div class="summary-card">
+            <h3>Cancel at Period End</h3>
+            <div class="control-row">
+              <div class="control-group">
+                <label for="cancelAtPeriodEndValue">Cancel at period end</label>
+                <input type="checkbox" id="cancelAtPeriodEndValue" />
+              </div>
+              <button type="button" id="applyCancelAtPeriodEndBtn">Save Cancel Flag</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="summary-card" style="margin-top: 12px;">
+          <h3>Entitlement Override</h3>
+          <div class="mutation-grid">
+            <div class="control-group">
+              <label for="overridePlanCode">Plan code</label>
+              <select id="overridePlanCode">
+                <option value="anon">anon</option>
+                <option value="pilgrim">pilgrim</option>
+                <option value="seeker">seeker</option>
+                <option value="magister">magister</option>
+                <option value="sovereign">sovereign</option>
+                <option value="philosophus">philosophus</option>
+                <option value="theoricus">theoricus</option>
+              </select>
+            </div>
+
+            <div class="control-group">
+              <label for="overrideEntitlementStatus">Entitlement status</label>
+              <select id="overrideEntitlementStatus">
+                <option value="none">none</option>
+                <option value="active">active</option>
+                <option value="grace">grace</option>
+                <option value="expired">expired</option>
+                <option value="cancelled">cancelled</option>
+              </select>
+            </div>
+
+            <div class="control-group">
+              <label for="overrideCurrentPeriodStartedAt">Current period started</label>
+              <input type="datetime-local" id="overrideCurrentPeriodStartedAt" />
+            </div>
+
+            <div class="control-group">
+              <label for="overrideRenewsAt">Subscription renews at</label>
+              <input type="datetime-local" id="overrideRenewsAt" />
+            </div>
+
+            <div class="control-group">
+              <label for="overrideExpiresAt">Subscription expires at</label>
+              <input type="datetime-local" id="overrideExpiresAt" />
+            </div>
+
+            <div class="control-group">
+              <label for="overrideGraceEndsAt">Grace period ends at</label>
+              <input type="datetime-local" id="overrideGraceEndsAt" />
+            </div>
+
+            <div class="control-group">
+              <label for="overrideCancelAtPeriodEnd">Cancel at period end</label>
+              <input type="checkbox" id="overrideCancelAtPeriodEnd" />
+            </div>
+          </div>
+
+          <div class="control-row" style="margin-top: 12px;">
+            <button type="button" id="applyEntitlementOverrideBtn">Apply Entitlement Override</button>
+          </div>
+        </div>
+
+        <div id="mutationStatus" class="status-line muted">No mutation run yet.</div>
+        <details>
+          <summary>Raw mutation JSON</summary>
+          <pre id="mutationRaw">No mutation run yet.</pre>
         </details>
       </section>
 
