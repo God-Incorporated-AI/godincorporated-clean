@@ -2131,6 +2131,11 @@ def admin_me(request: Request):
         }
     }
 
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page(request: Request):
+    require_admin(request)
+    return templates.TemplateResponse("admin.html", {"request": request})
+
 @app.get("/", response_class=HTMLResponse)
 @app.get("/temple", response_class=HTMLResponse)
 def temple_page(request: Request):
