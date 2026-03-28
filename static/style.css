@@ -245,3 +245,199 @@ textarea#seekerInput {
   margin-top: 10px;
   text-align: center;
 }
+
+/* Phase 6.5D/E: Admin Console */
+main.admin-console {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.admin-header {
+  margin-bottom: 24px;
+}
+
+.admin-subtitle {
+  opacity: 0.8;
+  margin-top: 8px;
+}
+
+.admin-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.admin-panel {
+  grid-column: span 12;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.admin-panel h2,
+.admin-panel h3 {
+  margin-top: 0;
+}
+
+.span-4 {
+  grid-column: span 4;
+}
+
+.span-6 {
+  grid-column: span 6;
+}
+
+.span-12 {
+  grid-column: span 12;
+}
+
+.admin-console .metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.admin-console .metric-card,
+.admin-console .result-card,
+.admin-console .detail-card,
+.admin-console .action-card,
+.admin-console .summary-card {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.admin-console .metric-label {
+  font-size: 0.9rem;
+  opacity: 0.75;
+  margin-bottom: 6px;
+}
+
+.admin-console .metric-value {
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.admin-console .control-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.admin-console .control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.admin-console .control-group input,
+.admin-console .control-group select {
+  padding: 8px 10px;
+}
+
+.admin-console button {
+  padding: 9px 14px;
+  cursor: pointer;
+}
+
+.admin-console .results-list,
+.admin-console .detail-grid,
+.admin-console .action-list,
+.admin-console .summary-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-console .detail-grid {
+  grid-template-columns: 1fr;
+}
+
+.admin-console .kv {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.admin-console .kv .label {
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.admin-console .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  word-break: break-word;
+}
+
+.admin-console .muted {
+  opacity: 0.72;
+}
+
+.admin-console .status-line {
+  min-height: 24px;
+  margin-top: 8px;
+}
+
+.admin-console .status-ok {
+  color: #1b5e20;
+}
+
+.admin-console .status-error {
+  color: #8b1e1e;
+}
+
+.admin-console .mutation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.admin-console details {
+  margin-top: 12px;
+}
+
+.admin-console pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  background: rgba(0, 0, 0, 0.04);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.detail-user-id-group {
+  flex: 1 1 320px;
+}
+
+.summary-card-spaced {
+  margin-top: 12px;
+}
+
+.control-row-spaced {
+  margin-top: 12px;
+}
+
+@media (max-width: 960px) {
+  .span-4,
+  .span-6,
+  .span-12 {
+    grid-column: span 12;
+  }
+
+  .admin-console .metric-grid,
+  .admin-console .detail-grid,
+  .admin-console .mutation-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-console .kv {
+    grid-template-columns: 1fr;
+  }
+}
