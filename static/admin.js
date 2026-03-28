@@ -22,11 +22,35 @@ document.addEventListener("DOMContentLoaded", () => {
   const detailCards = document.getElementById("detailCards");
   const detailRaw = document.getElementById("detailRaw");
 
+  const mutationTarget = document.getElementById("mutationTarget");
+  const setRoleValue = document.getElementById("setRoleValue");
+  const applyRoleBtn = document.getElementById("applyRoleBtn");
+  const renewalPlanCode = document.getElementById("renewalPlanCode");
+  const applyRenewalSuccessBtn = document.getElementById("applyRenewalSuccessBtn");
+  const applyRenewalFailureBtn = document.getElementById("applyRenewalFailureBtn");
+  const cancelAtPeriodEndValue = document.getElementById("cancelAtPeriodEndValue");
+  const applyCancelAtPeriodEndBtn = document.getElementById("applyCancelAtPeriodEndBtn");
+  const applyGraceExpiryBtn = document.getElementById("applyGraceExpiryBtn");
+
+  const overridePlanCode = document.getElementById("overridePlanCode");
+  const overrideEntitlementStatus = document.getElementById("overrideEntitlementStatus");
+  const overrideCurrentPeriodStartedAt = document.getElementById("overrideCurrentPeriodStartedAt");
+  const overrideRenewsAt = document.getElementById("overrideRenewsAt");
+  const overrideExpiresAt = document.getElementById("overrideExpiresAt");
+  const overrideGraceEndsAt = document.getElementById("overrideGraceEndsAt");
+  const overrideCancelAtPeriodEnd = document.getElementById("overrideCancelAtPeriodEnd");
+  const applyEntitlementOverrideBtn = document.getElementById("applyEntitlementOverrideBtn");
+
+  const mutationStatus = document.getElementById("mutationStatus");
+  const mutationRaw = document.getElementById("mutationRaw");
+
   const adminActionsLimit = document.getElementById("adminActionsLimit");
   const refreshAdminActionsBtn = document.getElementById("refreshAdminActionsBtn");
   const adminActionsStatus = document.getElementById("adminActionsStatus");
   const adminActionsList = document.getElementById("adminActionsList");
   const adminActionsRaw = document.getElementById("adminActionsRaw");
+
+  let currentLoadedUser = null;
 
   function pretty(data) {
     return JSON.stringify(data, null, 2);
@@ -68,6 +92,38 @@ document.addEventListener("DOMContentLoaded", () => {
     `;
   }
 
+  function setMutationStatus(message, isError = false) {
+    mutationStatus.textContent = message;
+    mutationStatus.className = `status-line ${isError ? "status-error" : "status-ok"}`;
+  }
+
+  function clearMutationStatus() {
+    mutationStatus.textContent = "No mutation run yet.";
+    mutationStatus.className = "status-line muted";
+    mutationRaw.textContent = "No mutation run yet.";
+  }
+
+  function getTargetUserId() {
+    const userId = (detailUserId.value || "").trim();
+    if (!userId) {
+      setMutationStatus("Load a user first.", true);
+      return null;
+    }
+    return userId;
+  }
+
+  function toDateTimeLocalValue(value) {
+    if (!value) return "";
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return "";
+    const pad = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function fromDateTimeLocalValue(value) {
+    return value ? value : null;
+  }
+
   async function safeReadJson(response) {
     try {
       return await response.json();
@@ -76,9 +132,35 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  async function fetchAdminMe() {
-    const response = await fetch("/admin/me", { credentials: "same-origin" });
+  async function getJson(url) {
+    const response = await fetch(url, { credentials: "same-origin" });
     const data = await safeReadJson(response);
+    return { response, data };
+  }
+
+  async function postJson(url, payload) {
+    const response = await fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await safeReadJson(response);
+    return { response, data };
+  }
+
+  async function postForm(url, payload) {
+    const response = await fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      body: new URLSearchParams(payload)
+    });
+    const data = await safeReadJson(response);
+    return { response, data };
+  }
+
+  async function fetchAdminMe() {
+    const { response, data } = await getJson("/admin/me");
 
     if (!response.ok) {
       adminIdentity.textContent = data.error || "Failed to load admin identity.";
@@ -105,21 +187,10 @@ document.addEventListener("DOMContentLoaded", () => {
       renderMetricCard("Admin actions", adminSummary.total_admin_actions ?? 0)
     ].join("");
 
-    const roles = (userSummary.roles || []).map(
-      row => renderKV(row.role, row.total)
-    );
-
-    const entitlements = (userSummary.entitlement_statuses || []).map(
-      row => renderKV(row.entitlement_status, row.total)
-    );
-
-    const plans = (userSummary.stored_plan_codes || []).map(
-      row => renderKV(row.plan_code, row.total)
-    );
-
-    const modes = (oracleSummary.mode_counts || []).map(
-      row => renderKV(row.mode, row.total)
-    );
+    const roles = (userSummary.roles || []).map(row => renderKV(row.role, row.total));
+    const entitlements = (userSummary.entitlement_statuses || []).map(row => renderKV(row.entitlement_status, row.total));
+    const plans = (userSummary.stored_plan_codes || []).map(row => renderKV(row.plan_code, row.total));
+    const modes = (oracleSummary.mode_counts || []).map(row => renderKV(row.mode, row.total));
 
     overviewBreakdown.innerHTML = [
       renderSummaryCard("Roles", roles),
@@ -131,12 +202,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function loadOverview() {
     overviewStatus.textContent = "Loading overview...";
-
     const days = Number(overviewDays.value || 30);
-    const response = await fetch(`/admin/reports/overview?days=${encodeURIComponent(days)}`, {
-      credentials: "same-origin"
-    });
-    const data = await safeReadJson(response);
+
+    const { response, data } = await getJson(`/admin/reports/overview?days=${encodeURIComponent(days)}`);
 
     if (!response.ok) {
       overviewStatus.textContent = data.error || "Failed to load overview.";
@@ -235,6 +303,27 @@ document.addEventListener("DOMContentLoaded", () => {
     `;
   }
 
+  function populateMutationControls(user) {
+    currentLoadedUser = user;
+
+    mutationTarget.textContent = `Loaded target: ${user.display_name || user.email} (${user.id})`;
+    mutationTarget.className = "status-line muted";
+
+    setRoleValue.value = user.role || "user";
+
+    const entitlement = user.entitlement || {};
+    renewalPlanCode.value = entitlement.raw_plan_code || "anon";
+    cancelAtPeriodEndValue.checked = Boolean(entitlement.cancel_at_period_end);
+
+    overridePlanCode.value = entitlement.raw_plan_code || "anon";
+    overrideEntitlementStatus.value = entitlement.entitlement_status || "none";
+    overrideCurrentPeriodStartedAt.value = toDateTimeLocalValue(entitlement.current_period_started_at);
+    overrideRenewsAt.value = toDateTimeLocalValue(entitlement.subscription_renews_at);
+    overrideExpiresAt.value = toDateTimeLocalValue(entitlement.subscription_expires_at);
+    overrideGraceEndsAt.value = toDateTimeLocalValue(entitlement.grace_period_ends_at);
+    overrideCancelAtPeriodEnd.checked = Boolean(entitlement.cancel_at_period_end);
+  }
+
   async function loadUserDetail(userId) {
     const trimmed = (userId || "").trim();
 
@@ -248,10 +337,7 @@ document.addEventListener("DOMContentLoaded", () => {
     detailStatus.textContent = "Loading user detail...";
     detailCards.innerHTML = "";
 
-    const response = await fetch(`/admin/users/${encodeURIComponent(trimmed)}/detail`, {
-      credentials: "same-origin"
-    });
-    const data = await safeReadJson(response);
+    const { response, data } = await getJson(`/admin/users/${encodeURIComponent(trimmed)}/detail`);
 
     if (!response.ok) {
       detailStatus.textContent = data.error || "Failed to load user detail.";
@@ -263,6 +349,8 @@ document.addEventListener("DOMContentLoaded", () => {
     detailStatus.textContent = `Loaded user detail for ${data.user.display_name || data.user.email}.`;
     detailRaw.textContent = pretty(data.user);
     renderUserDetail(data.user);
+    populateMutationControls(data.user);
+    clearMutationStatus();
   }
 
   async function loadAdminActions() {
@@ -270,10 +358,7 @@ document.addEventListener("DOMContentLoaded", () => {
     adminActionsList.innerHTML = "";
 
     const limit = Number(adminActionsLimit.value || 100);
-    const response = await fetch(`/admin/reports/admin-actions?limit=${encodeURIComponent(limit)}`, {
-      credentials: "same-origin"
-    });
-    const data = await safeReadJson(response);
+    const { response, data } = await getJson(`/admin/reports/admin-actions?limit=${encodeURIComponent(limit)}`);
 
     if (!response.ok) {
       adminActionsStatus.textContent = data.error || "Failed to load admin actions.";
@@ -304,6 +389,41 @@ document.addEventListener("DOMContentLoaded", () => {
     `).join("");
   }
 
+  async function runMutation(actionLabel, requestFactory) {
+    const targetUserId = getTargetUserId();
+    if (!targetUserId) return;
+
+    setMutationStatus(`Running ${actionLabel}...`);
+    mutationRaw.textContent = "";
+
+    const { response, data } = await requestFactory(targetUserId);
+
+    mutationRaw.textContent = pretty(data);
+
+    if (!response.ok) {
+      setMutationStatus(data.error || `${actionLabel} failed.`, true);
+      return;
+    }
+
+    setMutationStatus(`${actionLabel} completed.`);
+    await loadUserDetail(targetUserId);
+    await loadAdminActions();
+    await loadOverview();
+  }
+
+  async function confirmAndRunMutation(actionLabel, confirmationMessage, requestFactory) {
+    const targetUserId = getTargetUserId();
+    if (!targetUserId) return;
+
+    if (!window.confirm(confirmationMessage)) {
+      setMutationStatus(`${actionLabel} cancelled.`);
+      mutationRaw.textContent = "Cancelled by user.";
+      return;
+    }
+
+    await runMutation(actionLabel, requestFactory);
+  }
+
   adminSearchForm.addEventListener("submit", async (e) => {
     e.preventDefault();
 
@@ -327,10 +447,7 @@ document.addEventListener("DOMContentLoaded", () => {
     searchResults.innerHTML = "";
     searchRaw.textContent = "";
 
-    const response = await fetch(`/admin/users/search?${params.toString()}`, {
-      credentials: "same-origin"
-    });
-    const data = await safeReadJson(response);
+    const { response, data } = await getJson(`/admin/users/search?${params.toString()}`);
 
     if (!response.ok) {
       searchStatus.textContent = data.error || "Search failed.";
@@ -360,7 +477,84 @@ document.addEventListener("DOMContentLoaded", () => {
     await loadAdminActions();
   });
 
+  applyRoleBtn.addEventListener("click", async () => {
+    await confirmAndRunMutation(
+      "Set role",
+      `Apply role "${setRoleValue.value}" to the loaded user?`,
+      (targetUserId) =>
+        postJson("/admin/users/set-role", {
+          user_id: targetUserId,
+          role: setRoleValue.value
+        })
+    );
+  });
+
+  applyRenewalSuccessBtn.addEventListener("click", async () => {
+    await confirmAndRunMutation(
+      "Renewal success",
+      `Apply renewal success with plan "${renewalPlanCode.value}" to the loaded user?`,
+      (targetUserId) =>
+        postForm("/admin/users/renewal-success", {
+          user_id: targetUserId,
+          plan_code: renewalPlanCode.value
+        })
+    );
+  });
+
+  applyRenewalFailureBtn.addEventListener("click", async () => {
+    await confirmAndRunMutation(
+      "Move to grace",
+      "Move the loaded user into grace status?",
+      (targetUserId) =>
+        postJson("/admin/users/renewal-failure-to-grace", {
+          user_id: targetUserId
+        })
+    );
+  });
+
+  applyCancelAtPeriodEndBtn.addEventListener("click", async () => {
+    await confirmAndRunMutation(
+      "Save cancel-at-period-end",
+      `Set cancel-at-period-end to ${cancelAtPeriodEndValue.checked ? "ON" : "OFF"} for the loaded user?`,
+      (targetUserId) =>
+        postJson("/admin/users/set-cancel-at-period-end", {
+          user_id: targetUserId,
+          cancel_at_period_end: cancelAtPeriodEndValue.checked
+        })
+    );
+  });
+
+  applyGraceExpiryBtn.addEventListener("click", async () => {
+    await confirmAndRunMutation(
+      "Apply grace expiry",
+      "Apply grace expiry to the loaded user? This can downgrade access.",
+      (targetUserId) =>
+        postJson("/admin/users/apply-grace-expiry", {
+          user_id: targetUserId
+        })
+    );
+  });
+
+  applyEntitlementOverrideBtn.addEventListener("click", async () => {
+    await confirmAndRunMutation(
+      "Entitlement override",
+      `Apply entitlement override with plan "${overridePlanCode.value}" and status "${overrideEntitlementStatus.value}" to the loaded user?`,
+      (targetUserId) =>
+        postJson("/admin/users/entitlement/override", {
+          user_id: targetUserId,
+          plan_code: overridePlanCode.value,
+          entitlement_status: overrideEntitlementStatus.value,
+          current_period_started_at: fromDateTimeLocalValue(overrideCurrentPeriodStartedAt.value),
+          subscription_renews_at: fromDateTimeLocalValue(overrideRenewsAt.value),
+          subscription_expires_at: fromDateTimeLocalValue(overrideExpiresAt.value),
+          grace_period_ends_at: fromDateTimeLocalValue(overrideGraceEndsAt.value),
+          cancel_at_period_end: overrideCancelAtPeriodEnd.checked
+        })
+    );
+  });
+
   fetchAdminMe();
   loadOverview();
   loadAdminActions();
+  clearMutationStatus();
 });
