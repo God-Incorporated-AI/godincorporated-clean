@@ -130,6 +130,36 @@
           </div>
 
           <div class="summary-card">
+            <h3>Annual Prepaid Activation</h3>
+            <div class="control-row">
+              <div class="control-group">
+                <label for="annualPlanCode">Plan code</label>
+                <select id="annualPlanCode">
+                  <option value="seeker">seeker</option>
+                  <option value="magister">magister</option>
+                  <option value="sovereign">sovereign</option>
+                  <option value="philosophus">philosophus</option>
+                  <option value="theoricus">theoricus</option>
+                </select>
+              </div>
+
+              <div class="control-group">
+                <label for="annualTermDays">Term days</label>
+                <input type="number" id="annualTermDays" value="365" min="1" max="3650" />
+              </div>
+
+              <button type="button" id="applyAnnualPrepaidActivateBtn">Activate Annual Prepaid</button>
+            </div>
+          </div>
+
+          <div class="summary-card">
+            <h3>Annual Prepaid Expiry</h3>
+            <div class="control-row">
+              <button type="button" id="applyAnnualPrepaidExpireBtn">Apply Annual Expiry</button>
+            </div>
+          </div>
+
+          <div class="summary-card">
             <h3>Cancel at Period End</h3>
             <div class="control-row">
               <div class="control-group">

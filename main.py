@@ -1020,6 +1020,64 @@ def normalize_plan_code(plan_code: Optional[str]) -> str:
     return plan if plan in PLAN_LIMITS else "anon"
 
 
+PLAN_RANKS = {
+    "anon": 0,
+    "pilgrim": 1,
+    "seeker": 3,
+    "magister": 5,
+    "sovereign": 7,
+    "philosophus": 9,
+    "theoricus": 10,
+}
+
+
+def plan_rank(plan_code: Optional[str]) -> int:
+    return PLAN_RANKS.get(normalize_plan_code(plan_code), 0)
+
+
+def max_plan_code(*codes: Optional[str]) -> str:
+    valid_codes = [normalize_plan_code(code) for code in codes if code]
+    if not valid_codes:
+        return "anon"
+    return max(valid_codes, key=plan_rank)
+
+
+def compute_scroll_floor_plan(scroll_count: int) -> Optional[str]:
+    if scroll_count >= 99:
+        return "magister"
+    if scroll_count >= 9:
+        return "seeker"
+    if scroll_count >= 1:
+        return "pilgrim"
+    return None
+
+
+def compute_donor_floor_plan(highest_paid_plan_ever: Optional[str]) -> Optional[str]:
+    if not highest_paid_plan_ever:
+        return None
+
+    plan = normalize_plan_code(highest_paid_plan_ever)
+
+    if plan in {"magister", "sovereign", "philosophus", "theoricus"}:
+        return "seeker"
+    if plan == "seeker":
+        return "pilgrim"
+
+    return None
+
+
+def compute_fallback_floor_plan(
+    authenticated: bool,
+    donor_floor: Optional[str],
+    scroll_floor: Optional[str]
+) -> str:
+    if not authenticated:
+        return "anon"
+
+    floor = max_plan_code(donor_floor, scroll_floor, "pilgrim")
+    return floor if floor != "anon" else "pilgrim"
+
+
 def serialize_dt(value):
     return value.isoformat() if value else None
 
@@ -1038,7 +1096,15 @@ def get_user_entitlement_snapshot(user_id: str) -> dict:
                     subscription_renews_at,
                     subscription_expires_at,
                     grace_period_ends_at,
-                    COALESCE(cancel_at_period_end, false) AS cancel_at_period_end
+                    COALESCE(cancel_at_period_end, false) AS cancel_at_period_end,
+                    highest_paid_plan_ever,
+                    last_paid_plan_code,
+                    donor_floor_plan_code,
+                    scroll_floor_plan_code,
+                    fallback_floor_plan_code,
+                    renewal_offer_plan_code,
+                    last_support_mode,
+                    last_support_ended_at
                 FROM users
                 WHERE id = %s
                 """,
@@ -1049,8 +1115,43 @@ def get_user_entitlement_snapshot(user_id: str) -> dict:
         conn.close()
 
     now = datetime.datetime.now(timezone.utc)
+
     raw_plan_code = normalize_plan_code(row.get("raw_plan_code"))
     entitlement_status = (row.get("entitlement_status") or "none").lower()
+
+    highest_paid_plan_ever = (
+        normalize_plan_code(row.get("highest_paid_plan_ever"))
+        if row.get("highest_paid_plan_ever") else None
+    )
+    last_paid_plan_code = (
+        normalize_plan_code(row.get("last_paid_plan_code"))
+        if row.get("last_paid_plan_code") else None
+    )
+    donor_floor_plan_code = (
+        normalize_plan_code(row.get("donor_floor_plan_code"))
+        if row.get("donor_floor_plan_code")
+        else compute_donor_floor_plan(highest_paid_plan_ever)
+    )
+    scroll_floor_plan_code = (
+        normalize_plan_code(row.get("scroll_floor_plan_code"))
+        if row.get("scroll_floor_plan_code") else None
+    )
+    fallback_floor_plan_code = (
+        normalize_plan_code(row.get("fallback_floor_plan_code"))
+        if row.get("fallback_floor_plan_code")
+        else compute_fallback_floor_plan(
+            authenticated=True,
+            donor_floor=donor_floor_plan_code,
+            scroll_floor=scroll_floor_plan_code
+        )
+    )
+    renewal_offer_plan_code = (
+        normalize_plan_code(row.get("renewal_offer_plan_code"))
+        if row.get("renewal_offer_plan_code")
+        else last_paid_plan_code
+    )
+    last_support_mode = row.get("last_support_mode")
+    last_support_ended_at = row.get("last_support_ended_at")
 
     expires_at = row.get("subscription_expires_at")
     grace_ends_at = row.get("grace_period_ends_at")
@@ -1068,12 +1169,18 @@ def get_user_entitlement_snapshot(user_id: str) -> dict:
 
     if is_active_paid or is_in_grace:
         effective_plan_code = raw_plan_code
-        is_entitled = raw_plan_code != "anon"
+        is_entitled = raw_plan_code not in {"anon", "pilgrim"}
     else:
-        if expires_at and now > expires_at and (not grace_ends_at or now > grace_ends_at):
+        if (
+            entitlement_status in {"active", "grace"}
+            and expires_at
+            and now > expires_at
+            and (not grace_ends_at or now > grace_ends_at)
+        ):
             entitlement_status = "expired"
-        effective_plan_code = "anon"
-        is_entitled = False
+
+        effective_plan_code = fallback_floor_plan_code
+        is_entitled = effective_plan_code not in {"anon", "pilgrim"}
 
     return {
         "raw_plan_code": raw_plan_code,
@@ -1088,9 +1195,19 @@ def get_user_entitlement_snapshot(user_id: str) -> dict:
         "is_entitled": is_entitled,
         "is_in_grace": is_in_grace,
         "downgraded_for_access": raw_plan_code != effective_plan_code,
+        "highest_paid_plan_ever": highest_paid_plan_ever,
+        "last_paid_plan_code": last_paid_plan_code,
+        "donor_floor_plan_code": donor_floor_plan_code,
+        "scroll_floor_plan_code": scroll_floor_plan_code,
+        "fallback_floor_plan_code": fallback_floor_plan_code,
+        "renewal_offer_plan_code": renewal_offer_plan_code,
+        "last_support_mode": last_support_mode,
+        "last_support_ended_at": last_support_ended_at,
     }
 
+
 DEFAULT_BILLING_CYCLE_DAYS = 30
+DEFAULT_ANNUAL_PREPAID_DAYS = 365
 DEFAULT_GRACE_DAYS = 3
 VALID_ENTITLEMENT_STATUSES = {
     "none",
@@ -1126,6 +1243,28 @@ def apply_subscription_renewal_success(
         with conn.cursor() as cur:
             cur.execute(
                 """
+                SELECT highest_paid_plan_ever
+                FROM users
+                WHERE id = %s
+                """,
+                (user_id,)
+            )
+            row = cur.fetchone() or {}
+
+            existing_highest = (
+                normalize_plan_code(row.get("highest_paid_plan_ever"))
+                if row.get("highest_paid_plan_ever") else None
+            )
+
+            if existing_highest and plan_rank(existing_highest) >= plan_rank(normalized_plan):
+                highest_paid_plan_ever = existing_highest
+            else:
+                highest_paid_plan_ever = normalized_plan
+
+            donor_floor_plan_code = compute_donor_floor_plan(highest_paid_plan_ever)
+
+            cur.execute(
+                """
                 UPDATE users
                 SET
                     plan_code = %s,
@@ -1135,7 +1274,13 @@ def apply_subscription_renewal_success(
                     subscription_renews_at = %s,
                     subscription_expires_at = %s,
                     grace_period_ends_at = NULL,
-                    cancel_at_period_end = FALSE
+                    cancel_at_period_end = FALSE,
+                    highest_paid_plan_ever = %s,
+                    last_paid_plan_code = %s,
+                    donor_floor_plan_code = %s,
+                    renewal_offer_plan_code = %s,
+                    last_support_mode = 'monthly_recurring',
+                    last_support_ended_at = NULL
                 WHERE id = %s
                 """,
                 (
@@ -1144,12 +1289,116 @@ def apply_subscription_renewal_success(
                     now,
                     next_renewal,
                     next_renewal,
+                    highest_paid_plan_ever,
+                    normalized_plan,
+                    donor_floor_plan_code,
+                    normalized_plan,
                     user_id
                 )
             )
         conn.commit()
     finally:
         conn.close()
+
+    refresh_user_fallback_state(user_id)
+
+
+def apply_annual_prepaid_activation(
+    user_id: str,
+    plan_code: str,
+    term_days: int = DEFAULT_ANNUAL_PREPAID_DAYS
+) -> None:
+    now = utc_now()
+    normalized_plan = normalize_plan_code(plan_code)
+    expires_at = now + datetime.timedelta(days=term_days)
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT highest_paid_plan_ever
+                FROM users
+                WHERE id = %s
+                """,
+                (user_id,)
+            )
+            row = cur.fetchone() or {}
+
+            existing_highest = (
+                normalize_plan_code(row.get("highest_paid_plan_ever"))
+                if row.get("highest_paid_plan_ever") else None
+            )
+
+            if existing_highest and plan_rank(existing_highest) >= plan_rank(normalized_plan):
+                highest_paid_plan_ever = existing_highest
+            else:
+                highest_paid_plan_ever = normalized_plan
+
+            donor_floor_plan_code = compute_donor_floor_plan(highest_paid_plan_ever)
+
+            cur.execute(
+                """
+                UPDATE users
+                SET
+                    plan_code = %s,
+                    entitlement_status = 'active',
+                    subscription_started_at = COALESCE(subscription_started_at, %s),
+                    current_period_started_at = %s,
+                    subscription_renews_at = NULL,
+                    subscription_expires_at = %s,
+                    grace_period_ends_at = NULL,
+                    cancel_at_period_end = FALSE,
+                    highest_paid_plan_ever = %s,
+                    last_paid_plan_code = %s,
+                    donor_floor_plan_code = %s,
+                    renewal_offer_plan_code = %s,
+                    last_support_mode = 'annual_prepaid',
+                    last_support_ended_at = NULL
+                WHERE id = %s
+                """,
+                (
+                    normalized_plan,
+                    now,
+                    now,
+                    expires_at,
+                    highest_paid_plan_ever,
+                    normalized_plan,
+                    donor_floor_plan_code,
+                    normalized_plan,
+                    user_id
+                )
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    refresh_user_fallback_state(user_id)
+
+
+def apply_annual_prepaid_expiry(user_id: str) -> None:
+    now = utc_now()
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET
+                    entitlement_status = 'expired',
+                    last_support_ended_at = COALESCE(last_support_ended_at, %s)
+                WHERE id = %s
+                  AND subscription_expires_at IS NOT NULL
+                  AND subscription_expires_at <= %s
+                """,
+                (now, user_id, now)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    refresh_user_fallback_state(user_id)
 
 
 def apply_subscription_renewal_failure_to_grace(
@@ -1196,16 +1445,20 @@ def apply_grace_expiry_downgrade(user_id: str) -> None:
             cur.execute(
                 """
                 UPDATE users
-                SET entitlement_status = 'expired'
+                SET
+                    entitlement_status = 'expired',
+                    last_support_ended_at = COALESCE(last_support_ended_at, %s)
                 WHERE id = %s
                   AND grace_period_ends_at IS NOT NULL
                   AND grace_period_ends_at <= %s
                 """,
-                (user_id, now)
+                (now, user_id, now)
             )
         conn.commit()
     finally:
         conn.close()
+
+    refresh_user_fallback_state(user_id)
 
 
 def set_cancel_at_period_end(user_id: str, should_cancel: bool) -> None:
@@ -1237,17 +1490,20 @@ def apply_cancel_at_period_end_downgrade(user_id: str) -> None:
                 SET
                     entitlement_status = 'cancelled',
                     cancel_at_period_end = FALSE,
-                    grace_period_ends_at = NULL
+                    grace_period_ends_at = NULL,
+                    last_support_ended_at = COALESCE(last_support_ended_at, %s)
                 WHERE id = %s
                   AND cancel_at_period_end = TRUE
                   AND subscription_expires_at IS NOT NULL
                   AND subscription_expires_at <= %s
                 """,
-                (user_id, now)
+                (now, user_id, now)
             )
         conn.commit()
     finally:
         conn.close()
+
+    refresh_user_fallback_state(user_id)
 
 
 def apply_admin_entitlement_override(
@@ -1444,6 +1700,104 @@ def compute_combined_title(scroll_count: int, plan_code: str, authenticated: boo
     return f"{scroll_title} {monetary_title}"
 
 
+def plan_label_or_none(plan_code: Optional[str]) -> Optional[str]:
+    if not plan_code:
+        return None
+    return compute_monetary_title(plan_code)
+
+
+def build_support_status_payload(entitlement: dict) -> dict:
+    status = entitlement.get("entitlement_status")
+    effective_plan_code = entitlement.get("effective_plan_code")
+    raw_plan_code = entitlement.get("raw_plan_code")
+    highest_paid_plan_ever = entitlement.get("highest_paid_plan_ever")
+    donor_floor_plan_code = entitlement.get("donor_floor_plan_code")
+    scroll_floor_plan_code = entitlement.get("scroll_floor_plan_code")
+    fallback_floor_plan_code = entitlement.get("fallback_floor_plan_code")
+    renewal_offer_plan_code = entitlement.get("renewal_offer_plan_code")
+    last_support_mode = entitlement.get("last_support_mode")
+    last_support_ended_at = entitlement.get("last_support_ended_at")
+
+    support_mode_label = {
+        "monthly_recurring": "Monthly recurring support",
+        "annual_prepaid": "Annual prepaid support",
+    }.get(last_support_mode)
+
+    if status == "active":
+        if last_support_mode == "annual_prepaid" and entitlement.get("subscription_expires_at"):
+            message = f"Annual prepaid support is active through {serialize_dt(entitlement['subscription_expires_at'])}."
+        elif last_support_mode == "monthly_recurring" and entitlement.get("subscription_renews_at"):
+            message = f"Monthly recurring support is active. Next renewal is {serialize_dt(entitlement['subscription_renews_at'])}."
+        elif support_mode_label:
+            message = f"{support_mode_label} is active."
+        else:
+            message = "Paid support is active."
+        renewal_message = None
+    elif status == "grace":
+        message = "Support is in grace. Current access remains available while renewal is resolved."
+        renewal_message = (
+            f"Renew at {plan_label_or_none(renewal_offer_plan_code)} to continue at your previous level."
+            if renewal_offer_plan_code else None
+        )
+    elif status in {"expired", "cancelled"}:
+        message = f"Paid support has ended. Current access remains at {plan_label_or_none(effective_plan_code)}."
+        renewal_message = (
+            f"Renew at {plan_label_or_none(renewal_offer_plan_code)} to continue together at your previous level."
+            if renewal_offer_plan_code else None
+        )
+    else:
+        message = f"Current access is {plan_label_or_none(effective_plan_code)}."
+        renewal_message = None
+
+    return {
+        "status": status,
+        "mode": last_support_mode,
+        "mode_label": support_mode_label,
+        "current_access_plan_code": effective_plan_code,
+        "current_access_label": plan_label_or_none(effective_plan_code),
+        "stored_plan_code": raw_plan_code,
+        "stored_plan_label": plan_label_or_none(raw_plan_code),
+        "highest_paid_plan_ever": highest_paid_plan_ever,
+        "highest_paid_label": plan_label_or_none(highest_paid_plan_ever),
+        "donor_floor_plan_code": donor_floor_plan_code,
+        "donor_floor_label": plan_label_or_none(donor_floor_plan_code),
+        "scroll_floor_plan_code": scroll_floor_plan_code,
+        "scroll_floor_label": plan_label_or_none(scroll_floor_plan_code),
+        "fallback_floor_plan_code": fallback_floor_plan_code,
+        "fallback_floor_label": plan_label_or_none(fallback_floor_plan_code),
+        "renewal_offer_plan_code": renewal_offer_plan_code,
+        "renewal_offer_label": plan_label_or_none(renewal_offer_plan_code),
+        "last_support_ended_at": serialize_dt(last_support_ended_at),
+        "message": message,
+        "renewal_message": renewal_message,
+    }
+
+
+def build_anonymous_support_status_payload() -> dict:
+    return {
+        "status": "none",
+        "mode": None,
+        "mode_label": None,
+        "current_access_plan_code": "anon",
+        "current_access_label": "Anon",
+        "stored_plan_code": None,
+        "stored_plan_label": None,
+        "highest_paid_plan_ever": None,
+        "highest_paid_label": None,
+        "donor_floor_plan_code": None,
+        "donor_floor_label": None,
+        "scroll_floor_plan_code": None,
+        "scroll_floor_label": None,
+        "fallback_floor_plan_code": "anon",
+        "fallback_floor_label": "Anon",
+        "renewal_offer_plan_code": None,
+        "renewal_offer_label": None,
+        "last_support_ended_at": None,
+        "message": "You are using anonymous access.",
+        "renewal_message": "Create an account to begin a named path."
+    }
+
+
 def get_memory_depth(plan_code: str):
     return PLAN_MEMORY_DEPTH.get(normalize_plan_code(plan_code), 1)
 
@@ -1494,6 +1848,75 @@ def get_or_create_session_id(request: Request) -> str:
     return session_id
 
 
+def refresh_user_fallback_state(user_id: str) -> dict:
+    """
+    Refresh fallback floor fields from current user history and authoritative
+    scroll ownership.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(scroll_count, 0) AS scroll_count,
+                    highest_paid_plan_ever,
+                    last_paid_plan_code,
+                    donor_floor_plan_code,
+                    scroll_floor_plan_code,
+                    fallback_floor_plan_code,
+                    renewal_offer_plan_code
+                FROM users
+                WHERE id = %s
+                """,
+                (user_id,)
+            )
+            row = cur.fetchone()
+
+            if not row:
+                raise ValueError(f"User not found for fallback refresh: {user_id}")
+
+            scroll_count = row["scroll_count"] or 0
+            highest_paid_plan_ever = row.get("highest_paid_plan_ever")
+
+            donor_floor_plan_code = compute_donor_floor_plan(highest_paid_plan_ever)
+            scroll_floor_plan_code = compute_scroll_floor_plan(scroll_count)
+            fallback_floor_plan_code = compute_fallback_floor_plan(
+                authenticated=True,
+                donor_floor=donor_floor_plan_code,
+                scroll_floor=scroll_floor_plan_code
+            )
+
+            cur.execute(
+                """
+                UPDATE users
+                SET
+                    donor_floor_plan_code = %s,
+                    scroll_floor_plan_code = %s,
+                    fallback_floor_plan_code = %s,
+                    renewal_offer_plan_code = COALESCE(renewal_offer_plan_code, last_paid_plan_code),
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (
+                    donor_floor_plan_code,
+                    scroll_floor_plan_code,
+                    fallback_floor_plan_code,
+                    user_id
+                )
+            )
+
+        conn.commit()
+
+        return {
+            "donor_floor_plan_code": donor_floor_plan_code,
+            "scroll_floor_plan_code": scroll_floor_plan_code,
+            "fallback_floor_plan_code": fallback_floor_plan_code,
+        }
+    finally:
+        conn.close()
+
+
 def refresh_user_scroll_count(user_id: str) -> int:
     """
     Treat scroll_associations as authoritative for seeker-facing scroll ownership.
@@ -1519,9 +1942,11 @@ def refresh_user_scroll_count(user_id: str) -> int:
             )
 
         conn.commit()
-        return total
     finally:
         conn.close()
+
+    refresh_user_fallback_state(user_id)
+    return total
 
 
 def merge_anonymous_history_into_user(session_id: Optional[str], user_id: str) -> None:
@@ -1887,6 +2312,7 @@ def get_admin_reporting_overview(days: int = 30) -> dict:
 def build_authenticated_me_response(user: dict, session_id: str) -> dict:
     donation_stats = get_user_donation_stats(user["user_id"])
     entitlement = get_user_entitlement_snapshot(user["user_id"])
+    support = build_support_status_payload(entitlement)
     usage = get_oracle_usage_counts(
         user_id=user["user_id"],
         window_start=entitlement["current_period_started_at"]
@@ -1950,12 +2376,18 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
         "legacy_scroll_count": user_row.get("legacy_scroll_count", 0),
         "plan_code": plan_code,
         "stored_plan_code": entitlement["raw_plan_code"],
+        "current_access_plan_code": support["current_access_plan_code"],
+        "current_access_label": support["current_access_label"],
+        "stored_plan_label": support["stored_plan_label"],
         "title": combined_title,
         "combined_title": combined_title,
         "money_donated": donation_stats["money_donated"],
         "donation_count": donation_stats["donation_count"],
         "donation_source": donation_stats["donation_source"],
         "memory_depth": get_memory_depth(plan_code),
+        "support_message": support["message"],
+        "renewal_message": support["renewal_message"],
+        "support": support,
         "entitlement": {
             "status": entitlement["entitlement_status"],
             "raw_plan_code": entitlement["raw_plan_code"],
@@ -1968,7 +2400,15 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
             "cancel_at_period_end": entitlement["cancel_at_period_end"],
             "is_entitled": entitlement["is_entitled"],
             "is_in_grace": entitlement["is_in_grace"],
-            "downgraded_for_access": entitlement["downgraded_for_access"]
+            "downgraded_for_access": entitlement["downgraded_for_access"],
+            "highest_paid_plan_ever": entitlement["highest_paid_plan_ever"],
+            "last_paid_plan_code": entitlement["last_paid_plan_code"],
+            "donor_floor_plan_code": entitlement["donor_floor_plan_code"],
+            "scroll_floor_plan_code": entitlement["scroll_floor_plan_code"],
+            "fallback_floor_plan_code": entitlement["fallback_floor_plan_code"],
+            "renewal_offer_plan_code": entitlement["renewal_offer_plan_code"],
+            "last_support_mode": entitlement["last_support_mode"],
+            "last_support_ended_at": serialize_dt(entitlement["last_support_ended_at"]),
         },
         "usage": {
             "questions_asked": questions_used,
@@ -1983,6 +2423,7 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
             "moses_questions": mode_counts.get("Moses", 0)
         }
     }
+
 
 def build_anonymous_me_response(session_id: str) -> dict:
     conn = get_db_connection()
@@ -2031,6 +2472,7 @@ def build_anonymous_me_response(session_id: str) -> dict:
         "anon",
         authenticated=False
     )
+    support = build_anonymous_support_status_payload()
 
     return {
         "authenticated": False,
@@ -2043,12 +2485,41 @@ def build_anonymous_me_response(session_id: str) -> dict:
         "scroll_count": session_scroll_count,
         "scrolls_donated": session_scroll_count,
         "plan_code": None,
+        "stored_plan_code": None,
+        "current_access_plan_code": "anon",
+        "current_access_label": "Anon",
+        "stored_plan_label": None,
         "title": combined_title,
         "combined_title": combined_title,
         "money_donated": 0,
         "donation_count": 0,
         "donation_source": "none",
         "memory_depth": 1,
+        "support_message": support["message"],
+        "renewal_message": support["renewal_message"],
+        "support": support,
+        "entitlement": {
+            "status": "none",
+            "raw_plan_code": "anon",
+            "effective_plan_code": "anon",
+            "subscription_started_at": None,
+            "current_period_started_at": None,
+            "renewal_date": None,
+            "expiry_date": None,
+            "grace_period_ends_at": None,
+            "cancel_at_period_end": False,
+            "is_entitled": False,
+            "is_in_grace": False,
+            "downgraded_for_access": False,
+            "highest_paid_plan_ever": None,
+            "last_paid_plan_code": None,
+            "donor_floor_plan_code": None,
+            "scroll_floor_plan_code": None,
+            "fallback_floor_plan_code": "anon",
+            "renewal_offer_plan_code": None,
+            "last_support_mode": None,
+            "last_support_ended_at": None,
+        },
         "usage": {
             "questions_asked": questions_used,
             "questions_used": questions_used,
@@ -3042,6 +3513,12 @@ class AdminCancelAtPeriodEndInput(BaseModel):
     cancel_at_period_end: bool
 
 
+class AdminAnnualPrepaidActivationInput(BaseModel):
+    user_id: str
+    plan_code: str
+    term_days: int = DEFAULT_ANNUAL_PREPAID_DAYS
+
+
 @app.post("/admin/users/renewal-success")
 def admin_apply_renewal_success(
     request: Request,
@@ -3066,6 +3543,65 @@ def admin_apply_renewal_success(
         "ok": True,
         "updated_by": admin_user["user_id"],
         "user_id": user_id,
+        "entitlement": entitlement
+    }
+
+
+@app.post("/admin/users/annual-prepaid-activate")
+def admin_activate_annual_prepaid(
+    request: Request,
+    payload: AdminAnnualPrepaidActivationInput
+):
+    admin_user = require_admin(request)
+
+    apply_annual_prepaid_activation(
+        user_id=payload.user_id,
+        plan_code=payload.plan_code,
+        term_days=payload.term_days
+    )
+
+    entitlement = get_user_entitlement_snapshot(payload.user_id)
+
+    log_admin_action(
+        admin_user_id=admin_user["user_id"],
+        action_type="admin.users.annual_prepaid_activate",
+        target_user_id=payload.user_id,
+        payload={
+            "plan_code": payload.plan_code,
+            "term_days": payload.term_days
+        }
+    )
+
+    return {
+        "ok": True,
+        "updated_by": admin_user["user_id"],
+        "user_id": payload.user_id,
+        "entitlement": entitlement
+    }
+
+
+@app.post("/admin/users/annual-prepaid-expire")
+def admin_expire_annual_prepaid(
+    request: Request,
+    payload: AdminLifecycleUserInput
+):
+    admin_user = require_admin(request)
+
+    apply_annual_prepaid_expiry(user_id=payload.user_id)
+
+    entitlement = get_user_entitlement_snapshot(payload.user_id)
+
+    log_admin_action(
+        admin_user_id=admin_user["user_id"],
+        action_type="admin.users.annual_prepaid_expire",
+        target_user_id=payload.user_id,
+        payload={}
+    )
+
+    return {
+        "ok": True,
+        "updated_by": admin_user["user_id"],
+        "user_id": payload.user_id,
         "entitlement": entitlement
     }
 

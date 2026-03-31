@@ -28,6 +28,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const renewalPlanCode = document.getElementById("renewalPlanCode");
   const applyRenewalSuccessBtn = document.getElementById("applyRenewalSuccessBtn");
   const applyRenewalFailureBtn = document.getElementById("applyRenewalFailureBtn");
+  const annualPlanCode = document.getElementById("annualPlanCode");
+  const annualTermDays = document.getElementById("annualTermDays");
+  const applyAnnualPrepaidActivateBtn = document.getElementById("applyAnnualPrepaidActivateBtn");
+  const applyAnnualPrepaidExpireBtn = document.getElementById("applyAnnualPrepaidExpireBtn");
   const cancelAtPeriodEndValue = document.getElementById("cancelAtPeriodEndValue");
   const applyCancelAtPeriodEndBtn = document.getElementById("applyCancelAtPeriodEndBtn");
   const applyGraceExpiryBtn = document.getElementById("applyGraceExpiryBtn");
@@ -313,6 +317,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const entitlement = user.entitlement || {};
     renewalPlanCode.value = entitlement.raw_plan_code || "anon";
+    if (annualPlanCode) {
+      annualPlanCode.value = entitlement.raw_plan_code && entitlement.raw_plan_code !== "anon"
+        ? entitlement.raw_plan_code
+        : "seeker";
+    }
+    if (annualTermDays) {
+      annualTermDays.value = 365;
+    }
     cancelAtPeriodEndValue.checked = Boolean(entitlement.cancel_at_period_end);
 
     overridePlanCode.value = entitlement.raw_plan_code || "anon";
@@ -507,6 +519,30 @@ document.addEventListener("DOMContentLoaded", () => {
       "Move the loaded user into grace status?",
       (targetUserId) =>
         postJson("/admin/users/renewal-failure-to-grace", {
+          user_id: targetUserId
+        })
+    );
+  });
+
+  applyAnnualPrepaidActivateBtn.addEventListener("click", async () => {
+    await confirmAndRunMutation(
+      "Activate annual prepaid",
+      `Activate annual prepaid plan "${annualPlanCode.value}" for ${Number(annualTermDays.value || 365)} day(s) on the loaded user?`,
+      (targetUserId) =>
+        postJson("/admin/users/annual-prepaid-activate", {
+          user_id: targetUserId,
+          plan_code: annualPlanCode.value,
+          term_days: Number(annualTermDays.value || 365)
+        })
+    );
+  });
+
+  applyAnnualPrepaidExpireBtn.addEventListener("click", async () => {
+    await confirmAndRunMutation(
+      "Apply annual expiry",
+      "Apply annual prepaid expiry to the loaded user? This only changes users whose expiry date is already in the past.",
+      (targetUserId) =>
+        postJson("/admin/users/annual-prepaid-expire", {
           user_id: targetUserId
         })
     );
