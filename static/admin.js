@@ -254,6 +254,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const scrolls = user.scrolls || {};
     const donations = user.donations || {};
     const entitlement = user.entitlement || {};
+    const support = user.support || {};
     const usage = user.usage || {};
 
     detailCards.innerHTML = `
@@ -291,10 +292,33 @@ document.addEventListener("DOMContentLoaded", () => {
         ${renderKV("Is entitled", entitlement.is_entitled)}
         ${renderKV("Is in grace", entitlement.is_in_grace)}
         ${renderKV("Downgraded for access", entitlement.downgraded_for_access)}
+        ${renderKV("Highest paid plan", entitlement.highest_paid_plan_ever)}
+        ${renderKV("Last paid plan", entitlement.last_paid_plan_code)}
+        ${renderKV("Donor floor", entitlement.donor_floor_plan_code)}
+        ${renderKV("Scroll floor", entitlement.scroll_floor_plan_code)}
+        ${renderKV("Fallback floor", entitlement.fallback_floor_plan_code)}
+        ${renderKV("Renewal offer", entitlement.renewal_offer_plan_code)}
+        ${renderKV("Last support mode", entitlement.last_support_mode)}
+        ${renderKV("Last support ended", entitlement.last_support_ended_at)}
+      </div>
+
+      <div class="detail-card">
+        <h3>Support Status</h3>
+        ${renderKV("Current access", support.current_access_label || support.current_access_plan_code)}
+        ${renderKV("Stored support level", support.stored_plan_label || support.stored_plan_code)}
+        ${renderKV("Highest paid level", support.highest_paid_label || support.highest_paid_plan_ever)}
+        ${renderKV("Donor floor", support.donor_floor_label || support.donor_floor_plan_code)}
+        ${renderKV("Scroll floor", support.scroll_floor_label || support.scroll_floor_plan_code)}
+        ${renderKV("Fallback floor", support.fallback_floor_label || support.fallback_floor_plan_code)}
+        ${renderKV("Renewal offer", support.renewal_offer_label || support.renewal_offer_plan_code)}
+        ${renderKV("Mode", support.mode_label || support.mode)}
+        ${renderKV("Message", support.message)}
+        ${renderKV("Renewal message", support.renewal_message)}
       </div>
 
       <div class="detail-card">
         <h3>Usage and Donations</h3>
+        ${renderKV("Usage window started", usage.usage_window_started_at)}
         ${renderKV("Current period questions", usage.current_period_questions_used)}
         ${renderKV("Lifetime questions", usage.lifetime_questions_used)}
         ${renderKV("Question limit", usage.question_limit_display ?? usage.question_limit)}

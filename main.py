@@ -1082,6 +1082,34 @@ def serialize_dt(value):
     return value.isoformat() if value else None
 
 
+def start_of_utc_day(value: Optional[datetime.datetime] = None) -> datetime.datetime:
+    value = value.astimezone(timezone.utc) if value else datetime.datetime.now(timezone.utc)
+    return value.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def start_of_utc_month(value: Optional[datetime.datetime] = None) -> datetime.datetime:
+    value = value.astimezone(timezone.utc) if value else datetime.datetime.now(timezone.utc)
+    return value.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def get_effective_usage_window_start(entitlement: dict) -> Optional[datetime.datetime]:
+    plan_code = normalize_plan_code(entitlement.get("effective_plan_code"))
+    status = entitlement.get("entitlement_status")
+    last_support_mode = entitlement.get("last_support_mode")
+    current_period_started_at = entitlement.get("current_period_started_at")
+
+    if status in {"active", "grace"} and last_support_mode == "monthly_recurring" and current_period_started_at:
+        return current_period_started_at
+
+    if plan_code in {"seeker", "magister", "sovereign", "philosophus", "theoricus"}:
+        return start_of_utc_month()
+
+    if plan_code == "pilgrim":
+        return start_of_utc_day()
+
+    return None
+
+
 def get_user_entitlement_snapshot(user_id: str) -> dict:
     conn = get_db_connection()
     try:
@@ -1534,7 +1562,12 @@ def apply_admin_entitlement_override(
                     subscription_renews_at = %s,
                     subscription_expires_at = %s,
                     grace_period_ends_at = %s,
-                    cancel_at_period_end = %s
+                    cancel_at_period_end = %s,
+                    last_support_ended_at = CASE
+                        WHEN %s IN ('expired', 'cancelled') THEN COALESCE(last_support_ended_at, %s)
+                        WHEN %s IN ('active', 'grace') THEN NULL
+                        ELSE last_support_ended_at
+                    END
                 WHERE id = %s
                 """,
                 (
@@ -1546,12 +1579,18 @@ def apply_admin_entitlement_override(
                     subscription_expires_at,
                     grace_period_ends_at,
                     cancel_at_period_end,
+                    normalized_status,
+                    now,
+                    normalized_status,
                     user_id
                 )
             )
         conn.commit()
     finally:
         conn.close()
+
+    refresh_user_fallback_state(user_id)
+
 
 def get_oracle_usage_counts(
     session_id: Optional[str] = None,
@@ -1827,9 +1866,10 @@ def get_question_display(plan_code: str, questions_used: int, question_limit: in
 def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
     if user_id:
         entitlement = get_user_entitlement_snapshot(user_id)
+        usage_window_start = get_effective_usage_window_start(entitlement)
         usage = get_oracle_usage_counts(
             user_id=user_id,
-            window_start=entitlement["current_period_started_at"]
+            window_start=usage_window_start
         )
         limit = PLAN_LIMITS.get(
             entitlement["effective_plan_code"],
@@ -2129,9 +2169,11 @@ def get_admin_user_detail(target_user_id: str) -> dict:
 
     donation_stats = get_user_donation_stats(target_user_id)
     entitlement = get_user_entitlement_snapshot(target_user_id)
+    support = build_support_status_payload(entitlement)
+    usage_window_start = get_effective_usage_window_start(entitlement)
     current_usage = get_oracle_usage_counts(
         user_id=target_user_id,
-        window_start=entitlement["current_period_started_at"]
+        window_start=usage_window_start
     )
     lifetime_usage = get_oracle_usage_counts(user_id=target_user_id)
 
@@ -2165,6 +2207,7 @@ def get_admin_user_detail(target_user_id: str) -> dict:
             "legacy_scroll_count": user_row.get("legacy_scroll_count", 0)
         },
         "donations": donation_stats,
+        "support": support,
         "entitlement": {
             "raw_plan_code": entitlement["raw_plan_code"],
             "effective_plan_code": entitlement["effective_plan_code"],
@@ -2177,7 +2220,15 @@ def get_admin_user_detail(target_user_id: str) -> dict:
             "cancel_at_period_end": entitlement["cancel_at_period_end"],
             "is_entitled": entitlement["is_entitled"],
             "is_in_grace": entitlement["is_in_grace"],
-            "downgraded_for_access": entitlement["downgraded_for_access"]
+            "downgraded_for_access": entitlement["downgraded_for_access"],
+            "highest_paid_plan_ever": entitlement["highest_paid_plan_ever"],
+            "last_paid_plan_code": entitlement["last_paid_plan_code"],
+            "donor_floor_plan_code": entitlement["donor_floor_plan_code"],
+            "scroll_floor_plan_code": entitlement["scroll_floor_plan_code"],
+            "fallback_floor_plan_code": entitlement["fallback_floor_plan_code"],
+            "renewal_offer_plan_code": entitlement["renewal_offer_plan_code"],
+            "last_support_mode": entitlement["last_support_mode"],
+            "last_support_ended_at": serialize_dt(entitlement["last_support_ended_at"])
         },
         "usage": {
             "current_period_questions_used": current_usage["questions_used"],
@@ -2186,6 +2237,7 @@ def get_admin_user_detail(target_user_id: str) -> dict:
             "question_limit_display": question_display["question_limit_display"],
             "questions_remaining_display": question_display["questions_remaining_display"],
             "is_unlimited_questions": question_display["is_unlimited_questions"],
+            "usage_window_started_at": serialize_dt(usage_window_start),
             "current_period_mode_counts": current_usage["mode_counts"],
             "lifetime_mode_counts": lifetime_usage["mode_counts"]
         }
@@ -2313,9 +2365,10 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
     donation_stats = get_user_donation_stats(user["user_id"])
     entitlement = get_user_entitlement_snapshot(user["user_id"])
     support = build_support_status_payload(entitlement)
+    usage_window_start = get_effective_usage_window_start(entitlement)
     usage = get_oracle_usage_counts(
         user_id=user["user_id"],
-        window_start=entitlement["current_period_started_at"]
+        window_start=usage_window_start
     )
 
     conn = get_db_connection()
@@ -2418,7 +2471,7 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
             "question_limit_display": question_display["question_limit_display"],
             "questions_remaining_display": question_display["questions_remaining_display"],
             "is_unlimited_questions": question_display["is_unlimited_questions"],
-            "usage_window_started_at": serialize_dt(entitlement["current_period_started_at"]),
+            "usage_window_started_at": serialize_dt(usage_window_start),
             "hathor_questions": mode_counts.get("Hathor", 0),
             "moses_questions": mode_counts.get("Moses", 0)
         }
