@@ -25,6 +25,7 @@ from PyPDF2 import PdfReader
 
 import httpx
 import psycopg2
+import stripe
 
 from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio
@@ -42,6 +43,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 load_dotenv()
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
+STRIPE_LIVEMODE = os.getenv("STRIPE_LIVEMODE", "false").lower() == "true"
 EMBEDDINGS_ENABLED = os.getenv("EMBEDDINGS_ENABLED", "false").lower() == "true"
 EMBEDDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "embedding_cache.json")
 
@@ -1260,11 +1265,14 @@ def normalize_entitlement_status(status: Optional[str]) -> str:
 def apply_subscription_renewal_success(
     user_id: str,
     plan_code: str,
-    cycle_days: int = DEFAULT_BILLING_CYCLE_DAYS
+    cycle_days: int = DEFAULT_BILLING_CYCLE_DAYS,
+    period_start: Optional[datetime.datetime] = None,
+    period_end: Optional[datetime.datetime] = None
 ) -> None:
     now = utc_now()
     normalized_plan = normalize_plan_code(plan_code)
-    next_renewal = now + datetime.timedelta(days=cycle_days)
+    effective_period_start = period_start or now
+    next_renewal = period_end or (effective_period_start + datetime.timedelta(days=cycle_days))
 
     conn = get_db_connection()
     try:
@@ -1313,8 +1321,8 @@ def apply_subscription_renewal_success(
                 """,
                 (
                     normalized_plan,
-                    now,
-                    now,
+                    effective_period_start,
+                    effective_period_start,
                     next_renewal,
                     next_renewal,
                     highest_paid_plan_ever,
@@ -1334,11 +1342,14 @@ def apply_subscription_renewal_success(
 def apply_annual_prepaid_activation(
     user_id: str,
     plan_code: str,
-    term_days: int = DEFAULT_ANNUAL_PREPAID_DAYS
+    term_days: int = DEFAULT_ANNUAL_PREPAID_DAYS,
+    period_start: Optional[datetime.datetime] = None,
+    period_end: Optional[datetime.datetime] = None
 ) -> None:
     now = utc_now()
     normalized_plan = normalize_plan_code(plan_code)
-    expires_at = now + datetime.timedelta(days=term_days)
+    effective_period_start = period_start or now
+    expires_at = period_end or (effective_period_start + datetime.timedelta(days=term_days))
 
     conn = get_db_connection()
     try:
@@ -1387,8 +1398,8 @@ def apply_annual_prepaid_activation(
                 """,
                 (
                     normalized_plan,
-                    now,
-                    now,
+                    effective_period_start,
+                    effective_period_start,
                     expires_at,
                     highest_paid_plan_ever,
                     normalized_plan,
