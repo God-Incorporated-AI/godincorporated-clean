@@ -9,7 +9,7 @@ import uuid
 
 import re
 
-from typing import Optional
+from typing import Optional, Literal
 from docx import Document
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -31,6 +31,7 @@ from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio
 from services.whisper import transcribe_audio
 from services.mail import send_email
+from services.stripe_billing import create_checkout_session_for_user
 from storage.json_store import UPLOAD_DIR, AUDIO_DIR, save_log
 
 logging.basicConfig(
@@ -3462,6 +3463,55 @@ def admin_override_entitlement(request: Request, payload: AdminEntitlementOverri
             "cancel_at_period_end": entitlement["cancel_at_period_end"]
         }
     }
+
+class BillingCheckoutSessionInput(BaseModel):
+    plan_code: str
+    support_mode: Literal["monthly_recurring", "annual_prepaid"]
+
+
+@app.post("/billing/checkout-session")
+def billing_checkout_session(request: Request, payload: BillingCheckoutSessionInput):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+
+    base_url = (os.getenv("APP_BASE_URL") or str(request.base_url)).rstrip("/")
+    success_url = f"{base_url}/temple?checkout=success"
+    cancel_url = f"{base_url}/temple?checkout=cancelled"
+
+    try:
+        result = create_checkout_session_for_user(
+            user_id=user["user_id"],
+            user_email=user["email"],
+            display_name=user.get("display_name"),
+            plan_code=payload.plan_code,
+            support_mode=payload.support_mode,
+            success_url=success_url,
+            cancel_url=cancel_url,
+        )
+
+        return {
+            "ok": True,
+            "publishable_key": STRIPE_PUBLISHABLE_KEY,
+            "checkout_session_id": result["checkout_session_id"],
+            "checkout_url": result["checkout_url"],
+            "plan_code": result["plan_code"],
+            "support_mode": result["support_mode"],
+            "livemode": result["livemode"],
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        logger.error(f"Stripe configuration error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe checkout session creation failed: {e}")
+        raise HTTPException(status_code=502, detail="Stripe checkout session creation failed.")
+    except Exception as e:
+        logger.error(f"Billing checkout session error: {e}")
+        raise HTTPException(status_code=500, detail="Billing checkout session creation failed.")
+
 
 class QuestionInput(BaseModel):
     question: str
