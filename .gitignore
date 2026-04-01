@@ -30,3 +30,6 @@ canonical_corpus/
 canonical_corpus/
 *.pdf
 embedding_cache.json
+
+# local backup artifacts
+local_backups/
