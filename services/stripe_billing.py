@@ -32,8 +32,8 @@ def get_checkout_plan_and_price(plan_code: str, support_mode: str) -> dict:
     normalized_plan = (plan_code or "").strip().lower()
     normalized_mode = (support_mode or "").strip().lower()
 
-    if normalized_mode not in {"monthly_recurring", "annual_prepaid"}:
-        raise ValueError("Invalid support_mode. Use 'monthly_recurring' or 'annual_prepaid'.")
+    if normalized_mode not in {"monthly_recurring", "annual_prepaid", "annual_recurring"}:
+        raise ValueError("Invalid support_mode. Use 'monthly_recurring', 'annual_prepaid', or 'annual_recurring'.")
 
     conn = get_db_connection()
     try:
@@ -64,7 +64,7 @@ def get_checkout_plan_and_price(plan_code: str, support_mode: str) -> dict:
             if normalized_mode == "monthly_recurring" and not plan_row["monthly_enabled"]:
                 raise ValueError(f"Monthly support is not enabled for {normalized_plan}.")
 
-            if normalized_mode == "annual_prepaid" and not plan_row["annual_enabled"]:
+            if normalized_mode in {"annual_prepaid", "annual_recurring"} and not plan_row["annual_enabled"]:
                 raise ValueError(f"Annual support is not enabled for {normalized_plan}.")
 
             cur.execute(
@@ -87,9 +87,8 @@ def get_checkout_plan_and_price(plan_code: str, support_mode: str) -> dict:
             price_row = cur.fetchone()
 
             if not price_row:
-                mode_label = "monthly_recurring" if normalized_mode == "monthly_recurring" else "annual_prepaid"
                 raise ValueError(
-                    f"No active Stripe price mapping found for plan_code={normalized_plan}, support_mode={mode_label}, livemode={get_stripe_livemode()}."
+                    f"No active Stripe price mapping found for plan_code={normalized_plan}, support_mode={normalized_mode}, livemode={get_stripe_livemode()}."
                 )
 
             return {
@@ -246,7 +245,7 @@ def create_checkout_session_for_user(
         "metadata": metadata,
     }
 
-    if plan["support_mode"] == "monthly_recurring":
+    if plan["support_mode"] in {"monthly_recurring", "annual_recurring"}:
         params["mode"] = "subscription"
         params["subscription_data"] = {
             "metadata": metadata,

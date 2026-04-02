@@ -1104,7 +1104,7 @@ def get_effective_usage_window_start(entitlement: dict) -> Optional[datetime.dat
     last_support_mode = entitlement.get("last_support_mode")
     current_period_started_at = entitlement.get("current_period_started_at")
 
-    if status in {"active", "grace"} and last_support_mode == "monthly_recurring" and current_period_started_at:
+    if status in {"active", "grace"} and last_support_mode in {"monthly_recurring", "annual_recurring"} and current_period_started_at:
         return current_period_started_at
 
     if plan_code in {"seeker", "magister", "sovereign", "philosophus", "theoricus"}:
@@ -1268,7 +1268,8 @@ def apply_subscription_renewal_success(
     plan_code: str,
     cycle_days: int = DEFAULT_BILLING_CYCLE_DAYS,
     period_start: Optional[datetime.datetime] = None,
-    period_end: Optional[datetime.datetime] = None
+    period_end: Optional[datetime.datetime] = None,
+    support_mode: str = "monthly_recurring"
 ) -> None:
     now = utc_now()
     normalized_plan = normalize_plan_code(plan_code)
@@ -1316,7 +1317,7 @@ def apply_subscription_renewal_success(
                     last_paid_plan_code = %s,
                     donor_floor_plan_code = %s,
                     renewal_offer_plan_code = %s,
-                    last_support_mode = 'monthly_recurring',
+                    last_support_mode = %s,
                     last_support_ended_at = NULL
                 WHERE id = %s
                 """,
@@ -1330,6 +1331,7 @@ def apply_subscription_renewal_success(
                     normalized_plan,
                     donor_floor_plan_code,
                     normalized_plan,
+                    support_mode,
                     user_id
                 )
             )
@@ -1772,6 +1774,7 @@ def build_support_status_payload(entitlement: dict) -> dict:
     support_mode_label = {
         "monthly_recurring": "Monthly recurring support",
         "annual_prepaid": "Annual prepaid support",
+        "annual_recurring": "Annual recurring support",
     }.get(last_support_mode)
 
     if status == "active":
@@ -1779,6 +1782,8 @@ def build_support_status_payload(entitlement: dict) -> dict:
             message = f"Annual prepaid support is active through {serialize_dt(entitlement['subscription_expires_at'])}."
         elif last_support_mode == "monthly_recurring" and entitlement.get("subscription_renews_at"):
             message = f"Monthly recurring support is active. Next renewal is {serialize_dt(entitlement['subscription_renews_at'])}."
+        elif last_support_mode == "annual_recurring" and entitlement.get("subscription_renews_at"):
+            message = f"Annual recurring support is active. Next renewal is {serialize_dt(entitlement['subscription_renews_at'])}."
         elif support_mode_label:
             message = f"{support_mode_label} is active."
         else:
@@ -3464,9 +3469,614 @@ def admin_override_entitlement(request: Request, payload: AdminEntitlementOverri
         }
     }
 
+
+def stripe_ts_to_dt(value: Optional[int]) -> Optional[datetime.datetime]:
+    if value is None:
+        return None
+    return datetime.datetime.fromtimestamp(value, tz=timezone.utc)
+
+
+def resolve_user_and_subscription_context(
+    stripe_customer_id: Optional[str] = None,
+    stripe_subscription_id: Optional[str] = None
+) -> dict:
+    context = {
+        "user_id": None,
+        "billing_customer_id": None,
+        "subscription_row_id": None,
+        "plan_code": None,
+        "support_mode": None,
+        "user_email": None,
+        "display_name": None,
+    }
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            if stripe_subscription_id:
+                cur.execute(
+                    """
+                    SELECT
+                        s.id AS subscription_row_id,
+                        s.user_id,
+                        s.plan_code,
+                        s.support_mode,
+                        bc.id AS billing_customer_id,
+                        u.email AS user_email,
+                        u.display_name
+                    FROM subscriptions s
+                    LEFT JOIN billing_customers bc ON bc.id = s.billing_customer_id
+                    LEFT JOIN users u ON u.id = s.user_id
+                    WHERE s.provider = 'stripe'
+                      AND s.stripe_subscription_id = %s
+                    LIMIT 1
+                    """,
+                    (stripe_subscription_id,)
+                )
+                row = cur.fetchone()
+                if row:
+                    context.update({
+                        "user_id": row["user_id"],
+                        "billing_customer_id": row["billing_customer_id"],
+                        "subscription_row_id": row["subscription_row_id"],
+                        "plan_code": row["plan_code"],
+                        "support_mode": row["support_mode"],
+                        "user_email": row["user_email"],
+                        "display_name": row["display_name"],
+                    })
+                    return context
+
+            if stripe_customer_id:
+                cur.execute(
+                    """
+                    SELECT
+                        bc.id AS billing_customer_id,
+                        bc.user_id,
+                        u.email AS user_email,
+                        u.display_name
+                    FROM billing_customers bc
+                    LEFT JOIN users u ON u.id = bc.user_id
+                    WHERE bc.provider = 'stripe'
+                      AND bc.stripe_customer_id = %s
+                    LIMIT 1
+                    """,
+                    (stripe_customer_id,)
+                )
+                row = cur.fetchone()
+                if row:
+                    context.update({
+                        "user_id": row["user_id"],
+                        "billing_customer_id": row["billing_customer_id"],
+                        "user_email": row["user_email"],
+                        "display_name": row["display_name"],
+                    })
+    finally:
+        conn.close()
+
+    return context
+
+
+def upsert_local_stripe_subscription(
+    subscription_obj: dict,
+    fallback_user_id: Optional[str] = None,
+    fallback_plan_code: Optional[str] = None,
+    fallback_support_mode: Optional[str] = None,
+    fallback_checkout_session_id: Optional[str] = None
+) -> dict:
+    metadata = subscription_obj.get("metadata") or {}
+    stripe_customer_id = subscription_obj.get("customer")
+    stripe_subscription_id = subscription_obj.get("id")
+
+    context = resolve_user_and_subscription_context(
+        stripe_customer_id=stripe_customer_id,
+        stripe_subscription_id=stripe_subscription_id
+    )
+
+    user_id = metadata.get("user_id") or fallback_user_id or context.get("user_id")
+    plan_code = normalize_plan_code(metadata.get("plan_code") or fallback_plan_code or context.get("plan_code"))
+    support_mode = (
+        (metadata.get("support_mode") or fallback_support_mode or context.get("support_mode") or "").strip().lower()
+    )
+
+    if not support_mode:
+        try:
+            interval = subscription_obj["items"]["data"][0]["price"]["recurring"]["interval"]
+            support_mode = "annual_recurring" if interval == "year" else "monthly_recurring"
+        except Exception:
+            support_mode = "monthly_recurring"
+
+    billing_customer_id = context.get("billing_customer_id")
+
+    if billing_customer_id is None and stripe_customer_id:
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT id, user_id
+                    FROM billing_customers
+                    WHERE provider = 'stripe'
+                      AND stripe_customer_id = %s
+                    LIMIT 1
+                    """,
+                    (stripe_customer_id,)
+                )
+                row = cur.fetchone()
+                if row:
+                    billing_customer_id = row["id"]
+                    if not user_id:
+                        user_id = row["user_id"]
+        finally:
+            conn.close()
+
+    price_id = None
+    product_id = None
+    try:
+        price_id = subscription_obj["items"]["data"][0]["price"]["id"]
+        product_id = subscription_obj["items"]["data"][0]["price"]["product"]
+    except Exception:
+        pass
+
+    latest_invoice = subscription_obj.get("latest_invoice")
+    if isinstance(latest_invoice, dict):
+        latest_invoice_id = latest_invoice.get("id")
+    else:
+        latest_invoice_id = latest_invoice
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO subscriptions (
+                    user_id,
+                    billing_customer_id,
+                    provider,
+                    stripe_subscription_id,
+                    stripe_checkout_session_id,
+                    stripe_product_id,
+                    stripe_price_id,
+                    plan_code,
+                    support_mode,
+                    status,
+                    current_period_start,
+                    current_period_end,
+                    cancel_at_period_end,
+                    canceled_at,
+                    ended_at,
+                    latest_invoice_id,
+                    livemode,
+                    subscription_metadata_json
+                )
+                VALUES (
+                    %s, %s, 'stripe', %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s::jsonb
+                )
+                ON CONFLICT (stripe_subscription_id)
+                DO UPDATE SET
+                    user_id = EXCLUDED.user_id,
+                    billing_customer_id = EXCLUDED.billing_customer_id,
+                    stripe_checkout_session_id = COALESCE(EXCLUDED.stripe_checkout_session_id, subscriptions.stripe_checkout_session_id),
+                    stripe_product_id = COALESCE(EXCLUDED.stripe_product_id, subscriptions.stripe_product_id),
+                    stripe_price_id = COALESCE(EXCLUDED.stripe_price_id, subscriptions.stripe_price_id),
+                    plan_code = COALESCE(EXCLUDED.plan_code, subscriptions.plan_code),
+                    support_mode = COALESCE(EXCLUDED.support_mode, subscriptions.support_mode),
+                    status = EXCLUDED.status,
+                    current_period_start = EXCLUDED.current_period_start,
+                    current_period_end = EXCLUDED.current_period_end,
+                    cancel_at_period_end = EXCLUDED.cancel_at_period_end,
+                    canceled_at = EXCLUDED.canceled_at,
+                    ended_at = EXCLUDED.ended_at,
+                    latest_invoice_id = EXCLUDED.latest_invoice_id,
+                    livemode = EXCLUDED.livemode,
+                    subscription_metadata_json = EXCLUDED.subscription_metadata_json,
+                    updated_at = NOW()
+                RETURNING id, user_id, plan_code, support_mode, stripe_subscription_id
+                """,
+                (
+                    user_id,
+                    billing_customer_id,
+                    stripe_subscription_id,
+                    fallback_checkout_session_id,
+                    product_id,
+                    price_id,
+                    plan_code,
+                    support_mode,
+                    subscription_obj.get("status") or "incomplete",
+                    stripe_ts_to_dt(subscription_obj.get("current_period_start")),
+                    stripe_ts_to_dt(subscription_obj.get("current_period_end")),
+                    bool(subscription_obj.get("cancel_at_period_end")),
+                    stripe_ts_to_dt(subscription_obj.get("canceled_at")),
+                    stripe_ts_to_dt(subscription_obj.get("ended_at")),
+                    latest_invoice_id,
+                    bool(subscription_obj.get("livemode")),
+                    json.dumps(metadata),
+                )
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return row
+    finally:
+        conn.close()
+
+
+def upsert_billing_transaction_from_invoice(
+    event_id: str,
+    invoice_obj: dict,
+    user_id: Optional[str],
+    subscription_row_id: Optional[int],
+    plan_code: Optional[str],
+    support_mode: Optional[str],
+    transaction_kind: str,
+    status: str
+) -> None:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO billing_transactions (
+                    user_id,
+                    billing_customer_id,
+                    subscription_id,
+                    provider,
+                    stripe_event_id,
+                    stripe_invoice_id,
+                    stripe_payment_intent_id,
+                    stripe_charge_id,
+                    plan_code,
+                    support_mode,
+                    transaction_kind,
+                    status,
+                    amount_subtotal,
+                    amount_total,
+                    currency,
+                    occurred_at,
+                    livemode,
+                    raw_summary_json
+                )
+                VALUES (
+                    %s,
+                    NULL,
+                    %s,
+                    'stripe',
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s::jsonb
+                )
+                """,
+                (
+                    user_id,
+                    subscription_row_id,
+                    event_id,
+                    invoice_obj.get("id"),
+                    invoice_obj.get("payment_intent"),
+                    invoice_obj.get("charge"),
+                    plan_code,
+                    support_mode,
+                    transaction_kind,
+                    status,
+                    invoice_obj.get("subtotal"),
+                    invoice_obj.get("total"),
+                    invoice_obj.get("currency"),
+                    stripe_ts_to_dt(invoice_obj.get("created")),
+                    bool(invoice_obj.get("livemode")),
+                    json.dumps({
+                        "object": "invoice",
+                        "billing_reason": invoice_obj.get("billing_reason"),
+                        "subscription": invoice_obj.get("subscription"),
+                        "customer": invoice_obj.get("customer"),
+                    }),
+                )
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def send_upcoming_renewal_email(
+    user_email: str,
+    display_name: Optional[str],
+    plan_code: str,
+    support_mode: str,
+    amount_due: Optional[int],
+    currency: Optional[str],
+    renewal_at: Optional[datetime.datetime]
+) -> None:
+    if not user_email:
+        return
+
+    amount_text = ""
+    if amount_due is not None and currency:
+        amount_text = f"{amount_due / 100:.2f} {currency.upper()}"
+
+    renewal_text = serialize_dt(renewal_at) if renewal_at else "the upcoming renewal date"
+
+    salutation = display_name or "Seeker"
+    support_label = "annual recurring support" if support_mode == "annual_recurring" else "monthly recurring support"
+
+    html = f"""
+    <p>Hello {salutation},</p>
+    <p>This is an advance notice that your {plan_code.title()} {support_label} is scheduled to renew on <strong>{renewal_text}</strong>.</p>
+    <p>Upcoming charge: <strong>{amount_text or "see Stripe renewal invoice"}</strong></p>
+    <p>If you need to review or update your support before renewal, please do so before that date.</p>
+    <p>Thank you for supporting God Incorporated.</p>
+    """
+
+    send_email(
+        to_email=user_email,
+        subject=f"Upcoming renewal notice for {plan_code.title()} support",
+        html=html
+    )
+
+
+def insert_payment_event_if_new(event: dict, user_id: Optional[str]) -> bool:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO payment_events (
+                    provider,
+                    stripe_event_id,
+                    event_type,
+                    object_type,
+                    object_id,
+                    user_id,
+                    livemode,
+                    api_version,
+                    payload_json,
+                    processing_status,
+                    handler_version
+                )
+                VALUES (
+                    'stripe',
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s::jsonb,
+                    'processing',
+                    'phase8_annual_recurring_v1'
+                )
+                ON CONFLICT (stripe_event_id) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    event.get("id"),
+                    event.get("type"),
+                    (event.get("data", {}).get("object", {}) or {}).get("object"),
+                    (event.get("data", {}).get("object", {}) or {}).get("id"),
+                    user_id,
+                    bool(event.get("livemode")),
+                    event.get("api_version"),
+                    json.dumps(event),
+                )
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return bool(row)
+    finally:
+        conn.close()
+
+
+def mark_payment_event_processed(event_id: str, helper_name: Optional[str]) -> None:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE payment_events
+                SET
+                    processing_status = 'processed',
+                    helper_name = %s,
+                    helper_applied_at = NOW(),
+                    processed_at = NOW(),
+                    error_text = NULL
+                WHERE stripe_event_id = %s
+                """,
+                (helper_name, event_id)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def mark_payment_event_error(event_id: str, error_text: str) -> None:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE payment_events
+                SET
+                    processing_status = 'error',
+                    processed_at = NOW(),
+                    error_text = %s
+                WHERE stripe_event_id = %s
+                """,
+                (error_text[:2000], event_id)
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def process_stripe_event(event: dict) -> dict:
+    event_type = event.get("type")
+    obj = event.get("data", {}).get("object", {}) or {}
+
+    stripe_customer_id = obj.get("customer")
+    stripe_subscription_id = obj.get("subscription")
+    if isinstance(stripe_subscription_id, dict):
+        stripe_subscription_id = stripe_subscription_id.get("id")
+
+    context = resolve_user_and_subscription_context(
+        stripe_customer_id=stripe_customer_id,
+        stripe_subscription_id=stripe_subscription_id
+    )
+
+    user_id = (obj.get("metadata") or {}).get("user_id") or context.get("user_id")
+
+    is_new = insert_payment_event_if_new(event, user_id)
+    if not is_new:
+        return {"ok": True, "duplicate": True, "event_type": event_type}
+
+    try:
+        helper_name = None
+
+        if event_type == "checkout.session.completed":
+            if obj.get("mode") == "subscription" and obj.get("subscription"):
+                subscription_obj = stripe.Subscription.retrieve(obj.get("subscription"))
+                sub_row = upsert_local_stripe_subscription(
+                    subscription_obj=subscription_obj,
+                    fallback_user_id=(obj.get("metadata") or {}).get("user_id"),
+                    fallback_plan_code=(obj.get("metadata") or {}).get("plan_code"),
+                    fallback_support_mode=(obj.get("metadata") or {}).get("support_mode"),
+                    fallback_checkout_session_id=obj.get("id")
+                )
+                helper_name = f"upsert_local_stripe_subscription:{sub_row.get('support_mode')}"
+            elif obj.get("mode") == "payment":
+                metadata = obj.get("metadata") or {}
+                if metadata.get("support_mode") == "annual_prepaid":
+                    apply_annual_prepaid_activation(
+                        user_id=metadata.get("user_id"),
+                        plan_code=metadata.get("plan_code")
+                    )
+                    helper_name = "apply_annual_prepaid_activation"
+
+        elif event_type in {"customer.subscription.updated", "customer.subscription.deleted"}:
+            sub_row = upsert_local_stripe_subscription(subscription_obj=obj)
+            if event_type == "customer.subscription.updated":
+                set_cancel_at_period_end(
+                    user_id=sub_row.get("user_id"),
+                    should_cancel=bool(obj.get("cancel_at_period_end"))
+                )
+                helper_name = "set_cancel_at_period_end"
+            else:
+                if sub_row.get("user_id"):
+                    set_cancel_at_period_end(sub_row.get("user_id"), False)
+                helper_name = "subscription_deleted_observed"
+
+        elif event_type == "invoice.paid":
+            context = resolve_user_and_subscription_context(
+                stripe_customer_id=obj.get("customer"),
+                stripe_subscription_id=obj.get("subscription")
+            )
+            if context.get("user_id") and context.get("plan_code") and context.get("support_mode") in {"monthly_recurring", "annual_recurring"}:
+                lines = ((obj.get("lines") or {}).get("data") or [])
+                period_start = None
+                period_end = None
+                if lines:
+                    period_start = stripe_ts_to_dt(((lines[0].get("period") or {}).get("start")))
+                    period_end = stripe_ts_to_dt(((lines[0].get("period") or {}).get("end")))
+
+                apply_subscription_renewal_success(
+                    user_id=context["user_id"],
+                    plan_code=context["plan_code"],
+                    period_start=period_start,
+                    period_end=period_end,
+                    support_mode=context["support_mode"]
+                )
+                upsert_billing_transaction_from_invoice(
+                    event_id=event["id"],
+                    invoice_obj=obj,
+                    user_id=context["user_id"],
+                    subscription_row_id=context.get("subscription_row_id"),
+                    plan_code=context.get("plan_code"),
+                    support_mode=context.get("support_mode"),
+                    transaction_kind="monthly_renewal" if context.get("support_mode") == "monthly_recurring" else "annual_prepaid",
+                    status="succeeded"
+                )
+                helper_name = "apply_subscription_renewal_success"
+
+        elif event_type == "invoice.payment_failed":
+            context = resolve_user_and_subscription_context(
+                stripe_customer_id=obj.get("customer"),
+                stripe_subscription_id=obj.get("subscription")
+            )
+            if context.get("user_id") and context.get("support_mode") in {"monthly_recurring", "annual_recurring"}:
+                apply_subscription_renewal_failure_to_grace(context["user_id"])
+                upsert_billing_transaction_from_invoice(
+                    event_id=event["id"],
+                    invoice_obj=obj,
+                    user_id=context["user_id"],
+                    subscription_row_id=context.get("subscription_row_id"),
+                    plan_code=context.get("plan_code"),
+                    support_mode=context.get("support_mode"),
+                    transaction_kind="monthly_renewal" if context.get("support_mode") == "monthly_recurring" else "annual_prepaid",
+                    status="failed"
+                )
+                helper_name = "apply_subscription_renewal_failure_to_grace"
+
+        elif event_type == "invoice.upcoming":
+            context = resolve_user_and_subscription_context(
+                stripe_customer_id=obj.get("customer"),
+                stripe_subscription_id=obj.get("subscription")
+            )
+            if context.get("user_email") and context.get("support_mode") in {"monthly_recurring", "annual_recurring"}:
+                lines = ((obj.get("lines") or {}).get("data") or [])
+                renewal_at = None
+                if lines:
+                    renewal_at = stripe_ts_to_dt(((lines[0].get("period") or {}).get("end")))
+                send_upcoming_renewal_email(
+                    user_email=context["user_email"],
+                    display_name=context.get("display_name"),
+                    plan_code=context.get("plan_code") or "support",
+                    support_mode=context.get("support_mode"),
+                    amount_due=obj.get("amount_due"),
+                    currency=obj.get("currency"),
+                    renewal_at=renewal_at
+                )
+                helper_name = "send_upcoming_renewal_email"
+
+        mark_payment_event_processed(event["id"], helper_name)
+        return {"ok": True, "duplicate": False, "event_type": event_type, "helper_name": helper_name}
+    except Exception as e:
+        mark_payment_event_error(event["id"], str(e))
+        raise
+
+
+@app.post("/billing/stripe/webhook")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=500, detail="STRIPE_WEBHOOK_SECRET not set.")
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload=payload,
+            sig_header=sig_header,
+            secret=STRIPE_WEBHOOK_SECRET
+        )
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid Stripe payload.")
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Invalid Stripe signature.")
+
+    result = process_stripe_event(event)
+    return {"ok": True, "result": result}
+
+
 class BillingCheckoutSessionInput(BaseModel):
     plan_code: str
-    support_mode: Literal["monthly_recurring", "annual_prepaid"]
+    support_mode: Literal["monthly_recurring", "annual_prepaid", "annual_recurring"]
 
 
 @app.post("/billing/checkout-session")
