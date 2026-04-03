@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Optional
 
@@ -33,7 +34,9 @@ def get_checkout_plan_and_price(plan_code: str, support_mode: str) -> dict:
     normalized_mode = (support_mode or "").strip().lower()
 
     if normalized_mode not in {"monthly_recurring", "annual_prepaid", "annual_recurring"}:
-        raise ValueError("Invalid support_mode. Use 'monthly_recurring', 'annual_prepaid', or 'annual_recurring'.")
+        raise ValueError(
+            "Invalid support_mode. Use 'monthly_recurring', 'annual_prepaid', or 'annual_recurring'."
+        )
 
     conn = get_db_connection()
     try:
@@ -88,7 +91,8 @@ def get_checkout_plan_and_price(plan_code: str, support_mode: str) -> dict:
 
             if not price_row:
                 raise ValueError(
-                    f"No active Stripe price mapping found for plan_code={normalized_plan}, support_mode={normalized_mode}, livemode={get_stripe_livemode()}."
+                    f"No active Stripe price mapping found for plan_code={normalized_plan}, "
+                    f"support_mode={normalized_mode}, livemode={get_stripe_livemode()}."
                 )
 
             return {
@@ -118,7 +122,10 @@ def get_existing_billing_customer(user_id: str) -> Optional[dict]:
                 """,
                 (user_id,)
             )
-            return cur.fetchone()
+            row = cur.fetchone()
+            if row and not row.get("stripe_customer_id") and row.get("provider_customer_id"):
+                row["stripe_customer_id"] = row["provider_customer_id"]
+            return row
     finally:
         conn.close()
 
@@ -137,7 +144,9 @@ def upsert_billing_customer(
                 INSERT INTO billing_customers (
                     user_id,
                     provider,
+                    provider_customer_id,
                     stripe_customer_id,
+                    email_snapshot,
                     email_at_create,
                     default_payment_method_id,
                     customer_metadata_json,
@@ -149,14 +158,19 @@ def upsert_billing_customer(
                     %s,
                     %s,
                     %s,
+                    %s,
+                    %s,
                     %s::jsonb,
                     %s
                 )
                 ON CONFLICT (provider, user_id)
                 DO UPDATE SET
+                    provider_customer_id = EXCLUDED.provider_customer_id,
                     stripe_customer_id = EXCLUDED.stripe_customer_id,
+                    email_snapshot = COALESCE(billing_customers.email_snapshot, EXCLUDED.email_snapshot),
                     email_at_create = COALESCE(billing_customers.email_at_create, EXCLUDED.email_at_create),
                     default_payment_method_id = COALESCE(EXCLUDED.default_payment_method_id, billing_customers.default_payment_method_id),
+                    customer_metadata_json = EXCLUDED.customer_metadata_json,
                     livemode = EXCLUDED.livemode,
                     updated_at = NOW()
                 RETURNING *
@@ -164,9 +178,11 @@ def upsert_billing_customer(
                 (
                     user_id,
                     stripe_customer_id,
+                    stripe_customer_id,
+                    email_at_create,
                     email_at_create,
                     default_payment_method_id,
-                    '{"source":"phase8_checkout"}',
+                    json.dumps({"source": "phase8_checkout"}),
                     get_stripe_livemode(),
                 )
             )
@@ -261,10 +277,7 @@ def create_checkout_session_for_user(
     return {
         "checkout_session_id": session["id"],
         "checkout_url": session["url"],
-        "stripe_customer_id": billing_customer["stripe_customer_id"],
-        "stripe_price_id": plan["stripe_price_id"],
-        "stripe_product_id": plan["stripe_product_id"],
         "plan_code": plan["plan_code"],
         "support_mode": plan["support_mode"],
-        "livemode": plan["livemode"],
+        "livemode": session["livemode"],
     }
