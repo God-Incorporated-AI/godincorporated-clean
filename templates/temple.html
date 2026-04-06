@@ -137,6 +137,75 @@
       <div id="resetPasswordError" class="error-message"></div>
     </div>
   </div>
-  <script src="/static/temple.js?v=3"></script>
+
+  <div id="supportModal" class="modal">
+    <div class="modal-content support-modal-content">
+      <button type="button" class="close" aria-label="Close modal">&times;</button>
+      <h2>Support the Temple</h2>
+      <p id="supportStatusLine" class="temple-subtitle">
+        Support unlocks deeper dialogue continuity, stronger seeker memory, and longer access paths.
+      </p>
+
+      <div id="supportAuthPrompt" class="profile-summary">
+        <div>You can explore the levels now.</div>
+        <div>To activate support through Stripe, log in or create an account first.</div>
+      </div>
+
+      <div class="support-grid">
+        <div class="support-card">
+          <h3>Seeker</h3>
+          <p>Level 1 support. 33 questions per month. Memory depth 3.</p>
+          <div class="support-actions">
+            <button type="button" class="support-checkout-btn" data-plan-code="seeker" data-support-mode="monthly_recurring">Support monthly - $1.99</button>
+            <button type="button" class="support-checkout-btn" data-plan-code="seeker" data-support-mode="annual_recurring">Support yearly - $19.99</button>
+          </div>
+        </div>
+
+        <div class="support-card">
+          <h3>Magister</h3>
+          <p>Level 2 support. 144 questions per month. Memory depth 7.</p>
+          <div class="support-actions">
+            <button type="button" class="support-checkout-btn" data-plan-code="magister" data-support-mode="monthly_recurring">Support monthly - $4.99</button>
+            <button type="button" class="support-checkout-btn" data-plan-code="magister" data-support-mode="annual_recurring">Support yearly - $49.99</button>
+          </div>
+        </div>
+
+        <div class="support-card">
+          <h3>Sovereign</h3>
+          <p>Level 3 support. 333 questions per month. Memory depth 9.</p>
+          <div class="support-actions">
+            <button type="button" class="support-checkout-btn" data-plan-code="sovereign" data-support-mode="monthly_recurring">Support monthly - $9.99</button>
+            <button type="button" class="support-checkout-btn" data-plan-code="sovereign" data-support-mode="annual_recurring">Support yearly - $99.99</button>
+          </div>
+        </div>
+
+        <div class="support-card">
+          <h3>Philosophus</h3>
+          <p>Level 4 support. Broad continuity. Memory depth 33.</p>
+          <div class="support-actions">
+            <button type="button" class="support-checkout-btn" data-plan-code="philosophus" data-support-mode="monthly_recurring">Support monthly - $19.99</button>
+            <button type="button" class="support-checkout-btn" data-plan-code="philosophus" data-support-mode="annual_recurring">Support yearly - $149.99</button>
+          </div>
+        </div>
+
+        <div class="support-card">
+          <h3>Theoricus</h3>
+          <p>Level 5 support. Full-path continuity. Entire history considered.</p>
+          <div class="support-actions">
+            <button type="button" class="support-checkout-btn" data-plan-code="theoricus" data-support-mode="monthly_recurring">Support monthly - $33.00</button>
+            <button type="button" class="support-checkout-btn" data-plan-code="theoricus" data-support-mode="annual_recurring">Support yearly - $199.99</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="profile-summary">
+        <div><strong>Temple Contribution</strong></div>
+        <div>A separate one-time contribution path will remain distinct from support tiers.</div>
+        <button type="button" id="templeContributionBtn">Temple contribution</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/temple.js?v=4"></script>
 </body>
 </html>

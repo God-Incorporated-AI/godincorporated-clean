@@ -225,6 +225,15 @@ document.addEventListener("DOMContentLoaded", function () {
   const supportBtnAuthenticated = document.getElementById("supportBtnAuthenticated");
   const forgotPasswordLink = document.getElementById("forgotPasswordLink");
 
+  const supportModal = document.getElementById("supportModal");
+  const supportStatusLine = document.getElementById("supportStatusLine");
+  const supportAuthPrompt = document.getElementById("supportAuthPrompt");
+  const templeContributionBtn = document.getElementById("templeContributionBtn");
+  const supportCheckoutButtons = document.querySelectorAll(".support-checkout-btn");
+
+  const TEMPLE_CONTRIBUTION_URL = "";
+  let currentIdentity = null;
+
   // Phase 4.2.1: Modal elements
 const loginModal = document.getElementById("loginModal");
 const registerModal = document.getElementById("registerModal");
@@ -309,7 +318,71 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     closeModal(registerModal);
     closeModal(resetRequestModal);
     closeModal(resetPasswordModal);
+    closeModal(supportModal);
     clearAuthErrors();
+  }
+
+  function renderSupportModal() {
+    const authenticated = Boolean(currentIdentity && currentIdentity.authenticated);
+
+    if (authenticated) {
+      const currentLabel = currentIdentity.current_access_label || currentIdentity.plan_code || "Pilgrim";
+      const questionLimit = currentIdentity.usage?.question_limit_display ?? currentIdentity.usage?.question_limit ?? "0";
+      const memoryDepth = currentIdentity.memory_depth ?? "entire path";
+      supportStatusLine.textContent =
+        "You currently stand at " + currentLabel + ". This path offers " + questionLimit + " questions in the current window and memory depth " + memoryDepth + ".";
+      supportAuthPrompt.hidden = true;
+      supportAuthPrompt.style.display = "none";
+    } else {
+      supportStatusLine.textContent =
+        "Support unlocks deeper dialogue continuity, stronger seeker memory, and longer access paths.";
+      supportAuthPrompt.hidden = false;
+      supportAuthPrompt.style.display = "block";
+    }
+
+    supportCheckoutButtons.forEach((button) => {
+      button.disabled = !authenticated;
+    });
+  }
+
+  async function launchStripeCheckout(planCode, supportMode, button) {
+    if (!currentIdentity || !currentIdentity.authenticated) {
+      closeModal(supportModal);
+      openModal(loginModal);
+      return;
+    }
+
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "Opening Stripe...";
+
+    try {
+      const response = await fetch("/billing/checkout-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          plan_code: planCode,
+          support_mode: supportMode
+        })
+      });
+
+      const data = await safeReadJson(response);
+
+      if (!response.ok) {
+        throw new Error(data.error || "Could not create Stripe checkout session.");
+      }
+
+      if (!data.checkout_url) {
+        throw new Error("Stripe checkout URL was not returned.");
+      }
+
+      window.location.href = data.checkout_url;
+    } catch (err) {
+      alert(err.message || "Support checkout failed.");
+      button.disabled = false;
+      button.textContent = originalText;
+    }
   }
 
   // Toggle menu visibility
@@ -350,13 +423,37 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
 
   if (supportBtnAnonymous) {
     supportBtnAnonymous.addEventListener("click", function() {
-      // Support functionality coming soon
+      renderSupportModal();
+      openModal(supportModal);
+      mainMenu.classList.remove("show");
     });
   }
 
   if (supportBtnAuthenticated) {
     supportBtnAuthenticated.addEventListener("click", function() {
-      // Support functionality coming soon
+      renderSupportModal();
+      openModal(supportModal);
+      mainMenu.classList.remove("show");
+    });
+  }
+
+  supportCheckoutButtons.forEach((button) => {
+    button.addEventListener("click", function() {
+      launchStripeCheckout(
+        button.dataset.planCode,
+        button.dataset.supportMode,
+        button
+      );
+    });
+  });
+
+  if (templeContributionBtn) {
+    templeContributionBtn.addEventListener("click", function() {
+      if (TEMPLE_CONTRIBUTION_URL) {
+        window.location.href = TEMPLE_CONTRIBUTION_URL;
+      } else {
+        alert("Temple contribution will be connected next. Support tiers are active now.");
+      }
     });
   }
 
@@ -553,6 +650,8 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
         return;
       }
 
+      currentIdentity = data;
+
       if (data.authenticated) {
         visitorId = data.anonymous_user_id || null;
         setAuthenticatedMenuState(true);
@@ -580,10 +679,14 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
         visitorId = data.anonymous_user_id || null;
         setAuthenticatedMenuState(false);
       }
+
+      renderSupportModal();
     } catch (err) {
       console.error("Failed to fetch identity:", err);
       visitorId = null;
+      currentIdentity = null;
       setAuthenticatedMenuState(false);
+      renderSupportModal();
     }
   }
 
