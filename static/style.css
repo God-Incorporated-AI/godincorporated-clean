@@ -556,3 +556,48 @@ main.admin-console {
   }
 }
 
+/* Phase 8.5: account page */
+.account-page {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.account-hero {
+  margin-bottom: 18px;
+}
+
+.account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  margin: 16px 0;
+}
+
+.account-kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.account-kv span {
+  opacity: 0.8;
+}
+
+.account-kv strong {
+  text-align: right;
+  word-break: break-word;
+}
+
+@media (max-width: 720px) {
+  .account-kv {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .account-kv strong {
+    text-align: left;
+  }
+}
+
