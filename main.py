@@ -2702,6 +2702,10 @@ def support_page(request: Request):
 def account_page(request: Request):
     return templates.TemplateResponse("account.html", {"request": request})
 
+@app.get("/about", response_class=HTMLResponse)
+def about_page(request: Request):
+    return templates.TemplateResponse("about.html", {"request": request})
+
 @app.post("/reset_scrolls")
 def reset_scrolls():
     reset_scroll_system()
