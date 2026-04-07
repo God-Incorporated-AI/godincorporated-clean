@@ -485,3 +485,74 @@ main.admin-console {
   margin-top: 0;
 }
 
+/* Phase 8.5: dedicated support page */
+.support-page {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.support-hero {
+  margin-bottom: 18px;
+}
+
+.support-note {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  padding: 14px;
+  margin: 16px 0;
+  background: #fffaf0;
+}
+
+.support-page-grid {
+  margin-top: 18px;
+}
+
+.support-price {
+  font-weight: 700;
+  margin-top: 8px;
+}
+
+.support-cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.button-link {
+  display: inline-block;
+  padding: 10px 14px;
+  border-radius: 10px;
+  text-decoration: none;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  background: #6f5a3a;
+  color: #ffffff;
+}
+
+.button-link.secondary {
+  background: transparent;
+  color: inherit;
+}
+
+.support-page .support-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.support-page .support-actions {
+  margin-top: auto;
+}
+
+@media (max-width: 720px) {
+  .support-cta-row {
+    flex-direction: column;
+  }
+
+  .button-link {
+    width: 100%;
+    box-sizing: border-box;
+    text-align: center;
+  }
+}
+

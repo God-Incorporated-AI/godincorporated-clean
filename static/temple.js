@@ -2,6 +2,8 @@ document.addEventListener("DOMContentLoaded", function () {
   // Check for reset token in URL
   const urlParams = new URLSearchParams(window.location.search);
   const resetToken = urlParams.get("token");
+  const openSupportOnLoad = urlParams.get("support") === "1";
+  let supportOpenedFromQuery = false;
   // Documentation: Identity States and Unified /ask Contract
   //
   // The system supports three seeker states:
@@ -681,12 +683,22 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       }
 
       renderSupportModal();
+
+      if (openSupportOnLoad && !supportOpenedFromQuery) {
+        supportOpenedFromQuery = true;
+        openModal(supportModal);
+      }
     } catch (err) {
       console.error("Failed to fetch identity:", err);
       visitorId = null;
       currentIdentity = null;
       setAuthenticatedMenuState(false);
       renderSupportModal();
+
+      if (openSupportOnLoad && !supportOpenedFromQuery) {
+        supportOpenedFromQuery = true;
+        openModal(supportModal);
+      }
     }
   }
 
