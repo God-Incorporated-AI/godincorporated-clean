@@ -1026,6 +1026,10 @@ def normalize_plan_code(plan_code: Optional[str]) -> str:
     return plan if plan in PLAN_LIMITS else "anon"
 
 
+def plan_has_unlimited_questions(plan_code: Optional[str]) -> bool:
+    return normalize_plan_code(plan_code) in {"philosophus", "theoricus"}
+
+
 PLAN_RANKS = {
     "anon": 0,
     "pilgrim": 1,
@@ -1858,7 +1862,7 @@ def get_memory_depth(plan_code: str):
     return PLAN_MEMORY_DEPTH.get(normalize_plan_code(plan_code), 1)
 
 
-def get_question_display(plan_code: str, questions_used: int, question_limit: int) -> dict:
+def get_question_display(plan_code: str, questions_used: int, question_limit: Optional[int]) -> dict:
     """
     Seeker-facing display rules.
 
@@ -1867,7 +1871,7 @@ def get_question_display(plan_code: str, questions_used: int, question_limit: in
     """
     plan = (plan_code or "anon").lower()
 
-    if plan == "theoricus":
+    if plan_has_unlimited_questions(plan):
         return {
             "question_limit_display": None,
             "questions_remaining_display": "Unlimited",
@@ -1888,6 +1892,10 @@ def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
             user_id=user_id,
             window_start=usage_window_start
         )
+
+        if plan_has_unlimited_questions(entitlement["effective_plan_code"]):
+            return True
+
         limit = PLAN_LIMITS.get(
             entitlement["effective_plan_code"],
             PLAN_LIMITS["anon"]
@@ -2195,7 +2203,8 @@ def get_admin_user_detail(target_user_id: str) -> dict:
     lifetime_usage = get_oracle_usage_counts(user_id=target_user_id)
 
     effective_plan_code = entitlement["effective_plan_code"]
-    question_limit = PLAN_LIMITS.get(effective_plan_code, PLAN_LIMITS["anon"])
+    unlimited_questions = plan_has_unlimited_questions(effective_plan_code)
+    question_limit = None if unlimited_questions else PLAN_LIMITS.get(effective_plan_code, PLAN_LIMITS["anon"])
     question_display = get_question_display(
         effective_plan_code,
         current_usage["questions_used"],
@@ -2423,7 +2432,9 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
 
     plan_code = entitlement["effective_plan_code"]
     questions_used = usage["questions_used"]
-    question_limit = PLAN_LIMITS.get(plan_code, PLAN_LIMITS["anon"])
+    unlimited_questions = plan_has_unlimited_questions(plan_code)
+    question_limit = None if unlimited_questions else PLAN_LIMITS.get(plan_code, PLAN_LIMITS["anon"])
+    questions_remaining = None if unlimited_questions else max(question_limit - questions_used, 0)
     question_display = get_question_display(plan_code, questions_used, question_limit)
     mode_counts = usage["mode_counts"]
 
@@ -2484,7 +2495,7 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
             "questions_asked": questions_used,
             "questions_used": questions_used,
             "question_limit": question_limit,
-            "questions_remaining": max(question_limit - questions_used, 0),
+            "questions_remaining": questions_remaining,
             "question_limit_display": question_display["question_limit_display"],
             "questions_remaining_display": question_display["questions_remaining_display"],
             "is_unlimited_questions": question_display["is_unlimited_questions"],
@@ -3476,6 +3487,25 @@ def stripe_ts_to_dt(value: Optional[int]) -> Optional[datetime.datetime]:
     return datetime.datetime.fromtimestamp(value, tz=timezone.utc)
 
 
+def extract_stripe_subscription_id(obj: dict) -> Optional[str]:
+    if not obj:
+        return None
+
+    candidates = [
+        obj.get("subscription"),
+        ((obj.get("parent") or {}).get("subscription_details") or {}).get("subscription"),
+        ((((obj.get("lines") or {}).get("data") or [{}])[0].get("parent") or {}).get("subscription_item_details") or {}).get("subscription"),
+    ]
+
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            candidate = candidate.get("id")
+        if candidate:
+            return candidate
+
+    return None
+
+
 def stripe_obj_to_plain(value):
     if isinstance(value, dict):
         return {k: stripe_obj_to_plain(v) for k, v in value.items()}
@@ -4023,9 +4053,7 @@ def process_stripe_event(event: dict) -> dict:
     obj = event.get("data", {}).get("object", {}) or {}
 
     stripe_customer_id = obj.get("customer")
-    stripe_subscription_id = obj.get("subscription")
-    if isinstance(stripe_subscription_id, dict):
-        stripe_subscription_id = stripe_subscription_id.get("id")
+    stripe_subscription_id = extract_stripe_subscription_id(obj)
 
     context = resolve_user_and_subscription_context(
         stripe_customer_id=stripe_customer_id,
@@ -4116,8 +4144,8 @@ def process_stripe_event(event: dict) -> dict:
                 stripe_subscription_id=stripe_subscription_id
             )
 
-            if context.get("user_id") and (not context.get("plan_code") or not context.get("support_mode")) and obj.get("subscription"):
-                subscription_obj = stripe.Subscription.retrieve(obj.get("subscription"))
+            if context.get("user_id") and (not context.get("plan_code") or not context.get("support_mode")) and stripe_subscription_id:
+                subscription_obj = stripe.Subscription.retrieve(stripe_subscription_id)
                 subscription_obj = stripe_obj_to_plain(subscription_obj)
                 upsert_local_stripe_subscription(subscription_obj=subscription_obj)
                 context = resolve_user_and_subscription_context(
@@ -4150,7 +4178,7 @@ def process_stripe_event(event: dict) -> dict:
                     transaction_kind="monthly_renewal" if context.get("support_mode") == "monthly_recurring" else "annual_renewal",
                     status="succeeded"
                 )
-                helper_name = "apply_subscription_renewal_success"
+                helper_name = f"apply_subscription_renewal_success:{context.get('support_mode')}"
 
         elif event_type == "invoice.payment_failed":
             context = resolve_user_and_subscription_context(
@@ -4169,7 +4197,7 @@ def process_stripe_event(event: dict) -> dict:
                     transaction_kind="monthly_renewal" if context.get("support_mode") == "monthly_recurring" else "annual_renewal",
                     status="failed"
                 )
-                helper_name = "apply_subscription_renewal_failure_to_grace"
+                helper_name = f"apply_subscription_renewal_failure_to_grace:{context.get('support_mode')}"
 
         elif event_type == "invoice.upcoming":
             context = resolve_user_and_subscription_context(
