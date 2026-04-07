@@ -33,3 +33,8 @@ embedding_cache.json
 
 # local backup artifacts
 local_backups/
+
+# local handoff and backups
+handoff_phase8_*.zip
+handoff_phase8_*/
+temple_backups/
