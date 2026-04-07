@@ -213,12 +213,6 @@ document.addEventListener("DOMContentLoaded", function () {
   const menuAuthenticated = document.getElementById("menuAuthenticated");
 
   const userDisplayName = document.getElementById("userDisplayName");
-  const userCombinedTitle = document.getElementById("userCombinedTitle");
-  const userScrollCount = document.getElementById("userScrollCount");
-  const userMoneyDonated = document.getElementById("userMoneyDonated");
-  const userQuestionsUsed = document.getElementById("userQuestionsUsed");
-  const userQuestionLimit = document.getElementById("userQuestionLimit");
-  const userQuestionsRemaining = document.getElementById("userQuestionsRemaining");
 
   const loginBtn = document.getElementById("loginBtn");
   const registerBtn = document.getElementById("registerBtn");
@@ -291,10 +285,20 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     }
   }
 
-  function setQuestionLimitVisibility(isUnlimited) {
-    if (!userQuestionLimit || !userQuestionLimit.parentElement) return;
-    userQuestionLimit.parentElement.hidden = isUnlimited;
-    userQuestionLimit.parentElement.style.display = isUnlimited ? "none" : "";
+  function updateMenuToggleIdentity(identity) {
+    if (!menuToggle) return;
+
+    if (identity && identity.authenticated) {
+      const fullName = (identity.display_name || "Account").trim();
+      const shortName = fullName.length > 14 ? fullName.slice(0, 14) + "..." : fullName;
+      menuToggle.textContent = shortName + " v";
+      menuToggle.setAttribute("aria-label", "Open account menu for " + fullName);
+      menuToggle.title = fullName;
+    } else {
+      menuToggle.textContent = "☰";
+      menuToggle.setAttribute("aria-label", "Open menu");
+      menuToggle.removeAttribute("title");
+    }
   }
 
   if (resetToken && window.location.pathname === "/auth/reset-password") {
@@ -649,6 +653,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
         visitorId = null;
         seekerId = localStorage.getItem("seeker_id") || null;
         setAuthenticatedMenuState(false);
+        updateMenuToggleIdentity(null);
         return;
       }
 
@@ -659,19 +664,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
         setAuthenticatedMenuState(true);
 
         userDisplayName.textContent = data.display_name || "";
-        userCombinedTitle.textContent = data.combined_title || "";
-        userScrollCount.textContent = data.scrolls_donated ?? 0;
-        userMoneyDonated.textContent = data.money_donated ?? 0;
-        userQuestionsUsed.textContent = data.usage?.questions_used ?? 0;
-
-        const unlimitedQuestions = Boolean(data.usage?.is_unlimited_questions);
-        setQuestionLimitVisibility(unlimitedQuestions);
-
-        userQuestionLimit.textContent =
-          data.usage?.question_limit_display ?? data.usage?.question_limit ?? 0;
-
-        userQuestionsRemaining.textContent =
-          data.usage?.questions_remaining_display ?? data.usage?.questions_remaining ?? 0;
+        updateMenuToggleIdentity(data);
 
         logoutBtn.onclick = async function() {
           await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
@@ -680,6 +673,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       } else {
         visitorId = data.anonymous_user_id || null;
         setAuthenticatedMenuState(false);
+        updateMenuToggleIdentity(null);
       }
 
       renderSupportModal();
@@ -693,6 +687,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       visitorId = null;
       currentIdentity = null;
       setAuthenticatedMenuState(false);
+      updateMenuToggleIdentity(null);
       renderSupportModal();
 
       if (openSupportOnLoad && !supportOpenedFromQuery) {
