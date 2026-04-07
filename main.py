@@ -2698,11 +2698,6 @@ def temple_page(request: Request):
 def support_page(request: Request):
     return templates.TemplateResponse("support.html", {"request": request})
 
-@app.get("/support", response_class=HTMLResponse)
-@app.get("/tiers", response_class=HTMLResponse)
-def support_page(request: Request):
-    return templates.TemplateResponse("support.html", {"request": request})
-
 @app.post("/reset_scrolls")
 def reset_scrolls():
     reset_scroll_system()
