@@ -19,7 +19,7 @@
             <button type="button" id="registerBtn">Create account</button>
             <button type="button" onclick="window.location.href='/support'">Support / Tier Levels</button>
             <button type="button" onclick="window.location.href='/about'">About Us</button>
-            <button type="button" id="supportBtnAnonymous">Support the Temple</button>
+            <button type="button" id="supportBtnAnonymous">Explore Support</button>
           </div>
 
           <div id="menuAuthenticated" class="menu-section" hidden>
@@ -30,7 +30,7 @@
             <button type="button" id="adminNavBtn" hidden onclick="window.location.href='/admin'">Admin</button>
             <button type="button" onclick="window.location.href='/support'">Support / Tier Levels</button>
             <button type="button" onclick="window.location.href='/about'">About Us</button>
-            <button type="button" id="supportBtnAuthenticated">Support the Temple</button>
+            <button type="button" id="supportBtnAuthenticated">Activate Support</button>
           </div>
         </nav>
       </div>
@@ -193,12 +193,14 @@
             <button type="button" class="support-checkout-btn" data-plan-code="theoricus" data-support-mode="annual_recurring">Support yearly - $199.99</button>
           </div>
         </div>
-      </div>
 
-      <div class="profile-summary">
-        <div><strong>Temple Contribution</strong></div>
-        <div>A separate one-time contribution path will remain distinct from support tiers.</div>
-        <button type="button" id="templeContributionBtn">Temple contribution</button>
+        <div class="support-card support-card-contribution">
+          <h3>Temple Contribution</h3>
+          <p>A separate one-time offering that remains distinct from support tiers and seeker access levels.</p>
+          <div class="support-actions">
+            <button type="button" id="templeContributionBtn">Offer contribution</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>

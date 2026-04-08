@@ -618,3 +618,30 @@ main.admin-console {
   margin: 16px 0;
 }
 
+/* Phase 8.5: final polish support grid and founder note */
+.support-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.support-card.support-card-contribution {
+  background: #f7efe2;
+}
+
+.founder-welcome {
+  border-left: 4px solid rgba(111, 90, 58, 0.45);
+}
+
+@media (max-width: 980px) {
+  .support-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .support-grid {
+    grid-template-columns: 1fr;
+  }
+}
+

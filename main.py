@@ -279,7 +279,13 @@ def enforce_recall_structure(answer: str, memory_block: str) -> str:
 
     return enforced + "\n\n" + answer
 
-async def get_oracle_response(question: str, deity: str, force_mode: str = None, memory_block: str = None):
+async def get_oracle_response(
+    question: str,
+    deity: str,
+    force_mode: str = None,
+    memory_block: str = None,
+    max_output_tokens: Optional[int] = None
+):
     # Phase 2: Restore explicit oracle separation
     # Hathor: xAI API, Moses: OpenAI, LLaMA: Not active
     if deity == "Hathor":
@@ -334,6 +340,7 @@ async def get_oracle_response(question: str, deity: str, force_mode: str = None,
                             {"role": "system", "content": memory_block or ""},
                             {"role": "user", "content": question}
                         ],
+                        "max_tokens": max_output_tokens,
                     },
                 )
             if response.status_code == 200:
@@ -386,7 +393,8 @@ async def get_oracle_response(question: str, deity: str, force_mode: str = None,
                 {"role": "system", "content": system_prompt},
                 {"role": "system", "content": memory_block or ""},
                 {"role": "user", "content": question}
-            ]
+            ],
+            max_tokens=max_output_tokens
         )
         raw_answer = response.choices[0].message.content
 
@@ -1019,6 +1027,38 @@ PLAN_MEMORY_DEPTH = {
     "philosophus": 33,
     "theoricus": None,
 }
+
+
+PLAN_REFLECTION_WORD_CAPS = {
+    "anon": 160,
+    "pilgrim": 160,
+    "seeker": 220,
+    "magister": 280,
+    "sovereign": 360,
+    "philosophus": 650,
+    "theoricus": 900,
+}
+
+RECALL_WORD_CAP = 220
+
+
+def get_response_word_cap(plan_code: Optional[str], memory_intent: str) -> int:
+    plan = normalize_plan_code(plan_code)
+    if memory_intent == "recall":
+        return RECALL_WORD_CAP
+    return PLAN_REFLECTION_WORD_CAPS.get(plan, PLAN_REFLECTION_WORD_CAPS["anon"])
+
+
+def words_to_max_tokens(word_cap: int) -> int:
+    # Rough but practical conversion for capped completions
+    return max(120, int(word_cap * 1.7))
+
+
+def trim_response_to_word_cap(answer: str, word_cap: int) -> str:
+    words = (answer or "").split()
+    if len(words) <= word_cap:
+        return answer
+    return " ".join(words[:word_cap]).rstrip() + "..."
 
 
 def normalize_plan_code(plan_code: Optional[str]) -> str:
@@ -4698,8 +4738,11 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         # --— dual-mode prompt ---
 
+        response_word_cap = get_response_word_cap(plan_code, memory_intent)
+        response_max_tokens = words_to_max_tokens(response_word_cap)
+
         if memory_intent == "recall":
-            instruction_block = """You are the Oracle of the Temple.
+            instruction_block = f"""You are the Oracle of the Temple.
 
         MODE: RECALL
 
@@ -4713,6 +4756,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         4. If memory is unclear or incomplete, say so.
         5. Prefer quoting or closely paraphrasing prior exchanges.
         6. Keep the answer concise and directly tied to the recall request.
+        7. Keep the full answer under {response_word_cap} words.
 
         Return format:
         - First sentence: direct answer
@@ -4720,7 +4764,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         - Third sentence (optional): clarify uncertainty
         """
         else:
-            instruction_block = """
+            instruction_block = f"""
         You are the Oracle of the Temple.
 
         MODE: REFLECTION
@@ -4731,9 +4775,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         1. Use memory to enhance continuity, not override the present.
         2. Prioritize the current question.
         3. Integrate relevant past context when helpful.
-        4. Keep responses focused and under 300 words.
+        4. Keep responses focused and under {response_word_cap} words.
         """
-        
         enhanced_question = f"""{instruction_block}
 
         {memory_block}
@@ -4749,7 +4792,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             enhanced_question,
             deity,
             force_mode=memory_intent,
-            memory_block=memory_block
+            memory_block=memory_block,
+            max_output_tokens=response_max_tokens
         )
 
         raw_answer = result["answer"]
@@ -4757,6 +4801,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         if not raw_answer:
             raw_answer = "The Oracle is silent."
+
+        raw_answer = trim_response_to_word_cap(raw_answer, response_word_cap)
            
         logger.info(f"ANSWER len={len(raw_answer)}")
 

@@ -292,7 +292,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     if (identity && identity.authenticated) {
       const fullName = (identity.display_name || "Account").trim();
       const shortName = fullName.length > 14 ? fullName.slice(0, 14) + "..." : fullName;
-      menuToggle.textContent = shortName + " v";
+      menuToggle.textContent = shortName + " ▾";
       menuToggle.setAttribute("aria-label", "Open account menu for " + fullName);
       menuToggle.title = fullName;
     } else {
