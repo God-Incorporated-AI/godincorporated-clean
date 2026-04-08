@@ -2449,6 +2449,7 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
         "display_name": user_row.get("display_name"),
         "email": user_row.get("email"),
         "email_verified": user_row.get("email_verified"),
+        "role": normalize_user_role(user.get("role")),
         "last_login": user_row.get("last_login").isoformat() if user_row.get("last_login") else None,
         "seeker_id": user.get("seeker_id"),
         "anonymous_user_id": session_id,

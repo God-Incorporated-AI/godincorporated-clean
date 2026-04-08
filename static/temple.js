@@ -217,6 +217,7 @@ document.addEventListener("DOMContentLoaded", function () {
   const loginBtn = document.getElementById("loginBtn");
   const registerBtn = document.getElementById("registerBtn");
   const logoutBtn = document.getElementById("logoutBtn");
+  const adminNavBtn = document.getElementById("adminNavBtn");
   const supportBtnAnonymous = document.getElementById("supportBtnAnonymous");
   const supportBtnAuthenticated = document.getElementById("supportBtnAuthenticated");
   const forgotPasswordLink = document.getElementById("forgotPasswordLink");
@@ -299,6 +300,13 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       menuToggle.setAttribute("aria-label", "Open menu");
       menuToggle.removeAttribute("title");
     }
+  }
+
+  function updateAdminNav(identity) {
+    if (!adminNavBtn) return;
+    const isAdmin = Boolean(identity && identity.authenticated && ["admin", "owner"].includes(identity.role));
+    adminNavBtn.hidden = !isAdmin;
+    adminNavBtn.style.display = isAdmin ? "" : "none";
   }
 
   if (resetToken && window.location.pathname === "/auth/reset-password") {
@@ -654,6 +662,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
         seekerId = localStorage.getItem("seeker_id") || null;
         setAuthenticatedMenuState(false);
         updateMenuToggleIdentity(null);
+        updateAdminNav(null);
         return;
       }
 
@@ -665,6 +674,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
 
         userDisplayName.textContent = data.display_name || "";
         updateMenuToggleIdentity(data);
+        updateAdminNav(data);
 
         logoutBtn.onclick = async function() {
           await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
@@ -674,6 +684,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
         visitorId = data.anonymous_user_id || null;
         setAuthenticatedMenuState(false);
         updateMenuToggleIdentity(null);
+        updateAdminNav(null);
       }
 
       renderSupportModal();
@@ -688,6 +699,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       currentIdentity = null;
       setAuthenticatedMenuState(false);
       updateMenuToggleIdentity(null);
+      updateAdminNav(null);
       renderSupportModal();
 
       if (openSupportOnLoad && !supportOpenedFromQuery) {
