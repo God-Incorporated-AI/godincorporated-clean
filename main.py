@@ -1030,12 +1030,12 @@ PLAN_MEMORY_DEPTH = {
 
 
 PLAN_REFLECTION_WORD_CAPS = {
-    "anon": 160,
-    "pilgrim": 160,
-    "seeker": 220,
-    "magister": 280,
-    "sovereign": 360,
-    "philosophus": 650,
+    "anon": 240,
+    "pilgrim": 240,
+    "seeker": 350,
+    "magister": 400,
+    "sovereign": 550,
+    "philosophus": 750,
     "theoricus": 900,
 }
 
