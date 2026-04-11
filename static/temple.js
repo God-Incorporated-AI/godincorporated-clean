@@ -98,25 +98,50 @@ document.addEventListener("DOMContentLoaded", function () {
   voiceSelect.dispatchEvent(new Event("change"));
 
   // Upload scroll
-  scrollForm.addEventListener("submit", function (e) {
+  scrollForm.addEventListener("submit", async function (e) {
     e.preventDefault();
-    const formData = new FormData(scrollForm);
-    formData.append("anonymous_user_id", visitorId);
-    if (seekerId) formData.append("seeker_id", seekerId);
-    fetch("/upload_scroll", {
-      method: "POST",
-      body: formData,
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        alert(data.message);
-        scrollInput.value = ""; // Clear file input after upload
-        return fetch("/scrolls");
-      })
-      .then((res) => res.json())
-      .then((data) => {
-        scrollCount.textContent = data.count;
+
+    const submitBtn = scrollForm.querySelector("button[type='submit'], button");
+    const originalText = submitBtn ? submitBtn.textContent : "Upload";
+
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Uploading...";
+    }
+
+    try {
+      const formData = new FormData(scrollForm);
+      formData.append("anonymous_user_id", visitorId);
+      if (seekerId) formData.append("seeker_id", seekerId);
+
+      const response = await fetch("/upload_scroll", {
+        method: "POST",
+        body: formData,
       });
+
+      const data = await safeReadJson(response);
+
+      if (!response.ok) {
+        throw new Error(data.error || data.detail || data.message || "Scroll upload failed");
+      }
+
+      alert(data.message || "📜 Your scroll has been uploaded.");
+      scrollInput.value = "";
+
+      const countResponse = await fetch("/scrolls");
+      const countData = await safeReadJson(countResponse);
+
+      if (countResponse.ok && typeof countData.count !== "undefined") {
+        scrollCount.textContent = countData.count;
+      }
+    } catch (err) {
+      alert(err.message || "Scroll upload failed.");
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalText;
+      }
+    }
   });
 
   // Ask Oracle (text input)

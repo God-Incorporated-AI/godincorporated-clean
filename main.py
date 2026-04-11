@@ -888,6 +888,13 @@ def extract_text_from_scroll(file_path):
         logger.error(f"Failed to extract text: {e}")
     return text.strip()
 
+def remove_uploaded_file(file_path: str):
+    try:
+        if file_path and os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception as e:
+        logger.warning(f"Failed to remove uploaded file {file_path}: {e}")
+
 def reset_scroll_system():
     """Clears uploaded scroll files from disk only; does not reset database scroll records."""
     # Clear all files in scrolls_uploads/
@@ -3301,10 +3308,11 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
     # Extract text
     extracted_text = extract_text_from_scroll(file_path)
 
-    text_hash = hashlib.sha256(extracted_text.encode("utf-8")).hexdigest()
-
     if not extracted_text.strip():
-       raise HTTPException(status_code=400, detail="Could not extract text from scroll")
+        remove_uploaded_file(file_path)
+        raise HTTPException(status_code=400, detail="Could not extract text from scroll")
+
+    text_hash = hashlib.sha256(extracted_text.encode("utf-8")).hexdigest()
 
     # Determine corpus layer
     corpus_layer = "personal" if authenticated_user_id else "community"
