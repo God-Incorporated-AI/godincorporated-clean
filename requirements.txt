@@ -108,3 +108,4 @@ passlib[bcrypt]==1.7.4
 itsdangerous==2.1.2
 
 stripe==15.0.0
+PyMuPDF==1.27.2

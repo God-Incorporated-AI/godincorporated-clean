@@ -23,6 +23,7 @@ from psycopg2.extras import RealDictCursor
 from pydantic import BaseModel
 from PyPDF2 import PdfReader
 
+import fitz
 import httpx
 import psycopg2
 import stripe
@@ -872,20 +873,41 @@ def retrieve_context(question: str, user_id: Optional[str]):
 def extract_text_from_scroll(file_path):
     text = ""
     ext = os.path.splitext(file_path)[1].lower()
+
     try:
         if ext == ".pdf":
-            reader = PdfReader(file_path)
-            for page in reader.pages:
-                text += page.extract_text() or ""
+            # First pass: PyPDF2
+            try:
+                reader = PdfReader(file_path)
+                for page in reader.pages:
+                    text += page.extract_text() or ""
+            except Exception as e:
+                logger.warning(f"PyPDF2 extraction failed for {file_path}: {e}")
+
+            # Fallback: PyMuPDF
+            if not text.strip():
+                try:
+                    doc = fitz.open(file_path)
+                    parts = []
+                    for page in doc:
+                        parts.append(page.get_text("text") or "")
+                    doc.close()
+                    text = "\n".join(parts)
+                except Exception as e:
+                    logger.error(f"PyMuPDF extraction failed for {file_path}: {e}")
+
         elif ext == ".docx":
             doc = Document(file_path)
             for para in doc.paragraphs:
                 text += para.text + "\n"
+
         elif ext in [".txt", ".md", ".rtf"]:
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                 text = f.read()
+
     except Exception as e:
         logger.error(f"Failed to extract text: {e}")
+
     return text.strip()
 
 def remove_uploaded_file(file_path: str):
