@@ -4386,12 +4386,15 @@ def billing_checkout_session(request: Request, payload: BillingCheckoutSessionIn
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
+        print(f"[STRIPE CONFIG ERROR] {type(e).__name__}: {e}", flush=True)
         logger.error(f"Stripe configuration error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     except stripe.error.StripeError as e:
+        print(f"[STRIPE CHECKOUT ERROR] {type(e).__name__}: {e}", flush=True)
         logger.error(f"Stripe checkout session creation failed: {e}")
         raise HTTPException(status_code=502, detail="Stripe checkout session creation failed.")
     except Exception as e:
+        print(f"[BILLING CHECKOUT ERROR] {type(e).__name__}: {e}", flush=True)
         logger.error(f"Billing checkout session error: {e}")
         raise HTTPException(status_code=500, detail="Billing checkout session creation failed.")
 
