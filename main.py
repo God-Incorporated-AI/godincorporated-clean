@@ -52,9 +52,19 @@ STRIPE_LIVEMODE = os.getenv("STRIPE_LIVEMODE", "false").lower() == "true"
 EMBEDDINGS_ENABLED = os.getenv("EMBEDDINGS_ENABLED", "false").lower() == "true"
 EMBEDDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "embedding_cache.json")
 
+BROWSER_TOKEN_HEADER = "x-anonymous-user-id"
+ANONYMOUS_UPLOAD_COOLDOWN_SECONDS = 5
+ANONYMOUS_UPLOAD_LIMIT = 3
+
 def get_ip_hash(request: Request) -> str:
     ip = request.client.host if request.client else "unknown"
     return hashlib.sha256(ip.encode()).hexdigest()
+
+def get_browser_token_from_request(request: Request) -> Optional[str]:
+    token = (request.headers.get(BROWSER_TOKEN_HEADER) or "").strip()
+    if token and re.fullmatch(r"[0-9a-fA-F-]{36}", token):
+        return token
+    return None
 
 def should_use_embeddings() -> bool:
     return EMBEDDINGS_ENABLED
@@ -2009,11 +2019,53 @@ def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
     return usage["questions_used"] < PLAN_LIMITS["anon"]
 
 def get_or_create_session_id(request: Request) -> str:
+    browser_token = get_browser_token_from_request(request)
     session_id = request.session.get("session_id")
+
+    if browser_token:
+        if session_id != browser_token:
+            request.session["session_id"] = browser_token
+        return browser_token
+
     if not session_id:
         session_id = str(uuid.uuid4())
         request.session["session_id"] = session_id
+
     return session_id
+
+
+def get_anonymous_upload_stats(anonymous_user_id: str) -> dict:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS upload_count,
+                    MAX(created_at) AS last_uploaded_at
+                FROM scrolls
+                WHERE session_id = %s
+                """,
+                (anonymous_user_id,)
+            )
+            row = cur.fetchone() or {}
+            return {
+                "upload_count": row.get("upload_count", 0) or 0,
+                "last_uploaded_at": row.get("last_uploaded_at"),
+            }
+    finally:
+        conn.close()
+
+
+def build_claim_nudges(upload_count: int) -> list[str]:
+    nudges = []
+    if upload_count >= 1:
+        nudges.append("Claim this path so your scrolls and dialogue follow you.")
+    if upload_count >= 2:
+        nudges.append("Your uploads in this browser can be attached to your account.")
+    if upload_count >= 3:
+        nudges.append("Create an account now to preserve continuity across devices.")
+    return nudges
 
 
 def refresh_user_fallback_state(user_id: str) -> dict:
@@ -2658,6 +2710,7 @@ def build_anonymous_me_response(session_id: str) -> dict:
         authenticated=False
     )
     support = build_anonymous_support_status_payload()
+    continuity_nudges = build_claim_nudges(session_scroll_count)
 
     return {
         "authenticated": False,
@@ -2683,6 +2736,9 @@ def build_anonymous_me_response(session_id: str) -> dict:
         "support_message": support["message"],
         "renewal_message": support["renewal_message"],
         "support": support,
+        "continuity_nudges": continuity_nudges,
+        "anonymous_upload_limit": ANONYMOUS_UPLOAD_LIMIT,
+        "claim_required": session_scroll_count >= ANONYMOUS_UPLOAD_LIMIT,
         "entitlement": {
             "status": "none",
             "raw_plan_code": "anon",
@@ -2927,6 +2983,9 @@ def auth_register(payload: AuthRegisterInput, request: Request):
         ))
     conn.commit()
     conn.close()
+
+    session_id = get_or_create_session_id(request)
+    merge_anonymous_history_into_user(session_id, user_id)
     
     # Build verification link
     app_base_url = os.getenv("APP_BASE_URL", os.getenv("BASE_URL", "http://localhost:8000"))
@@ -3348,10 +3407,58 @@ def admin_set_user_role(request: Request, payload: AdminSetRoleInput):
 
 @app.post("/upload_scroll")
 async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
+    anonymous_user_id = anonymous_user_id or get_or_create_session_id(request)
     ensure_anonymous_user(anonymous_user_id)
 
     user = get_current_user(request)
     authenticated_user_id = user["user_id"] if user else None
+
+    if not authenticated_user_id:
+        stats = get_anonymous_upload_stats(anonymous_user_id)
+        upload_count = stats["upload_count"]
+        last_uploaded_at = stats["last_uploaded_at"]
+
+        if upload_count >= ANONYMOUS_UPLOAD_LIMIT:
+            logger.warning(
+                "Anonymous upload cap hit ip_hash=%s anonymous_user_id=%s upload_count=%s",
+                get_ip_hash(request),
+                anonymous_user_id,
+                upload_count,
+            )
+            return JSONResponse(
+                content={
+                    "error": "Anonymous upload limit reached for this browser. Claim this path to continue offering scrolls.",
+                    "claim_required": True,
+                    "upload_count_for_browser": upload_count,
+                    "continuity_nudges": build_claim_nudges(upload_count),
+                    "anonymous_upload_limit": ANONYMOUS_UPLOAD_LIMIT,
+                },
+                status_code=403
+            )
+
+        if last_uploaded_at:
+            if last_uploaded_at.tzinfo is None:
+                last_uploaded_at = last_uploaded_at.replace(tzinfo=timezone.utc)
+
+            elapsed = (utc_now() - last_uploaded_at).total_seconds()
+            if elapsed < ANONYMOUS_UPLOAD_COOLDOWN_SECONDS:
+                seconds_remaining = max(1, int(ANONYMOUS_UPLOAD_COOLDOWN_SECONDS - elapsed + 0.999))
+                logger.warning(
+                    "Anonymous upload cooldown hit ip_hash=%s anonymous_user_id=%s upload_count=%s seconds_remaining=%s",
+                    get_ip_hash(request),
+                    anonymous_user_id,
+                    upload_count,
+                    seconds_remaining,
+                )
+                return JSONResponse(
+                    content={
+                        "error": "Please wait a few seconds before offering another scroll.",
+                        "warning": "We’re slowing repeated uploads to protect the Temple. Please wait a moment before trying again.",
+                        "cooldown_seconds_remaining": seconds_remaining,
+                        "upload_count_for_browser": upload_count,
+                    },
+                    status_code=429
+                )
 
     seeker_id = resolve_seeker_id(anonymous_user_id, seeker_id)
         
@@ -3491,11 +3598,18 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
         if authenticated_user_id:
             refresh_user_scroll_count(authenticated_user_id)
 
+        duplicate_payload = {
+            "duplicate": True,
+            "message": "This scroll is already present in the Temple. No duplicate copy was stored. It will still be recognized in your personal record."
+        }
+
+        if not authenticated_user_id:
+            stats = get_anonymous_upload_stats(anonymous_user_id)
+            duplicate_payload["upload_count_for_browser"] = stats["upload_count"]
+            duplicate_payload["continuity_nudges"] = build_claim_nudges(stats["upload_count"])
+
         return JSONResponse(
-            content={
-                "duplicate": True,
-                "message": "This scroll is already present in the Temple. No duplicate copy was stored. It will still be recognized in your personal record."
-            },
+            content=duplicate_payload,
             status_code=409
         )
 
@@ -3536,7 +3650,19 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
     if authenticated_user_id:
         refresh_user_scroll_count(authenticated_user_id)
 
-    return {"message": "📜 Your scroll has been uploaded.", "scroll_id": scroll_id}
+    response_payload = {
+        "message": "📜 Your scroll has been uploaded.",
+        "scroll_id": scroll_id
+    }
+
+    if not authenticated_user_id:
+        stats = get_anonymous_upload_stats(anonymous_user_id)
+        response_payload["upload_count_for_browser"] = stats["upload_count"]
+        response_payload["continuity_nudges"] = build_claim_nudges(stats["upload_count"])
+        response_payload["claim_recommended"] = stats["upload_count"] >= 1
+        response_payload["anonymous_upload_limit"] = ANONYMOUS_UPLOAD_LIMIT
+
+    return response_payload
 
 class AdminEntitlementOverrideInput(BaseModel):
     user_id: str
@@ -4759,10 +4885,7 @@ def admin_apply_grace_expiry(
 @app.post("/ask")
 async def ask_oracle(request: Request, payload: QuestionInput):
 
-    session_id = request.session.get("session_id")
-    if not session_id:
-        session_id = str(uuid.uuid4())
-        request.session["session_id"] = session_id
+    session_id = get_or_create_session_id(request)
 
     user = get_current_user(request)
     user_id = user["user_id"] if user else None

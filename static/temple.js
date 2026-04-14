@@ -29,9 +29,76 @@ document.addEventListener("DOMContentLoaded", function () {
   const scrollCount = document.getElementById("scrollCount");
   const scrollInput = document.getElementById("scroll");
   const oracleHelper = document.getElementById("oracleHelper");
+  const scrollFeedback = document.getElementById("scrollFeedback");
+
+  const ANON_STORAGE_KEY = "godinc_anon_id";
+
+  function generateAnonymousId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return window.crypto.randomUUID();
+    }
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function(c) {
+      const r = Math.random() * 16 | 0;
+      const v = c === "x" ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  }
+
+  function getOrCreateVisitorId() {
+    let existing = localStorage.getItem(ANON_STORAGE_KEY);
+    if (!existing) {
+      existing = generateAnonymousId();
+      localStorage.setItem(ANON_STORAGE_KEY, existing);
+    }
+    return existing;
+  }
+
+  function setVisitorId(value) {
+    if (!value) return;
+    visitorId = value;
+    localStorage.setItem(ANON_STORAGE_KEY, value);
+  }
+
+  function identityFetch(url, options = {}) {
+    const headers = new Headers(options.headers || {});
+    if (visitorId) {
+      headers.set("X-Anonymous-User-Id", visitorId);
+    }
+
+    return fetch(url, {
+      credentials: "same-origin",
+      ...options,
+      headers
+    });
+  }
+
+  function escapeHtml(value) {
+    return String(value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  function renderScrollFeedback(message, nudges = [], kind = "info") {
+    if (!scrollFeedback) return;
+
+    const lines = [];
+    if (message) {
+      lines.push("<div>" + escapeHtml(message) + "</div>");
+    }
+
+    (nudges || []).forEach((line) => {
+      lines.push("<div>" + escapeHtml(line) + "</div>");
+    });
+
+    scrollFeedback.innerHTML = lines.join("");
+    scrollFeedback.dataset.state = kind;
+  }
 
   // Phase 3.1: Anonymous continuity and seeker identity
-  let visitorId = null; // Will be set from backend
+  let visitorId = getOrCreateVisitorId();
   let seekerId = localStorage.getItem("seeker_id") || null;
 
   // Safe JSON parsing helper
@@ -60,7 +127,7 @@ document.addEventListener("DOMContentLoaded", function () {
       payload.seeker_id = seekerId;
     }
 
-    const response = await fetch("/ask", {
+    const response = await identityFetch("/ask", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -114,7 +181,9 @@ document.addEventListener("DOMContentLoaded", function () {
       formData.append("anonymous_user_id", visitorId);
       if (seekerId) formData.append("seeker_id", seekerId);
 
-      const response = await fetch("/upload_scroll", {
+      renderScrollFeedback("");
+
+      const response = await identityFetch("/upload_scroll", {
         method: "POST",
         body: formData,
       });
@@ -122,10 +191,19 @@ document.addEventListener("DOMContentLoaded", function () {
       const data = await safeReadJson(response);
 
       if (!response.ok) {
-        throw new Error(data.error || data.detail || data.message || "Scroll upload failed");
+        renderScrollFeedback(
+          data.error || data.detail || data.message || "Scroll upload failed",
+          data.continuity_nudges || [],
+          "error"
+        );
+        return;
       }
 
-      alert(data.message || "📜 Your scroll has been uploaded.");
+      renderScrollFeedback(
+        data.message || "📜 Your scroll has been uploaded.",
+        data.continuity_nudges || [],
+        "success"
+      );
       scrollInput.value = "";
 
       const countResponse = await fetch("/scrolls");
@@ -135,7 +213,7 @@ document.addEventListener("DOMContentLoaded", function () {
         scrollCount.textContent = countData.count;
       }
     } catch (err) {
-      alert(err.message || "Scroll upload failed.");
+      renderScrollFeedback(err.message || "Scroll upload failed.", [], "error");
     } finally {
       if (submitBtn) {
         submitBtn.disabled = false;
@@ -396,10 +474,9 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     button.textContent = "Opening Stripe...";
 
     try {
-      const response = await fetch("/billing/checkout-session", {
+      const response = await identityFetch("/billing/checkout-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
         body: JSON.stringify({
           plan_code: planCode,
           support_mode: supportMode
@@ -529,10 +606,9 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     submitBtn.textContent = "Logging in...";
 
     try {
-      const response = await fetch("/auth/login", {
+      const response = await identityFetch("/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
         body: JSON.stringify({ email, password })
       });
       const data = await safeReadJson(response);
@@ -573,10 +649,9 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     submitBtn.textContent = "Creating account...";
 
     try {
-      const response = await fetch("/auth/register", {
+      const response = await identityFetch("/auth/register", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
         body: JSON.stringify({ email, password, display_name: displayName })
       });
       const data = await safeReadJson(response);
@@ -616,7 +691,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     submitBtn.textContent = "Sending...";
 
     try {
-      const response = await fetch("/auth/request-password-reset", {
+      const response = await identityFetch("/auth/request-password-reset", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email })
@@ -655,7 +730,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       formData.append("token", token);
       formData.append("new_password", newPassword);
 
-      const response = await fetch("/auth/reset-password", {
+      const response = await identityFetch("/auth/reset-password", {
         method: "POST",
         body: formData
       });
@@ -679,7 +754,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
   // Fetch and display identity info
   async function updateIdentityDisplay() {
     try {
-      const response = await fetch("/me", { credentials: "same-origin" });
+      const response = await identityFetch("/me");
       const data = await safeReadJson(response);
 
       if (response.status === 401 || response.status === 403 || data.error) {
@@ -693,8 +768,11 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
 
       currentIdentity = data;
 
+      if (data.anonymous_user_id) {
+        setVisitorId(data.anonymous_user_id);
+      }
+
       if (data.authenticated) {
-        visitorId = data.anonymous_user_id || null;
         setAuthenticatedMenuState(true);
 
         userDisplayName.textContent = data.display_name || "";
@@ -702,7 +780,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
         updateAdminNav(data);
 
         logoutBtn.onclick = async function() {
-          await fetch("/auth/logout", { method: "POST", credentials: "same-origin" });
+          await identityFetch("/auth/logout", { method: "POST" });
           location.reload();
         };
       } else {
