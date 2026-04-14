@@ -1551,6 +1551,40 @@ def apply_subscription_renewal_failure_to_grace(
         conn.close()
 
 
+def apply_subscription_renewal_failure_to_floor(user_id: str) -> None:
+    now = utc_now()
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET
+                    entitlement_status = 'expired',
+                    subscription_expires_at = CASE
+                        WHEN subscription_expires_at IS NULL OR subscription_expires_at < %s
+                            THEN %s
+                        ELSE subscription_expires_at
+                    END,
+                    grace_period_ends_at = NULL,
+                    last_support_ended_at = COALESCE(last_support_ended_at, %s)
+                WHERE id = %s
+                """,
+                (
+                    now,
+                    now,
+                    now,
+                    user_id
+                )
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    refresh_user_fallback_state(user_id)
+
+
 def apply_grace_expiry_downgrade(user_id: str) -> None:
     now = utc_now()
 
@@ -3690,6 +3724,38 @@ def resolve_user_and_subscription_context(
     return context
 
 
+def get_active_recurring_subscription_for_user(user_id: str) -> Optional[dict]:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    plan_code,
+                    support_mode,
+                    provider_status,
+                    internal_status,
+                    stripe_subscription_id,
+                    current_period_start,
+                    current_period_end,
+                    cancel_at_period_end,
+                    updated_at
+                FROM subscriptions
+                WHERE user_id = %s
+                  AND provider = 'stripe'
+                  AND support_mode IN ('monthly_recurring', 'annual_recurring')
+                  AND provider_status IN ('active', 'trialing', 'past_due', 'unpaid')
+                  AND ended_at IS NULL
+                ORDER BY updated_at DESC NULLS LAST, current_period_end DESC NULLS LAST
+                LIMIT 1
+                """,
+                (user_id,)
+            )
+            return cur.fetchone()
+    finally:
+        conn.close()
+
 
 def upsert_local_stripe_subscription(
     subscription_obj: dict,
@@ -3769,7 +3835,7 @@ def upsert_local_stripe_subscription(
     if provider_status in {"active", "trialing"}:
         internal_status = "active"
     elif provider_status in {"past_due", "unpaid"}:
-        internal_status = "grace"
+        internal_status = "expired"
     elif provider_status in {"canceled"}:
         internal_status = "cancelled"
     elif provider_status in {"incomplete_expired"}:
@@ -4270,7 +4336,7 @@ def process_stripe_event(event: dict) -> dict:
                 stripe_subscription_id=stripe_subscription_id
             )
             if context.get("user_id") and context.get("support_mode") in {"monthly_recurring", "annual_recurring"}:
-                apply_subscription_renewal_failure_to_grace(context["user_id"])
+                apply_subscription_renewal_failure_to_floor(context["user_id"])
                 upsert_billing_transaction_from_invoice(
                     event_id=event["id"],
                     invoice_obj=obj,
@@ -4281,7 +4347,7 @@ def process_stripe_event(event: dict) -> dict:
                     transaction_kind="monthly_renewal" if context.get("support_mode") == "monthly_recurring" else "annual_renewal",
                     status="failed"
                 )
-                helper_name = f"apply_subscription_renewal_failure_to_grace:{context.get('support_mode')}"
+                helper_name = f"apply_subscription_renewal_failure_to_floor:{context.get('support_mode')}"
 
         elif event_type == "invoice.upcoming":
             context = resolve_user_and_subscription_context(
@@ -4358,6 +4424,14 @@ def billing_checkout_session(request: Request, payload: BillingCheckoutSessionIn
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required.")
 
+    if payload.support_mode in {"monthly_recurring", "annual_recurring"}:
+        active_recurring = get_active_recurring_subscription_for_user(user["user_id"])
+        if active_recurring:
+            raise HTTPException(
+                status_code=409,
+                detail="You already have active recurring support. Starting a second recurring subscription is blocked until change-plan handling is in place."
+            )
+
     base_url = (os.getenv("APP_BASE_URL") or str(request.base_url)).rstrip("/")
     success_url = f"{base_url}/temple?checkout=success"
     cancel_url = f"{base_url}/temple?checkout=cancelled"
@@ -4386,15 +4460,12 @@ def billing_checkout_session(request: Request, payload: BillingCheckoutSessionIn
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
-        print(f"[STRIPE CONFIG ERROR] {type(e).__name__}: {e}", flush=True)
         logger.error(f"Stripe configuration error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     except stripe.error.StripeError as e:
-        print(f"[STRIPE CHECKOUT ERROR] {type(e).__name__}: {e}", flush=True)
         logger.error(f"Stripe checkout session creation failed: {e}")
         raise HTTPException(status_code=502, detail="Stripe checkout session creation failed.")
     except Exception as e:
-        print(f"[BILLING CHECKOUT ERROR] {type(e).__name__}: {e}", flush=True)
         logger.error(f"Billing checkout session error: {e}")
         raise HTTPException(status_code=500, detail="Billing checkout session creation failed.")
 
@@ -4612,13 +4683,13 @@ def admin_apply_renewal_failure_to_grace(
     payload: AdminLifecycleUserInput
 ):
     admin_user = require_admin(request)
-    apply_subscription_renewal_failure_to_grace(user_id=payload.user_id)
+    apply_subscription_renewal_failure_to_floor(user_id=payload.user_id)
 
     entitlement = get_user_entitlement_snapshot(payload.user_id)
 
     log_admin_action(
         admin_user_id=admin_user["user_id"],
-        action_type="admin.users.renewal_failure_to_grace",
+        action_type="admin.users.renewal_failure_to_floor",
         target_user_id=payload.user_id,
         payload={}
     )
