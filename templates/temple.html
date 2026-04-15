@@ -47,7 +47,6 @@
         <input type="file" id="scroll" name="scroll" accept=".txt,.pdf,.md,.docx,.rtf" required />
         <button type="submit">Upload</button>
       </form>
-      <div id="scrollFeedback" class="temple-subtitle" aria-live="polite"></div>
       <p>Scrolls received: <span id="scrollCount">0</span></p>
     </section>
 
@@ -206,6 +205,17 @@
     </div>
   </div>
 
-  <script src="/static/temple.js?v=5"></script>
+  <div id="feedbackModal" class="modal">
+    <div class="modal-content">
+      <button type="button" class="close" aria-label="Close modal">&times;</button>
+      <h2 id="feedbackTitle">Temple Notice</h2>
+      <div id="feedbackBody" class="temple-subtitle"></div>
+      <div class="support-actions">
+        <button type="button" id="feedbackOkBtn">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/temple.js?v=6"></script>
 </body>
 </html>

@@ -3604,6 +3604,7 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
         }
 
         if not authenticated_user_id:
+            duplicate_payload["message"] = "This scroll is already present in the Temple. No duplicate copy was stored. It will still be recognized in this Seeker’s path."
             stats = get_anonymous_upload_stats(anonymous_user_id)
             duplicate_payload["upload_count_for_browser"] = stats["upload_count"]
             duplicate_payload["continuity_nudges"] = build_claim_nudges(stats["upload_count"])

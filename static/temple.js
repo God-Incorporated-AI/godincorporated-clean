@@ -29,7 +29,11 @@ document.addEventListener("DOMContentLoaded", function () {
   const scrollCount = document.getElementById("scrollCount");
   const scrollInput = document.getElementById("scroll");
   const oracleHelper = document.getElementById("oracleHelper");
-  const scrollFeedback = document.getElementById("scrollFeedback");
+
+  const feedbackModal = document.getElementById("feedbackModal");
+  const feedbackTitle = document.getElementById("feedbackTitle");
+  const feedbackBody = document.getElementById("feedbackBody");
+  const feedbackOkBtn = document.getElementById("feedbackOkBtn");
 
   const ANON_STORAGE_KEY = "godinc_anon_id";
 
@@ -81,8 +85,8 @@ document.addEventListener("DOMContentLoaded", function () {
       .replace(/'/g, "&#39;");
   }
 
-  function renderScrollFeedback(message, nudges = [], kind = "info") {
-    if (!scrollFeedback) return;
+  function showFeedbackModal(message, nudges = [], title = "Temple Notice") {
+    if (!feedbackModal || !feedbackBody || !feedbackTitle) return;
 
     const lines = [];
     if (message) {
@@ -93,8 +97,9 @@ document.addEventListener("DOMContentLoaded", function () {
       lines.push("<div>" + escapeHtml(line) + "</div>");
     });
 
-    scrollFeedback.innerHTML = lines.join("");
-    scrollFeedback.dataset.state = kind;
+    feedbackTitle.textContent = title;
+    feedbackBody.innerHTML = lines.join("");
+    openModal(feedbackModal);
   }
 
   // Phase 3.1: Anonymous continuity and seeker identity
@@ -181,8 +186,6 @@ document.addEventListener("DOMContentLoaded", function () {
       formData.append("anonymous_user_id", visitorId);
       if (seekerId) formData.append("seeker_id", seekerId);
 
-      renderScrollFeedback("");
-
       const response = await identityFetch("/upload_scroll", {
         method: "POST",
         body: formData,
@@ -191,18 +194,23 @@ document.addEventListener("DOMContentLoaded", function () {
       const data = await safeReadJson(response);
 
       if (!response.ok) {
-        renderScrollFeedback(
+        const shouldClearFile = response.status === 403 || response.status === 409;
+        if (shouldClearFile) {
+          scrollInput.value = "";
+        }
+
+        showFeedbackModal(
           data.error || data.detail || data.message || "Scroll upload failed",
           data.continuity_nudges || [],
-          "error"
+          "Temple Notice"
         );
         return;
       }
 
-      renderScrollFeedback(
+      showFeedbackModal(
         data.message || "📜 Your scroll has been uploaded.",
         data.continuity_nudges || [],
-        "success"
+        "Temple Notice"
       );
       scrollInput.value = "";
 
@@ -213,7 +221,7 @@ document.addEventListener("DOMContentLoaded", function () {
         scrollCount.textContent = countData.count;
       }
     } catch (err) {
-      renderScrollFeedback(err.message || "Scroll upload failed.", [], "error");
+      showFeedbackModal(err.message || "Scroll upload failed.", [], "Temple Notice");
     } finally {
       if (submitBtn) {
         submitBtn.disabled = false;
@@ -355,6 +363,12 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
   const resetRequestForm = document.getElementById("resetRequestForm");
   const resetPasswordForm = document.getElementById("resetPasswordForm");
 
+  if (feedbackOkBtn) {
+    feedbackOkBtn.addEventListener("click", function() {
+      closeModal(feedbackModal);
+    });
+  }
+
   function openModal(modal) {
     if (!modal) return;
     modal.style.display = "block";
@@ -436,6 +450,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     closeModal(resetRequestModal);
     closeModal(resetPasswordModal);
     closeModal(supportModal);
+    closeModal(feedbackModal);
     clearAuthErrors();
   }
 
@@ -495,7 +510,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
 
       window.location.href = data.checkout_url;
     } catch (err) {
-      alert(err.message || "Support checkout failed.");
+      showFeedbackModal(err.message || "Support checkout failed.", [], "Temple Notice");
       button.disabled = false;
       button.textContent = originalText;
     }
@@ -568,7 +583,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       if (TEMPLE_CONTRIBUTION_URL) {
         window.location.href = TEMPLE_CONTRIBUTION_URL;
       } else {
-        alert("Temple contribution will be connected next. Support tiers are active now.");
+        showFeedbackModal("Temple contribution will be connected next. Support tiers are active now.", [], "Temple Notice");
       }
     });
   }
@@ -663,7 +678,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       if (response.ok) {
         // Success
         closeModal(registerModal);
-        alert("Account created. Please check your email and verify your account before logging in.");
+        showFeedbackModal("Account created. Please check your email and verify your account before logging in.", [], "Account Created");
         updateIdentityDisplay();
       } else {
         // Error
@@ -700,7 +715,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       if (response.ok) {
         // Success
         closeModal(resetRequestModal);
-        alert("If an account with that email exists, a reset link has been sent to that email address.");
+        showFeedbackModal("If an account with that email exists, a reset link has been sent to that email address.", [], "Password Reset");
       } else {
         // Error
         resetRequestError.textContent = data.error || "Request failed";
@@ -739,7 +754,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
 
       if (response.ok) {
         closeModal(resetPasswordModal);
-        alert("Password reset successfully. Please log in with your new password.");
+        showFeedbackModal("Password reset successfully. Please log in with your new password.", [], "Password Reset");
       } else {
         resetPasswordError.textContent = data.error || "Reset failed";
       }
