@@ -223,6 +223,21 @@ def get_or_create_billing_customer(
     )
 
 
+
+def stripe_obj_to_plain(value):
+    if isinstance(value, dict):
+        return {k: stripe_obj_to_plain(v) for k, v in value.items()}
+
+    if isinstance(value, list):
+        return [stripe_obj_to_plain(v) for v in value]
+
+    raw_data = getattr(value, "_data", None)
+    if isinstance(raw_data, dict):
+        return {k: stripe_obj_to_plain(v) for k, v in raw_data.items()}
+
+    return value
+
+
 def get_subscription_item_id(subscription_obj: dict) -> str:
     items = ((subscription_obj.get("items") or {}).get("data") or [])
     if not items:
@@ -251,7 +266,7 @@ def change_existing_subscription_plan(
     )
 
     current_subscription = stripe.Subscription.retrieve(current_subscription_id)
-    current_subscription = current_subscription.to_dict_recursive()
+    current_subscription = stripe_obj_to_plain(current_subscription)
 
     if current_subscription.get("customer") != billing_customer["stripe_customer_id"]:
         raise ValueError("Existing Stripe subscription does not belong to this billing customer.")
@@ -299,7 +314,7 @@ def change_existing_subscription_plan(
         ],
         metadata=metadata,
     )
-    updated_subscription = updated_subscription.to_dict_recursive()
+    updated_subscription = stripe_obj_to_plain(updated_subscription)
 
     return {
         "changed_subscription": True,
