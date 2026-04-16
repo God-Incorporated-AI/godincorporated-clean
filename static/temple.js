@@ -34,7 +34,8 @@ document.addEventListener("DOMContentLoaded", function () {
   const feedbackTitle = document.getElementById("feedbackTitle");
   const feedbackBody = document.getElementById("feedbackBody");
   const feedbackOkBtn = document.getElementById("feedbackOkBtn");
-  const feedbackCreateAccountBtn = document.getElementById("feedbackCreateAccountBtn");
+
+  let feedbackModalAction = "ok";
 
   const ANON_STORAGE_KEY = "godinc_anon_id";
 
@@ -123,8 +124,10 @@ document.addEventListener("DOMContentLoaded", function () {
     });
 
     const showCreateAccount = Boolean(options.showCreateAccount);
-    if (feedbackCreateAccountBtn) {
-      feedbackCreateAccountBtn.style.display = showCreateAccount ? "inline-block" : "none";
+    feedbackModalAction = showCreateAccount ? "create_account" : "ok";
+
+    if (feedbackOkBtn) {
+      feedbackOkBtn.textContent = showCreateAccount ? "Create account" : "OK";
     }
 
     feedbackTitle.textContent = title;
@@ -405,15 +408,13 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
 
   if (feedbackOkBtn) {
     feedbackOkBtn.addEventListener("click", function() {
+      const action = feedbackModalAction;
       closeModal(feedbackModal);
-    });
-  }
 
-  if (feedbackCreateAccountBtn) {
-    feedbackCreateAccountBtn.addEventListener("click", function() {
-      closeModal(feedbackModal);
-      clearAuthErrors();
-      openModal(registerModal);
+      if (action === "create_account") {
+        clearAuthErrors();
+        openModal(registerModal);
+      }
     });
   }
 
@@ -499,6 +500,10 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     closeModal(resetPasswordModal);
     closeModal(supportModal);
     closeModal(feedbackModal);
+    feedbackModalAction = "ok";
+    if (feedbackOkBtn) {
+      feedbackOkBtn.textContent = "OK";
+    }
     clearAuthErrors();
   }
 
