@@ -32,7 +32,7 @@ from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio
 from services.whisper import transcribe_audio
 from services.mail import send_email
-from services.stripe_billing import create_checkout_session_for_user
+from services.stripe_billing import create_checkout_session_for_user, change_existing_subscription_plan
 from storage.json_store import UPLOAD_DIR, AUDIO_DIR, save_log
 
 logging.basicConfig(
@@ -4563,10 +4563,52 @@ def billing_checkout_session(request: Request, payload: BillingCheckoutSessionIn
     if payload.support_mode in {"monthly_recurring", "annual_recurring"}:
         active_recurring = get_active_recurring_subscription_for_user(user["user_id"])
         if active_recurring:
-            raise HTTPException(
-                status_code=409,
-                detail="You already have active recurring support. Starting a second recurring subscription is blocked until change-plan handling is in place."
-            )
+            try:
+                result = change_existing_subscription_plan(
+                    user_id=user["user_id"],
+                    user_email=user["email"],
+                    display_name=user.get("display_name"),
+                    current_subscription_id=active_recurring["stripe_subscription_id"],
+                    plan_code=payload.plan_code,
+                    support_mode=payload.support_mode,
+                )
+
+                updated_subscription = stripe_obj_to_plain(result["subscription_obj"])
+                upsert_local_stripe_subscription(
+                    subscription_obj=updated_subscription,
+                    fallback_user_id=user["user_id"],
+                    fallback_plan_code=result["plan_code"],
+                    fallback_support_mode=result["support_mode"],
+                )
+
+                if result.get("changed_subscription"):
+                    period_start = stripe_ts_to_dt(updated_subscription.get("current_period_start"))
+                    period_end = stripe_ts_to_dt(updated_subscription.get("current_period_end"))
+
+                    apply_subscription_renewal_success(
+                        user_id=user["user_id"],
+                        plan_code=result["plan_code"],
+                        period_start=period_start,
+                        period_end=period_end,
+                        support_mode=result["support_mode"]
+                    )
+
+                return {
+                    "ok": True,
+                    "changed_subscription": bool(result.get("changed_subscription")),
+                    "message": result["message"],
+                    "plan_code": result["plan_code"],
+                    "support_mode": result["support_mode"],
+                    "livemode": result["livemode"],
+                }
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except stripe.error.StripeError as e:
+                logger.error(f"Stripe change-plan failed: {e}")
+                raise HTTPException(status_code=502, detail="Stripe change-plan failed.")
+            except Exception as e:
+                logger.error(f"Billing change-plan error: {e}")
+                raise HTTPException(status_code=500, detail="Billing change-plan failed.")
 
     base_url = (os.getenv("APP_BASE_URL") or str(request.base_url)).rstrip("/")
     success_url = f"{base_url}/temple?checkout=success"

@@ -223,6 +223,94 @@ def get_or_create_billing_customer(
     )
 
 
+def get_subscription_item_id(subscription_obj: dict) -> str:
+    items = ((subscription_obj.get("items") or {}).get("data") or [])
+    if not items:
+        raise ValueError("Stripe subscription has no subscription items.")
+    item_id = items[0].get("id")
+    if not item_id:
+        raise ValueError("Stripe subscription item id is missing.")
+    return item_id
+
+
+def change_existing_subscription_plan(
+    user_id: str,
+    user_email: str,
+    display_name: Optional[str],
+    current_subscription_id: str,
+    plan_code: str,
+    support_mode: str,
+) -> dict:
+    init_stripe()
+
+    plan = get_checkout_plan_and_price(plan_code=plan_code, support_mode=support_mode)
+    billing_customer = get_or_create_billing_customer(
+        user_id=user_id,
+        user_email=user_email,
+        display_name=display_name,
+    )
+
+    current_subscription = stripe.Subscription.retrieve(current_subscription_id)
+    current_subscription = current_subscription.to_dict_recursive()
+
+    if current_subscription.get("customer") != billing_customer["stripe_customer_id"]:
+        raise ValueError("Existing Stripe subscription does not belong to this billing customer.")
+
+    current_status = (current_subscription.get("status") or "").lower()
+    if current_status not in {"active", "trialing", "past_due", "unpaid"}:
+        raise ValueError(f"Subscription is not eligible for plan change from status={current_status}.")
+
+    current_item_id = get_subscription_item_id(current_subscription)
+    current_price_id = None
+    try:
+        current_price_id = current_subscription["items"]["data"][0]["price"]["id"]
+    except Exception:
+        pass
+
+    if current_price_id == plan["stripe_price_id"] and not current_subscription.get("cancel_at_period_end"):
+        return {
+            "changed_subscription": False,
+            "message": f"You are already on active {plan['display_name']} recurring support.",
+            "plan_code": plan["plan_code"],
+            "support_mode": plan["support_mode"],
+            "livemode": bool(current_subscription.get("livemode")),
+            "subscription_obj": current_subscription,
+        }
+
+    metadata = dict(current_subscription.get("metadata") or {})
+    metadata.update({
+        "user_id": user_id,
+        "plan_code": plan["plan_code"],
+        "support_mode": plan["support_mode"],
+        "change_source": "phase8_change_plan",
+    })
+
+    updated_subscription = stripe.Subscription.modify(
+        current_subscription_id,
+        cancel_at_period_end=False,
+        billing_cycle_anchor="now",
+        proration_behavior="none",
+        payment_behavior="error_if_incomplete",
+        items=[
+            {
+                "id": current_item_id,
+                "price": plan["stripe_price_id"],
+            }
+        ],
+        metadata=metadata,
+    )
+    updated_subscription = updated_subscription.to_dict_recursive()
+
+    return {
+        "changed_subscription": True,
+        "message": f"Support updated to {plan['display_name']}. The new billing cycle starts today.",
+        "plan_code": plan["plan_code"],
+        "support_mode": plan["support_mode"],
+        "livemode": bool(updated_subscription.get("livemode")),
+        "subscription_obj": updated_subscription,
+    }
+
+
 def create_checkout_session_for_user(
     user_id: str,
     user_email: str,

@@ -554,7 +554,20 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       const data = await safeReadJson(response);
 
       if (!response.ok) {
-        throw new Error(data.error || "Could not create Stripe checkout session.");
+        throw new Error(data.error || data.detail || "Could not create Stripe checkout session.");
+      }
+
+      if (Object.prototype.hasOwnProperty.call(data, "changed_subscription")) {
+        closeModal(supportModal);
+        showFeedbackModal(
+          data.message || (data.changed_subscription ? "Support updated successfully." : "Your support is already on this active plan."),
+          [],
+          data.changed_subscription ? "Support Updated" : "Temple Notice"
+        );
+        await updateIdentityDisplay();
+        button.disabled = false;
+        button.textContent = originalText;
+        return;
       }
 
       if (!data.checkout_url) {
