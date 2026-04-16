@@ -56,9 +56,6 @@ BROWSER_TOKEN_HEADER = "x-anonymous-user-id"
 ANONYMOUS_UPLOAD_COOLDOWN_SECONDS = 5
 ANONYMOUS_UPLOAD_LIMIT = 3
 
-PDF_MIN_EXTRACTED_TEXT_CHARS = 120
-PDF_SCAN_PROBE_PAGES = 3
-PDF_SCAN_PROBE_MIN_TEXT_CHARS = 24
 
 def get_ip_hash(request: Request) -> str:
     ip = request.client.host if request.client else "unknown"
@@ -923,31 +920,6 @@ def extract_text_from_scroll(file_path):
         logger.error(f"Failed to extract text: {e}")
 
     return text.strip()
-
-
-def inspect_pdf_text_profile(file_path: str, sample_pages: int = PDF_SCAN_PROBE_PAGES) -> dict:
-    profile = {
-        "sampled_pages": 0,
-        "sample_text_chars": 0,
-        "sample_image_count": 0,
-    }
-
-    try:
-        doc = fitz.open(file_path)
-        try:
-            max_pages = min(len(doc), sample_pages)
-            for page_index in range(max_pages):
-                page = doc[page_index]
-                page_text = (page.get_text("text") or "").strip()
-                profile["sampled_pages"] += 1
-                profile["sample_text_chars"] += len(page_text)
-                profile["sample_image_count"] += len(page.get_images(full=True) or [])
-        finally:
-            doc.close()
-    except Exception as e:
-        logger.warning(f"PDF profile probe failed for {file_path}: {e}")
-
-    return profile
 
 
 def remove_uploaded_file(file_path: str):
@@ -3499,20 +3471,6 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
         shutil.copyfileobj(scroll.file, f)
 
     file_ext = os.path.splitext(file_path)[1].lower()
-    pdf_profile = None
-
-    if file_ext == ".pdf":
-        pdf_profile = inspect_pdf_text_profile(file_path)
-        if (
-            pdf_profile["sampled_pages"] > 0
-            and pdf_profile["sample_text_chars"] < PDF_SCAN_PROBE_MIN_TEXT_CHARS
-            and pdf_profile["sample_image_count"] > 0
-        ):
-            remove_uploaded_file(file_path)
-            raise HTTPException(
-                status_code=422,
-                detail="This scroll appears to be image-based or photo-scanned. The Temple could not reliably read it through the live upload path. Please upload a text-based PDF, TXT, DOCX, or an OCR-processed scan."
-            )
 
     # Extract text
     extracted_text = extract_text_from_scroll(file_path)
@@ -3525,18 +3483,6 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
                 detail="This scroll appears to be image-based or photo-scanned. The Temple could not reliably read it through the live upload path. Please upload a text-based PDF, TXT, DOCX, or an OCR-processed scan."
             )
         raise HTTPException(status_code=400, detail="Could not extract text from scroll")
-
-    if (
-        file_ext == ".pdf"
-        and pdf_profile
-        and pdf_profile["sample_image_count"] > 0
-        and len(extracted_text.strip()) < PDF_MIN_EXTRACTED_TEXT_CHARS
-    ):
-        remove_uploaded_file(file_path)
-        raise HTTPException(
-            status_code=422,
-            detail="This scroll appears to be image-based or photo-scanned. The Temple could not reliably read it through the live upload path. Please upload a text-based PDF, TXT, DOCX, or an OCR-processed scan."
-        )
 
     text_hash = hashlib.sha256(extracted_text.encode("utf-8")).hexdigest()
 
