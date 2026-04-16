@@ -34,6 +34,7 @@ document.addEventListener("DOMContentLoaded", function () {
   const feedbackTitle = document.getElementById("feedbackTitle");
   const feedbackBody = document.getElementById("feedbackBody");
   const feedbackOkBtn = document.getElementById("feedbackOkBtn");
+  const feedbackCreateAccountBtn = document.getElementById("feedbackCreateAccountBtn");
 
   const ANON_STORAGE_KEY = "godinc_anon_id";
 
@@ -85,7 +86,31 @@ document.addEventListener("DOMContentLoaded", function () {
       .replace(/'/g, "&#39;");
   }
 
-  function showFeedbackModal(message, nudges = [], title = "Temple Notice") {
+  function looksLikeHtmlResponse(value) {
+    if (typeof value !== "string") return false;
+    const sample = value.trim().slice(0, 200).toLowerCase();
+    return sample.startsWith("<!doctype html") || sample.startsWith("<html");
+  }
+
+  function normalizeUploadFeedback(response, data) {
+    const nudges = Array.isArray(data?.continuity_nudges) ? data.continuity_nudges : [];
+
+    if ((response && response.status >= 500) || looksLikeHtmlResponse(data)) {
+      return {
+        message: "The Temple could not read that scroll right now. This file may be image-heavy or photo-scanned, and the live upload path could not process it reliably. Please try a text-based PDF, TXT, DOCX, or an OCR-processed scan.",
+        nudges,
+        title: "Scroll Upload"
+      };
+    }
+
+    return {
+      message: data?.error || data?.detail || data?.message || (typeof data === "string" && data.trim() ? data.trim() : "Scroll upload failed."),
+      nudges,
+      title: "Temple Notice"
+    };
+  }
+
+  function showFeedbackModal(message, nudges = [], title = "Temple Notice", options = {}) {
     if (!feedbackModal || !feedbackBody || !feedbackTitle) return;
 
     const lines = [];
@@ -96,6 +121,11 @@ document.addEventListener("DOMContentLoaded", function () {
     (nudges || []).forEach((line) => {
       lines.push("<div>" + escapeHtml(line) + "</div>");
     });
+
+    const showCreateAccount = Boolean(options.showCreateAccount);
+    if (feedbackCreateAccountBtn) {
+      feedbackCreateAccountBtn.style.display = showCreateAccount ? "inline-block" : "none";
+    }
 
     feedbackTitle.textContent = title;
     feedbackBody.innerHTML = lines.join("");
@@ -192,25 +222,35 @@ document.addEventListener("DOMContentLoaded", function () {
       });
 
       const data = await safeReadJson(response);
+      const continuityNudges = Array.isArray(data?.continuity_nudges) ? data.continuity_nudges : [];
+      const shouldOfferClaim = !currentIdentity?.authenticated && (Boolean(data?.claim_required) || continuityNudges.length > 0);
 
       if (!response.ok) {
-        const shouldClearFile = response.status === 403 || response.status === 409;
+        const normalized = normalizeUploadFeedback(response, data);
+        const shouldClearFile =
+          response.status === 403 ||
+          response.status === 409 ||
+          response.status >= 500 ||
+          looksLikeHtmlResponse(data);
+
         if (shouldClearFile) {
           scrollInput.value = "";
         }
 
         showFeedbackModal(
-          data.error || data.detail || data.message || "Scroll upload failed",
-          data.continuity_nudges || [],
-          "Temple Notice"
+          normalized.message,
+          normalized.nudges,
+          normalized.title,
+          { showCreateAccount: shouldOfferClaim }
         );
         return;
       }
 
       showFeedbackModal(
         data.message || "📜 Your scroll has been uploaded.",
-        data.continuity_nudges || [],
-        "Temple Notice"
+        continuityNudges,
+        "Temple Notice",
+        { showCreateAccount: shouldOfferClaim }
       );
       scrollInput.value = "";
 
@@ -366,6 +406,14 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
   if (feedbackOkBtn) {
     feedbackOkBtn.addEventListener("click", function() {
       closeModal(feedbackModal);
+    });
+  }
+
+  if (feedbackCreateAccountBtn) {
+    feedbackCreateAccountBtn.addEventListener("click", function() {
+      closeModal(feedbackModal);
+      clearAuthErrors();
+      openModal(registerModal);
     });
   }
 
