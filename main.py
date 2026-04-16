@@ -4617,9 +4617,11 @@ def billing_checkout_session(request: Request, payload: BillingCheckoutSessionIn
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
             except stripe.error.StripeError as e:
+                print(f"[STRIPE CHANGE PLAN ERROR] {type(e).__name__}: {e}", flush=True)
                 logger.error(f"Stripe change-plan failed: {e}")
                 raise HTTPException(status_code=502, detail="Stripe change-plan failed.")
             except Exception as e:
+                print(f"[BILLING CHANGE PLAN ERROR] {type(e).__name__}: {e}", flush=True)
                 logger.error(f"Billing change-plan error: {e}")
                 raise HTTPException(status_code=500, detail="Billing change-plan failed.")
 
