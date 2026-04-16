@@ -2194,6 +2194,19 @@ def merge_anonymous_history_into_user(session_id: Optional[str], user_id: str) -
 
             cur.execute(
                 """
+                DELETE FROM scroll_associations sa
+                USING scroll_associations existing
+                WHERE sa.session_id = %s
+                  AND sa.scroll_id = existing.scroll_id
+                  AND existing.user_id = %s
+                  AND sa.id <> existing.id
+                  AND (sa.user_id IS NULL OR sa.user_id <> %s)
+                """,
+                (session_id, user_id, user_id)
+            )
+
+            cur.execute(
+                """
                 UPDATE scroll_associations
                 SET user_id = %s
                 WHERE session_id = %s
