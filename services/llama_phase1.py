@@ -185,3 +185,30 @@ def apply_phase1_result(original_passages: list[str], result: Optional[dict]) ->
     }.get(result.get("budget_tier"), 6)
 
     return passages[:cap], compact_brief
+
+
+def summarize_phase1_result(result: Optional[dict], passages_before: int, passages_after: int) -> str:
+    if not result:
+        return (
+            "LLAMA_PHASE1 enabled=false "
+            f"passages_before={passages_before} passages_after={passages_after}"
+        )
+
+    selected = result.get("selected_passage_indexes") or []
+    compact_brief = (result.get("compact_brief") or "").strip()
+    reason = (result.get("reason") or "").strip().replace("\n", " ")
+    if len(reason) > 180:
+        reason = reason[:177] + "..."
+
+    return (
+        "LLAMA_PHASE1 "
+        f"enabled={str(bool(result.get('enabled'))).lower()} "
+        f"shadow_only={str(bool(result.get('shadow_only'))).lower()} "
+        f"provider={result.get('provider', '-') } "
+        f"budget={result.get('budget_tier', '-') } "
+        f"passages_before={passages_before} "
+        f"passages_after={passages_after} "
+        f"selected_indexes={selected} "
+        f"brief_chars={len(compact_brief)} "
+        f"reason={reason or '-'}"
+    )

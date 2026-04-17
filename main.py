@@ -31,7 +31,7 @@ import stripe
 from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio
 from services.whisper import transcribe_audio
-from services.llama_phase1 import build_support_packet, run_llama_phase1, apply_phase1_result
+from services.llama_phase1 import build_support_packet, run_llama_phase1, apply_phase1_result, summarize_phase1_result
 from services.mail import send_email
 from services.stripe_billing import create_checkout_session_for_user, change_existing_subscription_plan
 from storage.json_store import UPLOAD_DIR, AUDIO_DIR, save_log
@@ -4944,6 +4944,18 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         llama_phase1 = await run_llama_phase1(support_packet)
         passages, llama_compact_brief = apply_phase1_result(passages_before_llama, llama_phase1)
+
+        logger.info(
+            "%s deity=%s memory_intent=%s plan_code=%s",
+            summarize_phase1_result(
+                llama_phase1,
+                passages_before=len(passages_before_llama),
+                passages_after=len(passages)
+            ),
+            deity,
+            memory_intent,
+            plan_code
+        )
 
         context_block = ""
         if passages or llama_compact_brief:
