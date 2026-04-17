@@ -539,10 +539,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   applyRenewalFailureBtn.addEventListener("click", async () => {
     await confirmAndRunMutation(
-      "Move to grace",
-      "Move the loaded user into grace status?",
+      "Apply renewal failure to floor",
+      "Apply renewal failure and drop the loaded user to floor access? This follows the no-grace beta rule.",
       (targetUserId) =>
-        postJson("/admin/users/renewal-failure-to-grace", {
+        postJson("/admin/users/renewal-failure-to-floor", {
           user_id: targetUserId
         })
     );
@@ -586,10 +586,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   applyGraceExpiryBtn.addEventListener("click", async () => {
     await confirmAndRunMutation(
-      "Apply grace expiry",
-      "Apply grace expiry to the loaded user? This can downgrade access.",
+      "Finalize cancel-at-period-end",
+      "Finalize cancel-at-period-end for the loaded user? This only changes users whose expiry date is already in the past.",
       (targetUserId) =>
-        postJson("/admin/users/apply-grace-expiry", {
+        postJson("/admin/users/apply-cancel-at-period-end-downgrade", {
           user_id: targetUserId
         })
     );

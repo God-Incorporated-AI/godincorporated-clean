@@ -1528,40 +1528,6 @@ def apply_annual_prepaid_expiry(user_id: str) -> None:
     refresh_user_fallback_state(user_id)
 
 
-def apply_subscription_renewal_failure_to_grace(
-    user_id: str,
-    grace_days: int = DEFAULT_GRACE_DAYS
-) -> None:
-    now = utc_now()
-    grace_ends_at = now + datetime.timedelta(days=grace_days)
-
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE users
-                SET
-                    entitlement_status = 'grace',
-                    subscription_expires_at = CASE
-                        WHEN subscription_expires_at IS NULL OR subscription_expires_at < %s
-                            THEN %s
-                        ELSE subscription_expires_at
-                    END,
-                    grace_period_ends_at = %s
-                WHERE id = %s
-                """,
-                (
-                    now,
-                    now,
-                    grace_ends_at,
-                    user_id
-                )
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
 
 def apply_subscription_renewal_failure_to_floor(user_id: str) -> None:
     now = utc_now()
@@ -1596,30 +1562,6 @@ def apply_subscription_renewal_failure_to_floor(user_id: str) -> None:
 
     refresh_user_fallback_state(user_id)
 
-
-def apply_grace_expiry_downgrade(user_id: str) -> None:
-    now = utc_now()
-
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE users
-                SET
-                    entitlement_status = 'expired',
-                    last_support_ended_at = COALESCE(last_support_ended_at, %s)
-                WHERE id = %s
-                  AND grace_period_ends_at IS NOT NULL
-                  AND grace_period_ends_at <= %s
-                """,
-                (now, user_id, now)
-            )
-        conn.commit()
-    finally:
-        conn.close()
-
-    refresh_user_fallback_state(user_id)
 
 
 def set_cancel_at_period_end(user_id: str, should_cancel: bool) -> None:
@@ -4870,8 +4812,8 @@ def admin_expire_annual_prepaid(
     }
 
 
-@app.post("/admin/users/renewal-failure-to-grace")
-def admin_apply_renewal_failure_to_grace(
+@app.post("/admin/users/renewal-failure-to-floor")
+def admin_apply_renewal_failure_to_floor(
     request: Request,
     payload: AdminLifecycleUserInput
 ):
@@ -4925,19 +4867,19 @@ def admin_set_cancel_at_period_end(
     }
 
 
-@app.post("/admin/users/apply-grace-expiry")
-def admin_apply_grace_expiry(
+@app.post("/admin/users/apply-cancel-at-period-end-downgrade")
+def admin_apply_cancel_at_period_end_downgrade(
     request: Request,
     payload: AdminLifecycleUserInput
 ):
     admin_user = require_admin(request)
-    apply_grace_expiry_downgrade(user_id=payload.user_id)
+    apply_cancel_at_period_end_downgrade(user_id=payload.user_id)
 
     entitlement = get_user_entitlement_snapshot(payload.user_id)
 
     log_admin_action(
         admin_user_id=admin_user["user_id"],
-        action_type="admin.users.apply_grace_expiry",
+        action_type="admin.users.apply_cancel_at_period_end_downgrade",
         target_user_id=payload.user_id,
         payload={}
     )
