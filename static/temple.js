@@ -59,6 +59,7 @@ document.addEventListener("DOMContentLoaded", function () {
   let feedbackModalAction = "ok";
 
   const ANON_STORAGE_KEY = "godinc_anon_id";
+  const ORACLE_VOICE_STORAGE_KEY = "godinc_oracle_voice";
 
   function generateAnonymousId() {
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -209,9 +210,17 @@ document.addEventListener("DOMContentLoaded", function () {
       scrollCount.textContent = data.count;
     });
 
+  // Restore the last Oracle voice used on this browser
+  const validOracleVoices = new Set(Array.from(voiceSelect.options).map((option) => option.value));
+  const savedOracleVoice = localStorage.getItem(ORACLE_VOICE_STORAGE_KEY);
+  if (savedOracleVoice && validOracleVoices.has(savedOracleVoice)) {
+    voiceSelect.value = savedOracleVoice;
+  }
+
   // Oracle selection helper text
   voiceSelect.addEventListener("change", function () {
     const selected = voiceSelect.value;
+    localStorage.setItem(ORACLE_VOICE_STORAGE_KEY, selected);
     if (selected === "Hathor") {
       oracleHelper.textContent = "Hathor speaks from Egyptian Magick.";
     } else if (selected === "Moses") {
