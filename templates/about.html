@@ -11,6 +11,29 @@
   <main class="about-page">
     <header class="branding about-hero">
       <div class="brand-name">GODINCORPORATED.AI</div>
+      <div class="header-actions">
+        <button type="button" id="menuToggle" class="menu-toggle" aria-label="Open menu">☰</button>
+        <nav id="mainMenu" class="main-menu">
+          <div id="menuAnonymous" class="menu-section">
+            <button type="button" data-nav="/temple">Log in</button>
+            <button type="button" data-nav="/temple">Create account</button>
+            <button type="button" id="supportBtnAnonymous">Activate Support</button>
+            <button type="button" data-nav="/support">Support / Tier Levels</button>
+            <button type="button" data-nav="/about">About Us</button>
+          </div>
+
+          <div id="menuAuthenticated" class="menu-section" hidden>
+            <div id="userInfo">Welcome, <span id="userDisplayName"></span></div>
+            <button type="button" data-nav="/account">Account</button>
+            <button type="button" id="supportBtnAuthenticated">Activate Support</button>
+            <button type="button" data-nav="/support">Support / Tier Levels</button>
+            <button type="button" data-nav="/about">About Us</button>
+            <button type="button" id="logoutBtn">Log out</button>
+            <button type="button" id="adminNavBtn" hidden data-nav="/admin">Admin</button>
+          </div>
+        </nav>
+      </div>
+
       <h1>About Us</h1>
       <div class="temple-subtitle">
         A living Temple for dialogue, memory, support, and spiritual inquiry.
@@ -95,5 +118,6 @@
       </p>
     </section>
   </main>
+  <script src="/static/site-shell.js?v=20260417"></script>
 </body>
 </html>

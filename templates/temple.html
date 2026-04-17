@@ -17,20 +17,20 @@
           <div id="menuAnonymous" class="menu-section">
             <button type="button" id="loginBtn">Log in</button>
             <button type="button" id="registerBtn">Create account</button>
+            <button type="button" id="supportBtnAnonymous">Activate Support</button>
             <button type="button" onclick="window.location.href='/support'">Support / Tier Levels</button>
             <button type="button" onclick="window.location.href='/about'">About Us</button>
-            <button type="button" id="supportBtnAnonymous">Explore Support</button>
           </div>
 
           <div id="menuAuthenticated" class="menu-section" hidden>
             <div id="userInfo">Welcome, <span id="userDisplayName"></span></div>
 
-            <button type="button" id="logoutBtn">Log out</button>
             <button type="button" onclick="window.location.href='/account'">Account</button>
-            <button type="button" id="adminNavBtn" hidden onclick="window.location.href='/admin'">Admin</button>
+            <button type="button" id="supportBtnAuthenticated">Activate Support</button>
             <button type="button" onclick="window.location.href='/support'">Support / Tier Levels</button>
             <button type="button" onclick="window.location.href='/about'">About Us</button>
-            <button type="button" id="supportBtnAuthenticated">Activate Support</button>
+            <button type="button" id="logoutBtn">Log out</button>
+            <button type="button" id="adminNavBtn" hidden onclick="window.location.href='/admin'">Admin</button>
           </div>
         </nav>
       </div>
