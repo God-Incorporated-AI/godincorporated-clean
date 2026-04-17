@@ -657,3 +657,9 @@ main.admin-console {
 .admin-cta-row {
   justify-content: center;
 }
+
+
+.support-checkout-btn.support-selected {
+  outline: 3px solid rgba(111, 90, 58, 0.55);
+  box-shadow: 0 0 0 3px rgba(111, 90, 58, 0.18);
+}

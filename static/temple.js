@@ -3,6 +3,27 @@ document.addEventListener("DOMContentLoaded", function () {
   const urlParams = new URLSearchParams(window.location.search);
   const resetToken = urlParams.get("token");
   const openSupportOnLoad = urlParams.get("support") === "1";
+
+  const VALID_SUPPORT_PLAN_CODES = new Set([
+    "seeker",
+    "magister",
+    "sovereign",
+    "philosophus",
+    "theoricus"
+  ]);
+  const VALID_SUPPORT_MODES = new Set([
+    "monthly_recurring",
+    "annual_recurring"
+  ]);
+
+  const requestedPlanCodeRaw = (urlParams.get("plan_code") || "").trim().toLowerCase();
+  const requestedSupportModeRaw = (urlParams.get("support_mode") || "").trim().toLowerCase();
+
+  const selectedSupportIntent = {
+    planCode: VALID_SUPPORT_PLAN_CODES.has(requestedPlanCodeRaw) ? requestedPlanCodeRaw : null,
+    supportMode: VALID_SUPPORT_MODES.has(requestedSupportModeRaw) ? requestedSupportModeRaw : null
+  };
+
   let supportOpenedFromQuery = false;
   // Documentation: Identity States and Unified /ask Contract
   //
@@ -507,6 +528,53 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     clearAuthErrors();
   }
 
+  function planLabelFromCode(planCode) {
+    const labels = {
+      seeker: "Seeker",
+      magister: "Magister",
+      sovereign: "Sovereign",
+      philosophus: "Philosophus",
+      theoricus: "Theoricus"
+    };
+    return labels[planCode] || planCode || "Selected";
+  }
+
+  function supportModeLabel(mode) {
+    if (mode === "annual_recurring") return "yearly";
+    if (mode === "monthly_recurring") return "monthly";
+    return mode || "support";
+  }
+
+  function applySupportIntentSelection(focusSelection = false) {
+    let selectedButton = null;
+
+    supportCheckoutButtons.forEach((button) => {
+      const matches = Boolean(
+        selectedSupportIntent.planCode &&
+        selectedSupportIntent.supportMode &&
+        button.dataset.planCode === selectedSupportIntent.planCode &&
+        button.dataset.supportMode === selectedSupportIntent.supportMode
+      );
+
+      button.classList.toggle("support-selected", matches);
+
+      if (matches) {
+        selectedButton = button;
+      }
+    });
+
+    if (focusSelection && selectedButton) {
+      window.setTimeout(() => {
+        selectedButton.scrollIntoView({ block: "center", behavior: "smooth" });
+        if (!selectedButton.disabled) {
+          selectedButton.focus();
+        }
+      }, 80);
+    }
+
+    return selectedButton;
+  }
+
   function renderSupportModal() {
     const authenticated = Boolean(currentIdentity && currentIdentity.authenticated);
 
@@ -528,6 +596,16 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     supportCheckoutButtons.forEach((button) => {
       button.disabled = !authenticated;
     });
+
+    const selectedButton = applySupportIntentSelection(false);
+    if (selectedButton && selectedSupportIntent.planCode && selectedSupportIntent.supportMode) {
+      const intentLabel = planLabelFromCode(selectedSupportIntent.planCode) + " " + supportModeLabel(selectedSupportIntent.supportMode);
+      if (authenticated) {
+        supportStatusLine.textContent += " Selected path: " + intentLabel + ". Continue with the highlighted button below.";
+      } else {
+        supportStatusLine.textContent += " Selected path: " + intentLabel + ". Log in or create an account, then use the highlighted button below.";
+      }
+    }
   }
 
   async function launchStripeCheckout(planCode, supportMode, button) {
@@ -622,6 +700,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     supportBtnAnonymous.addEventListener("click", function() {
       renderSupportModal();
       openModal(supportModal);
+      applySupportIntentSelection(true);
       mainMenu.classList.remove("show");
     });
   }
@@ -630,6 +709,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     supportBtnAuthenticated.addEventListener("click", function() {
       renderSupportModal();
       openModal(supportModal);
+      applySupportIntentSelection(true);
       mainMenu.classList.remove("show");
     });
   }
@@ -876,6 +956,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       if (openSupportOnLoad && !supportOpenedFromQuery) {
         supportOpenedFromQuery = true;
         openModal(supportModal);
+        applySupportIntentSelection(true);
       }
     } catch (err) {
       console.error("Failed to fetch identity:", err);
@@ -889,6 +970,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       if (openSupportOnLoad && !supportOpenedFromQuery) {
         supportOpenedFromQuery = true;
         openModal(supportModal);
+        applySupportIntentSelection(true);
       }
     }
   }
