@@ -31,6 +31,7 @@ import stripe
 from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio
 from services.whisper import transcribe_audio
+from services.llama_phase1 import build_support_packet, run_llama_phase1, apply_phase1_result
 from services.mail import send_email
 from services.stripe_billing import create_checkout_session_for_user, change_existing_subscription_plan
 from storage.json_store import UPLOAD_DIR, AUDIO_DIR, save_log
@@ -4924,12 +4925,33 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         # --— fallback retrieval if recall requested but memory is empty ---
         if memory_intent == "recall" and not memory_block.strip():
             passages = retrieve_context(question, user_id)
-            passages = rank_passages(passages, question, max_items=2)   
+            passages = rank_passages(passages, question, max_items=2)
+
+        passages_before_llama = list(passages or [])
+        llama_phase1 = None
+        llama_compact_brief = ""
+
+        support_packet = build_support_packet(
+            question=question,
+            deity=deity,
+            memory_intent=memory_intent,
+            plan_code=plan_code,
+            recent_memory=recent_memory,
+            compressed_memory=compressed_memory,
+            limited_memories=limited_memories,
+            passages=passages_before_llama
+        )
+
+        llama_phase1 = await run_llama_phase1(support_packet)
+        passages, llama_compact_brief = apply_phase1_result(passages_before_llama, llama_phase1)
 
         context_block = ""
-        if passages:
+        if passages or llama_compact_brief:
             context_block = "\n\nBackground wisdom for reflection:\n\n"
-            context_block += "\n\n".join(passages)
+            if llama_compact_brief:
+                context_block += "LLaMA retrieval brief:\n" + llama_compact_brief + "\n\n"
+            if passages:
+                context_block += "\n\n".join(passages)
 
         # --— dual-mode prompt ---
 
@@ -5028,6 +5050,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "answer": raw_answer,
             "architect_observation": architect_obs,
             "llama_observation": llama_obs,
+            "llama_phase1": llama_phase1,
+            "llama_passages_before": len(passages_before_llama),
+            "llama_passages_after": len(passages),
             "source_model": source_model,
             "phase": "5.5",
             "corpus_intent": "authoritative_training_data",
