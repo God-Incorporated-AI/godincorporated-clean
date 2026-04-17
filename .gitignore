@@ -41,3 +41,6 @@ temple_backups/
 
 # local historical backups
 temple_backups/
+
+# local patch backup files
+*.bak.*
