@@ -41,7 +41,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const overrideCurrentPeriodStartedAt = document.getElementById("overrideCurrentPeriodStartedAt");
   const overrideRenewsAt = document.getElementById("overrideRenewsAt");
   const overrideExpiresAt = document.getElementById("overrideExpiresAt");
-  const overrideGraceEndsAt = document.getElementById("overrideGraceEndsAt");
   const overrideCancelAtPeriodEnd = document.getElementById("overrideCancelAtPeriodEnd");
   const applyEntitlementOverrideBtn = document.getElementById("applyEntitlementOverrideBtn");
 
@@ -287,10 +286,8 @@ document.addEventListener("DOMContentLoaded", () => {
         ${renderKV("Current period started", entitlement.current_period_started_at)}
         ${renderKV("Renews at", entitlement.subscription_renews_at)}
         ${renderKV("Expires at", entitlement.subscription_expires_at)}
-        ${renderKV("Grace ends at", entitlement.grace_period_ends_at)}
         ${renderKV("Cancel at period end", entitlement.cancel_at_period_end)}
         ${renderKV("Is entitled", entitlement.is_entitled)}
-        ${renderKV("Is in grace", entitlement.is_in_grace)}
         ${renderKV("Downgraded for access", entitlement.downgraded_for_access)}
         ${renderKV("Highest paid plan", entitlement.highest_paid_plan_ever)}
         ${renderKV("Last paid plan", entitlement.last_paid_plan_code)}
@@ -356,7 +353,6 @@ document.addEventListener("DOMContentLoaded", () => {
     overrideCurrentPeriodStartedAt.value = toDateTimeLocalValue(entitlement.current_period_started_at);
     overrideRenewsAt.value = toDateTimeLocalValue(entitlement.subscription_renews_at);
     overrideExpiresAt.value = toDateTimeLocalValue(entitlement.subscription_expires_at);
-    overrideGraceEndsAt.value = toDateTimeLocalValue(entitlement.grace_period_ends_at);
     overrideCancelAtPeriodEnd.checked = Boolean(entitlement.cancel_at_period_end);
   }
 
@@ -540,7 +536,7 @@ document.addEventListener("DOMContentLoaded", () => {
   applyRenewalFailureBtn.addEventListener("click", async () => {
     await confirmAndRunMutation(
       "Apply renewal failure to floor",
-      "Apply renewal failure and drop the loaded user to floor access? This follows the no-grace beta rule.",
+      "Apply renewal failure and drop the loaded user to floor access? This follows the beta floor rule.",
       (targetUserId) =>
         postJson("/admin/users/renewal-failure-to-floor", {
           user_id: targetUserId
@@ -607,7 +603,6 @@ document.addEventListener("DOMContentLoaded", () => {
           current_period_started_at: fromDateTimeLocalValue(overrideCurrentPeriodStartedAt.value),
           subscription_renews_at: fromDateTimeLocalValue(overrideRenewsAt.value),
           subscription_expires_at: fromDateTimeLocalValue(overrideExpiresAt.value),
-          grace_period_ends_at: fromDateTimeLocalValue(overrideGraceEndsAt.value),
           cancel_at_period_end: overrideCancelAtPeriodEnd.checked
         })
     );

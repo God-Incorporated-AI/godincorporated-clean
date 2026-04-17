@@ -1189,7 +1189,7 @@ def get_effective_usage_window_start(entitlement: dict) -> Optional[datetime.dat
     last_support_mode = entitlement.get("last_support_mode")
     current_period_started_at = entitlement.get("current_period_started_at")
 
-    if status in {"active", "grace"} and last_support_mode in {"monthly_recurring", "annual_recurring"} and current_period_started_at:
+    if status == "active" and last_support_mode in {"monthly_recurring", "annual_recurring"} and current_period_started_at:
         return current_period_started_at
 
     if plan_code in {"seeker", "magister", "sovereign", "philosophus", "theoricus"}:
@@ -1214,7 +1214,6 @@ def get_user_entitlement_snapshot(user_id: str) -> dict:
                     current_period_started_at,
                     subscription_renews_at,
                     subscription_expires_at,
-                    grace_period_ends_at,
                     COALESCE(cancel_at_period_end, false) AS cancel_at_period_end,
                     highest_paid_plan_ever,
                     last_paid_plan_code,
@@ -1273,29 +1272,17 @@ def get_user_entitlement_snapshot(user_id: str) -> dict:
     last_support_ended_at = row.get("last_support_ended_at")
 
     expires_at = row.get("subscription_expires_at")
-    grace_ends_at = row.get("grace_period_ends_at")
-
-    is_in_grace = (
-        entitlement_status == "grace"
-        and grace_ends_at is not None
-        and now <= grace_ends_at
-    )
 
     is_active_paid = (
         entitlement_status == "active"
         and (expires_at is None or now <= expires_at)
     )
 
-    if is_active_paid or is_in_grace:
+    if is_active_paid:
         effective_plan_code = raw_plan_code
         is_entitled = raw_plan_code not in {"anon", "pilgrim"}
     else:
-        if (
-            entitlement_status in {"active", "grace"}
-            and expires_at
-            and now > expires_at
-            and (not grace_ends_at or now > grace_ends_at)
-        ):
+        if entitlement_status == "active" and expires_at and now > expires_at:
             entitlement_status = "expired"
 
         effective_plan_code = fallback_floor_plan_code
@@ -1309,10 +1296,8 @@ def get_user_entitlement_snapshot(user_id: str) -> dict:
         "current_period_started_at": row.get("current_period_started_at"),
         "subscription_renews_at": row.get("subscription_renews_at"),
         "subscription_expires_at": expires_at,
-        "grace_period_ends_at": grace_ends_at,
         "cancel_at_period_end": row.get("cancel_at_period_end", False),
         "is_entitled": is_entitled,
-        "is_in_grace": is_in_grace,
         "downgraded_for_access": raw_plan_code != effective_plan_code,
         "highest_paid_plan_ever": highest_paid_plan_ever,
         "last_paid_plan_code": last_paid_plan_code,
@@ -1327,11 +1312,9 @@ def get_user_entitlement_snapshot(user_id: str) -> dict:
 
 DEFAULT_BILLING_CYCLE_DAYS = 30
 DEFAULT_ANNUAL_PREPAID_DAYS = 365
-DEFAULT_GRACE_DAYS = 3
 VALID_ENTITLEMENT_STATUSES = {
     "none",
     "active",
-    "grace",
     "expired",
     "cancelled",
 }
@@ -1396,7 +1379,6 @@ def apply_subscription_renewal_success(
                     current_period_started_at = %s,
                     subscription_renews_at = %s,
                     subscription_expires_at = %s,
-                    grace_period_ends_at = NULL,
                     cancel_at_period_end = FALSE,
                     highest_paid_plan_ever = %s,
                     last_paid_plan_code = %s,
@@ -1474,7 +1456,6 @@ def apply_annual_prepaid_activation(
                     current_period_started_at = %s,
                     subscription_renews_at = NULL,
                     subscription_expires_at = %s,
-                    grace_period_ends_at = NULL,
                     cancel_at_period_end = FALSE,
                     highest_paid_plan_ever = %s,
                     last_paid_plan_code = %s,
@@ -1545,7 +1526,6 @@ def apply_subscription_renewal_failure_to_floor(user_id: str) -> None:
                             THEN %s
                         ELSE subscription_expires_at
                     END,
-                    grace_period_ends_at = NULL,
                     last_support_ended_at = COALESCE(last_support_ended_at, %s)
                 WHERE id = %s
                 """,
@@ -1593,7 +1573,6 @@ def apply_cancel_at_period_end_downgrade(user_id: str) -> None:
                 SET
                     entitlement_status = 'cancelled',
                     cancel_at_period_end = FALSE,
-                    grace_period_ends_at = NULL,
                     last_support_ended_at = COALESCE(last_support_ended_at, %s)
                 WHERE id = %s
                   AND cancel_at_period_end = TRUE
@@ -1616,7 +1595,6 @@ def apply_admin_entitlement_override(
     current_period_started_at: Optional[datetime.datetime] = None,
     subscription_renews_at: Optional[datetime.datetime] = None,
     subscription_expires_at: Optional[datetime.datetime] = None,
-    grace_period_ends_at: Optional[datetime.datetime] = None,
     cancel_at_period_end: bool = False
 ) -> None:
     normalized_plan = normalize_plan_code(plan_code)
@@ -1636,11 +1614,10 @@ def apply_admin_entitlement_override(
                     current_period_started_at = %s,
                     subscription_renews_at = %s,
                     subscription_expires_at = %s,
-                    grace_period_ends_at = %s,
                     cancel_at_period_end = %s,
                     last_support_ended_at = CASE
                         WHEN %s IN ('expired', 'cancelled') THEN COALESCE(last_support_ended_at, %s)
-                        WHEN %s IN ('active', 'grace') THEN NULL
+                        WHEN %s = 'active' THEN NULL
                         ELSE last_support_ended_at
                     END
                 WHERE id = %s
@@ -1652,7 +1629,6 @@ def apply_admin_entitlement_override(
                     current_period_started_at,
                     subscription_renews_at,
                     subscription_expires_at,
-                    grace_period_ends_at,
                     cancel_at_period_end,
                     normalized_status,
                     now,
@@ -1850,12 +1826,6 @@ def build_support_status_payload(entitlement: dict) -> dict:
         else:
             message = "Paid support is active."
         renewal_message = None
-    elif status == "grace":
-        message = "Support is in grace. Current access remains available while renewal is resolved."
-        renewal_message = (
-            f"Renew at {plan_label_or_none(renewal_offer_plan_code)} to continue at your previous level."
-            if renewal_offer_plan_code else None
-        )
     elif status in {"expired", "cancelled"}:
         message = f"Paid support has ended. Current access remains at {plan_label_or_none(effective_plan_code)}."
         renewal_message = (
@@ -2354,10 +2324,8 @@ def get_admin_user_detail(target_user_id: str) -> dict:
             "current_period_started_at": serialize_dt(entitlement["current_period_started_at"]),
             "subscription_renews_at": serialize_dt(entitlement["subscription_renews_at"]),
             "subscription_expires_at": serialize_dt(entitlement["subscription_expires_at"]),
-            "grace_period_ends_at": serialize_dt(entitlement["grace_period_ends_at"]),
             "cancel_at_period_end": entitlement["cancel_at_period_end"],
             "is_entitled": entitlement["is_entitled"],
-            "is_in_grace": entitlement["is_in_grace"],
             "downgraded_for_access": entitlement["downgraded_for_access"],
             "highest_paid_plan_ever": entitlement["highest_paid_plan_ever"],
             "last_paid_plan_code": entitlement["last_paid_plan_code"],
@@ -2590,10 +2558,8 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
             "current_period_started_at": serialize_dt(entitlement["current_period_started_at"]),
             "renewal_date": serialize_dt(entitlement["subscription_renews_at"]),
             "expiry_date": serialize_dt(entitlement["subscription_expires_at"]),
-            "grace_period_ends_at": serialize_dt(entitlement["grace_period_ends_at"]),
             "cancel_at_period_end": entitlement["cancel_at_period_end"],
             "is_entitled": entitlement["is_entitled"],
-            "is_in_grace": entitlement["is_in_grace"],
             "downgraded_for_access": entitlement["downgraded_for_access"],
             "highest_paid_plan_ever": entitlement["highest_paid_plan_ever"],
             "last_paid_plan_code": entitlement["last_paid_plan_code"],
@@ -2704,10 +2670,8 @@ def build_anonymous_me_response(session_id: str) -> dict:
             "current_period_started_at": None,
             "renewal_date": None,
             "expiry_date": None,
-            "grace_period_ends_at": None,
             "cancel_at_period_end": False,
             "is_entitled": False,
-            "is_in_grace": False,
             "downgraded_for_access": False,
             "highest_paid_plan_ever": None,
             "last_paid_plan_code": None,
@@ -3276,7 +3240,6 @@ def admin_search_users(
                     current_period_started_at,
                     subscription_renews_at,
                     subscription_expires_at,
-                    grace_period_ends_at,
                     COALESCE(cancel_at_period_end, false) AS cancel_at_period_end,
                     last_login
                 FROM users
@@ -3636,7 +3599,6 @@ class AdminEntitlementOverrideInput(BaseModel):
     current_period_started_at: Optional[datetime.datetime] = None
     subscription_renews_at: Optional[datetime.datetime] = None
     subscription_expires_at: Optional[datetime.datetime] = None
-    grace_period_ends_at: Optional[datetime.datetime] = None
     cancel_at_period_end: bool = False
 
 
@@ -3651,7 +3613,6 @@ def admin_override_entitlement(request: Request, payload: AdminEntitlementOverri
         current_period_started_at=payload.current_period_started_at,
         subscription_renews_at=payload.subscription_renews_at,
         subscription_expires_at=payload.subscription_expires_at,
-        grace_period_ends_at=payload.grace_period_ends_at,
         cancel_at_period_end=payload.cancel_at_period_end
     )
 
@@ -3667,7 +3628,6 @@ def admin_override_entitlement(request: Request, payload: AdminEntitlementOverri
             "current_period_started_at": serialize_dt(payload.current_period_started_at),
             "subscription_renews_at": serialize_dt(payload.subscription_renews_at),
             "subscription_expires_at": serialize_dt(payload.subscription_expires_at),
-            "grace_period_ends_at": serialize_dt(payload.grace_period_ends_at),
             "cancel_at_period_end": payload.cancel_at_period_end
         }
     )
@@ -3684,7 +3644,6 @@ def admin_override_entitlement(request: Request, payload: AdminEntitlementOverri
             "current_period_started_at": serialize_dt(entitlement["current_period_started_at"]),
             "subscription_renews_at": serialize_dt(entitlement["subscription_renews_at"]),
             "subscription_expires_at": serialize_dt(entitlement["subscription_expires_at"]),
-            "grace_period_ends_at": serialize_dt(entitlement["grace_period_ends_at"]),
             "cancel_at_period_end": entitlement["cancel_at_period_end"]
         }
     }
