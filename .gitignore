@@ -38,3 +38,6 @@ local_backups/
 handoff_phase8_*.zip
 handoff_phase8_*/
 temple_backups/
+
+# local historical backups
+temple_backups/
