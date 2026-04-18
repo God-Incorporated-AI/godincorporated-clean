@@ -471,7 +471,7 @@ async def get_oracle_response(
                 {"role": "system", "content": memory_block or ""},
                 {"role": "user", "content": question}
             ],
-            max_tokens=max_output_tokens
+            max_completion_tokens=max_output_tokens
         )
         raw_answer = response.choices[0].message.content
 
