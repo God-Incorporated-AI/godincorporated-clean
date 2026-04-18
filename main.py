@@ -45,6 +45,12 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+def _llama_preview(value: str, limit: int = 160) -> str:
+    text = " ".join((value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[:limit - 3] + "..."
+
 load_dotenv()
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
@@ -4928,6 +4934,25 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             passages = rank_passages(passages, question, max_items=2)
 
         passages_before_llama = list(passages or [])
+        long_term_memory_count = len([item for item in limited_memories if (item or "").strip()])
+        recent_memory_present = bool((recent_memory or "").strip())
+        compressed_memory_present = bool((compressed_memory or "").strip())
+        passage_preview_1 = _llama_preview(passages_before_llama[0]) if len(passages_before_llama) > 0 else ""
+        passage_preview_2 = _llama_preview(passages_before_llama[1]) if len(passages_before_llama) > 1 else ""
+
+        logger.info(
+            "LLAMA_INPUT deity=%s memory_intent=%s plan_code=%s recent_memory_present=%s compressed_memory_present=%s long_term_memory_count=%s candidate_passages=%s passage_preview_1=%s passage_preview_2=%s",
+            deity,
+            memory_intent,
+            plan_code,
+            recent_memory_present,
+            compressed_memory_present,
+            long_term_memory_count,
+            len(passages_before_llama),
+            passage_preview_1,
+            passage_preview_2
+        )
+
         llama_phase1 = None
         llama_compact_brief = ""
 
