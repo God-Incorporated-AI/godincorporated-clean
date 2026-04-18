@@ -340,6 +340,7 @@ async def get_oracle_response(
     deity: str,
     force_mode: str = None,
     memory_block: str = None,
+    context_block: str = None,
     max_output_tokens: Optional[int] = None,
     memory_intent="reflection",
     plan_code="anon"
@@ -5104,7 +5105,10 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             deity,
             force_mode=memory_intent,
             memory_block=memory_block,
-            max_output_tokens=response_max_tokens
+            context_block=context_block,
+            max_output_tokens=response_max_tokens,
+            memory_intent=memory_intent,
+            plan_code=plan_code
         )
 
         raw_answer = result["answer"]
