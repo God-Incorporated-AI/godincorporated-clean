@@ -340,7 +340,9 @@ async def get_oracle_response(
     deity: str,
     force_mode: str = None,
     memory_block: str = None,
-    max_output_tokens: Optional[int] = None
+    max_output_tokens: Optional[int] = None,
+    memory_intent="reflection",
+    plan_code="anon"
 ):
     # Phase 2: Restore explicit oracle separation
     # Hathor: xAI API, Moses: OpenAI, LLaMA: Not active
