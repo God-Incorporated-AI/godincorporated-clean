@@ -45,6 +45,43 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+def choose_moses_model(question: str, memory_intent: str, plan_code: str, memory_block: str, context_block: str):
+    moses_model_mini = os.getenv("MOSES_MODEL_MINI", "gpt-5.4-mini").strip()
+    moses_model_full = os.getenv("MOSES_MODEL_FULL", "gpt-5.4").strip()
+    moses_model_force = os.getenv("MOSES_MODEL_FORCE", "").strip()
+
+    q = (question or "").lower()
+    prompt_chars = len(question or "") + len(memory_block or "") + len(context_block or "")
+
+    synopsis_terms = (
+        "synopsis",
+        "summarize",
+        "summary",
+        "recap",
+        "what have we discussed",
+        "past conversation",
+        "previous conversation",
+        "last conversation",
+        "summarise"
+    )
+
+    if moses_model_force in {moses_model_mini, moses_model_full}:
+        return moses_model_force, "forced", prompt_chars
+
+    if any(term in q for term in synopsis_terms):
+        return moses_model_full, "synopsis_request", prompt_chars
+
+    if len(question or "") > 500:
+        return moses_model_full, "long_question", prompt_chars
+
+    if prompt_chars > 9000:
+        return moses_model_full, "large_context_payload", prompt_chars
+
+    if memory_intent == "recall" and prompt_chars > 6500:
+        return moses_model_full, "recall_large_payload", prompt_chars
+
+    return moses_model_mini, "default_mini", prompt_chars
+
 def _llama_preview(value: str, limit: int = 160) -> str:
     text = " ".join((value or "").split())
     if len(text) <= limit:
@@ -375,6 +412,24 @@ async def get_oracle_response(
         except Exception as e:
             raise ValueError(f"XAI API call failed: {type(e).__name__}: {str(e)}")
     elif deity == "Moses":
+        moses_model, moses_route_reason, moses_prompt_chars = choose_moses_model(
+            question=question,
+            memory_intent=memory_intent,
+            plan_code=plan_code,
+            memory_block=memory_block,
+            context_block=context_block
+        )
+
+        logger.info(
+            "MOSES_MODEL_ROUTER selected=%s reason=%s deity=%s memory_intent=%s plan_code=%s prompt_chars=%s",
+            moses_model,
+            moses_route_reason,
+            deity,
+            memory_intent,
+            plan_code,
+            moses_prompt_chars
+        )
+
         # Moses uses OpenAI with logical, doctrinal system prompt
         client = get_openai_client()
         if force_mode == "recall":
@@ -407,7 +462,7 @@ async def get_oracle_response(
         """
         
         response = client.chat.completions.create(
-            model="gpt-4o",  # Updated model
+            model=moses_model,  # Updated model
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "system", "content": memory_block or ""},
