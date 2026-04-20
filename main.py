@@ -91,7 +91,7 @@ STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 STRIPE_LIVEMODE = os.getenv("STRIPE_LIVEMODE", "false").lower() == "true"
 EMBEDDINGS_ENABLED = os.getenv("EMBEDDINGS_ENABLED", "false").lower() == "true"
-EMBEDDING_CACHE_PATH = os.path.join(os.path.dirname(__file__), "embedding_cache.json")
+EMBEDDING_CACHE_PATH = os.getenv("EMBEDDING_CACHE_PATH", os.path.join(UPLOAD_DIR, "cache", "embedding_cache.json"))
 
 BROWSER_TOKEN_HEADER = "x-anonymous-user-id"
 ANONYMOUS_UPLOAD_COOLDOWN_SECONDS = 5
@@ -196,6 +196,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(AUDIO_DIR, exist_ok=True)
+os.makedirs(os.path.dirname(EMBEDDING_CACHE_PATH), exist_ok=True)
 openai_client = None  # Lazy load
 
 def get_openai_client():

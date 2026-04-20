@@ -5,7 +5,7 @@ import datetime
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 UPLOAD_DIR = os.path.join(BASE_DIR, "scrolls_uploads")
-AUDIO_DIR = os.path.join(BASE_DIR, "audio")
+AUDIO_DIR = os.getenv("AUDIO_DIR", os.path.join(UPLOAD_DIR, "audio"))
 TRANSCRIPT_LOG = os.path.join(BASE_DIR, "oracle_log.json")
 SCROLL_DB = os.path.join(BASE_DIR, "scroll_data.json")
 SEEKERS_DB = os.path.join(BASE_DIR, "seekers.json")
