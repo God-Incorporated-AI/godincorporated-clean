@@ -399,7 +399,7 @@ async def get_oracle_response(
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "grok-3",
+                        "model": "grok-4",
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "system", "content": memory_block or ""},
