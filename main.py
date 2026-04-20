@@ -74,14 +74,8 @@ def choose_moses_model(raw_question: str, memory_intent: str, plan_code: str, me
     if any(term in q for term in synopsis_terms):
         return moses_model_full, "synopsis_request", total_context_chars
 
-    if question_chars > 500:
-        return moses_model_full, "long_raw_question", total_context_chars
-
-    if total_context_chars > 12000:
-        return moses_model_full, "large_context_payload", total_context_chars
-
-    if memory_intent == "recall" and total_context_chars > 8000:
-        return moses_model_full, "recall_large_payload", total_context_chars
+    if question_chars > 1200:
+        return moses_model_full, "very_long_raw_question", total_context_chars
 
     return moses_model_mini, "default_mini", total_context_chars
 
