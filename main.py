@@ -45,13 +45,16 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-def choose_moses_model(question: str, memory_intent: str, plan_code: str, memory_block: str, context_block: str):
+def choose_moses_model(raw_question: str, memory_intent: str, plan_code: str, memory_block: str, context_block: str):
     moses_model_mini = os.getenv("MOSES_MODEL_MINI", "gpt-5.4-mini").strip()
     moses_model_full = os.getenv("MOSES_MODEL_FULL", "gpt-5.4").strip()
     moses_model_force = os.getenv("MOSES_MODEL_FORCE", "").strip()
 
-    q = (question or "").lower()
-    prompt_chars = len(question or "") + len(memory_block or "") + len(context_block or "")
+    q = (raw_question or "").lower()
+    question_chars = len(raw_question or "")
+    memory_chars = len(memory_block or "")
+    context_chars = len(context_block or "")
+    total_context_chars = question_chars + memory_chars + context_chars
 
     synopsis_terms = (
         "synopsis",
@@ -66,21 +69,21 @@ def choose_moses_model(question: str, memory_intent: str, plan_code: str, memory
     )
 
     if moses_model_force in {moses_model_mini, moses_model_full}:
-        return moses_model_force, "forced", prompt_chars
+        return moses_model_force, "forced", total_context_chars
 
     if any(term in q for term in synopsis_terms):
-        return moses_model_full, "synopsis_request", prompt_chars
+        return moses_model_full, "synopsis_request", total_context_chars
 
-    if len(question or "") > 500:
-        return moses_model_full, "long_question", prompt_chars
+    if question_chars > 500:
+        return moses_model_full, "long_raw_question", total_context_chars
 
-    if prompt_chars > 9000:
-        return moses_model_full, "large_context_payload", prompt_chars
+    if total_context_chars > 12000:
+        return moses_model_full, "large_context_payload", total_context_chars
 
-    if memory_intent == "recall" and prompt_chars > 6500:
-        return moses_model_full, "recall_large_payload", prompt_chars
+    if memory_intent == "recall" and total_context_chars > 8000:
+        return moses_model_full, "recall_large_payload", total_context_chars
 
-    return moses_model_mini, "default_mini", prompt_chars
+    return moses_model_mini, "default_mini", total_context_chars
 
 def _llama_preview(value: str, limit: int = 160) -> str:
     text = " ".join((value or "").split())
@@ -343,7 +346,10 @@ async def get_oracle_response(
     context_block: str = None,
     max_output_tokens: Optional[int] = None,
     memory_intent="reflection",
-    plan_code="anon"
+    plan_code="anon",
+    selected_moses_model: Optional[str] = None,
+    moses_route_reason: Optional[str] = None,
+    moses_prompt_chars: Optional[int] = None
 ):
     # Phase 2: Restore explicit oracle separation
     # Hathor: xAI API, Moses: OpenAI, LLaMA: Not active
@@ -415,23 +421,18 @@ async def get_oracle_response(
         except Exception as e:
             raise ValueError(f"XAI API call failed: {type(e).__name__}: {str(e)}")
     elif deity == "Moses":
-        moses_model, moses_route_reason, moses_prompt_chars = choose_moses_model(
-            question=question,
-            memory_intent=memory_intent,
-            plan_code=plan_code,
-            memory_block=memory_block,
-            context_block=context_block
-        )
+        moses_model = selected_moses_model or os.getenv("MOSES_MODEL_MINI", "gpt-5.4-mini").strip()
 
-        logger.info(
-            "MOSES_MODEL_ROUTER selected=%s reason=%s deity=%s memory_intent=%s plan_code=%s prompt_chars=%s",
-            moses_model,
-            moses_route_reason,
-            deity,
-            memory_intent,
-            plan_code,
-            moses_prompt_chars
-        )
+        if moses_route_reason is not None:
+            logger.info(
+                "MOSES_MODEL_ROUTER selected=%s reason=%s deity=%s memory_intent=%s plan_code=%s prompt_chars=%s",
+                moses_model,
+                moses_route_reason,
+                deity,
+                memory_intent,
+                plan_code,
+                moses_prompt_chars
+            )
 
         # Moses uses OpenAI with logical, doctrinal system prompt
         client = get_openai_client()
@@ -5100,6 +5101,19 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         """ 
 
         # --- Oracle response ---
+        selected_moses_model = None
+        moses_route_reason = None
+        moses_prompt_chars = None
+
+        if deity == "Moses":
+            selected_moses_model, moses_route_reason, moses_prompt_chars = choose_moses_model(
+                raw_question=question,
+                memory_intent=memory_intent,
+                plan_code=plan_code,
+                memory_block=memory_block,
+                context_block=context_block
+            )
+
         result = await get_oracle_response(
             enhanced_question,
             deity,
@@ -5108,7 +5122,10 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             context_block=context_block,
             max_output_tokens=response_max_tokens,
             memory_intent=memory_intent,
-            plan_code=plan_code
+            plan_code=plan_code,
+            selected_moses_model=selected_moses_model,
+            moses_route_reason=moses_route_reason,
+            moses_prompt_chars=moses_prompt_chars
         )
 
         raw_answer = result["answer"]
