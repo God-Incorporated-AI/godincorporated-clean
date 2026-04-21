@@ -158,6 +158,27 @@ Your job:
             "reason": reason
         }
 
+    except httpx.HTTPStatusError as exc:
+        status_code = exc.response.status_code if exc.response is not None else "unknown"
+        response_text = ""
+        try:
+            response_text = (exc.response.text or "").strip()
+        except Exception:
+            response_text = ""
+        if len(response_text) > 500:
+            response_text = response_text[:497] + "..."
+        logger.warning(
+            "LLaMA Phase 1 failed open: HTTPStatusError status=%s url=%s body=%s",
+            status_code,
+            str(exc.request.url) if exc.request is not None else "-",
+            response_text or "-"
+        )
+        return _fallback_result(f"fail_open: HTTPStatusError:{status_code}:{response_text or '-'}")
+
+    except httpx.ReadTimeout as exc:
+        logger.warning("LLaMA Phase 1 failed open: ReadTimeout url=%s", str(exc.request.url) if exc.request is not None else "-")
+        return _fallback_result("fail_open: ReadTimeout")
+
     except Exception as exc:
         logger.warning("LLaMA Phase 1 failed open: %s", exc)
         return _fallback_result(f"fail_open: {type(exc).__name__}")
