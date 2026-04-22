@@ -15,9 +15,10 @@ LLAMA_SHADOW_ONLY = _env_bool("LLAMA_SHADOW_ONLY", True)
 LLAMA_BASE_URL = os.getenv("LLAMA_BASE_URL", "http://127.0.0.1:11434").strip()
 LLAMA_MODEL = os.getenv("LLAMA_MODEL", "llama3.1:8b-instruct").strip()
 LLAMA_TIMEOUT_SECONDS = float(os.getenv("LLAMA_TIMEOUT_SECONDS", "8"))
-LLAMA_PASSAGE_CHAR_LIMIT = int(os.getenv("LLAMA_PASSAGE_CHAR_LIMIT", "700"))
-LLAMA_MEMORY_CHAR_LIMIT = int(os.getenv("LLAMA_MEMORY_CHAR_LIMIT", "500"))
+LLAMA_PASSAGE_CHAR_LIMIT = int(os.getenv("LLAMA_PASSAGE_CHAR_LIMIT", "400"))
+LLAMA_MEMORY_CHAR_LIMIT = int(os.getenv("LLAMA_MEMORY_CHAR_LIMIT", "250"))
 LLAMA_BRIEF_CHAR_LIMIT = int(os.getenv("LLAMA_BRIEF_CHAR_LIMIT", "1200"))
+LLAMA_MAX_PASSAGES = int(os.getenv("LLAMA_MAX_PASSAGES", "3"))
 
 VALID_BUDGET_TIERS = {"low", "medium", "full"}
 
@@ -47,7 +48,7 @@ def build_support_packet(
             trimmed_memories.append(text[:LLAMA_MEMORY_CHAR_LIMIT])
 
     trimmed_passages = []
-    for idx, item in enumerate(passages[:8]):
+    for idx, item in enumerate(passages[:LLAMA_MAX_PASSAGES]):
         text = (item or "").strip()
         if text:
             trimmed_passages.append({
@@ -124,7 +125,8 @@ Your job:
         "stream": False,
         "format": schema,
         "options": {
-            "temperature": 0
+            "temperature": 0,
+            "num_predict": 160
         }
     }
 
