@@ -16,9 +16,10 @@ LLAMA_BASE_URL = os.getenv("LLAMA_BASE_URL", "http://127.0.0.1:11434").strip()
 LLAMA_MODEL = os.getenv("LLAMA_MODEL", "llama3.1:8b-instruct").strip()
 LLAMA_TIMEOUT_SECONDS = float(os.getenv("LLAMA_TIMEOUT_SECONDS", "8"))
 LLAMA_PASSAGE_CHAR_LIMIT = int(os.getenv("LLAMA_PASSAGE_CHAR_LIMIT", "400"))
-LLAMA_MEMORY_CHAR_LIMIT = int(os.getenv("LLAMA_MEMORY_CHAR_LIMIT", "250"))
+LLAMA_MEMORY_CHAR_LIMIT = int(os.getenv("LLAMA_MEMORY_CHAR_LIMIT", "120"))
 LLAMA_BRIEF_CHAR_LIMIT = int(os.getenv("LLAMA_BRIEF_CHAR_LIMIT", "1200"))
 LLAMA_MAX_PASSAGES = int(os.getenv("LLAMA_MAX_PASSAGES", "3"))
+LLAMA_MAX_LONG_TERM_MEMORIES = int(os.getenv("LLAMA_MAX_LONG_TERM_MEMORIES", "2"))
 
 VALID_BUDGET_TIERS = {"low", "medium", "full"}
 
@@ -42,7 +43,7 @@ def build_support_packet(
     passages: list[str]
 ) -> dict:
     trimmed_memories = []
-    for item in limited_memories[:5]:
+    for item in limited_memories[:LLAMA_MAX_LONG_TERM_MEMORIES]:
         text = (item or "").strip()
         if text:
             trimmed_memories.append(text[:LLAMA_MEMORY_CHAR_LIMIT])
