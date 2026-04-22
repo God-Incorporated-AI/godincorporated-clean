@@ -4966,6 +4966,12 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         compressed_memory = compress_dialogue(memory)
         limited_memories = memories[:5] if memories else []
 
+        # Phase 1 helper stays flat across tiers:
+        # only the latest session exchange, no compressed history, no long-term memory.
+        helper_recent_memory = get_session_memory(session_id, 1)
+        helper_compressed_memory = ""
+        helper_limited_memories = []
+
         # --- Conditional retrieval based on memory intent ---
         passages = []
 
@@ -5027,9 +5033,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             deity=deity,
             memory_intent=memory_intent,
             plan_code=plan_code,
-            recent_memory=recent_memory,
-            compressed_memory=compressed_memory,
-            limited_memories=limited_memories,
+            recent_memory=helper_recent_memory,
+            compressed_memory=helper_compressed_memory,
+            limited_memories=helper_limited_memories,
             passages=passages_before_llama
         )
 
