@@ -21,6 +21,15 @@ LLAMA_BRIEF_CHAR_LIMIT = int(os.getenv("LLAMA_BRIEF_CHAR_LIMIT", "1200"))
 
 VALID_BUDGET_TIERS = {"low", "medium", "full"}
 
+
+def _ns_to_ms_text(value) -> str:
+    if value in (None, ""):
+        return "-"
+    try:
+        return f"{(float(value) / 1_000_000):.2f}"
+    except Exception:
+        return "-"
+
 def build_support_packet(
     question: str,
     deity: str,
@@ -119,6 +128,25 @@ Your job:
         }
     }
 
+    candidate_passages = packet.get("candidate_passages") or []
+    candidate_chars = sum(len((item.get("text") or "")) for item in candidate_passages if isinstance(item, dict))
+    long_term_memories = packet.get("long_term_memories") or []
+    long_term_memory_chars = sum(len(item or "") for item in long_term_memories)
+
+    logger.info(
+        "LLAMA_OLLAMA_REQUEST model=%s timeout_s=%s question_chars=%s recent_memory_chars=%s compressed_memory_chars=%s long_term_memory_count=%s long_term_memory_chars=%s candidate_passages=%s candidate_chars=%s prompt_chars=%s",
+        LLAMA_MODEL,
+        LLAMA_TIMEOUT_SECONDS,
+        len(packet.get("question") or ""),
+        len(packet.get("recent_memory") or ""),
+        len(packet.get("compressed_memory") or ""),
+        len(long_term_memories),
+        long_term_memory_chars,
+        len(candidate_passages),
+        candidate_chars,
+        len(user_prompt)
+    )
+
     try:
         async with httpx.AsyncClient(timeout=LLAMA_TIMEOUT_SECONDS) as client:
             response = await client.post(
@@ -127,6 +155,19 @@ Your job:
             )
             response.raise_for_status()
             outer = response.json()
+
+        logger.info(
+            "LLAMA_OLLAMA_RESPONSE model=%s done=%s total_ms=%s load_ms=%s prompt_eval_count=%s prompt_eval_ms=%s eval_count=%s eval_ms=%s response_chars=%s",
+            LLAMA_MODEL,
+            outer.get("done"),
+            _ns_to_ms_text(outer.get("total_duration")),
+            _ns_to_ms_text(outer.get("load_duration")),
+            outer.get("prompt_eval_count", "-"),
+            _ns_to_ms_text(outer.get("prompt_eval_duration")),
+            outer.get("eval_count", "-"),
+            _ns_to_ms_text(outer.get("eval_duration")),
+            len(outer.get("response") or "")
+        )
 
         inner_raw = outer.get("response", "{}")
         inner = json.loads(inner_raw) if isinstance(inner_raw, str) else inner_raw
