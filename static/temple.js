@@ -197,7 +197,11 @@ document.addEventListener("DOMContentLoaded", function () {
 
     if (!response.ok) {
       const err = await response.json();
-      throw new Error(err.error || "Oracle request failed");
+      throw new Error(
+        err.oracle_message ||
+        err.error ||
+        "Oracle request failed"
+      );
     }
 
     return await response.json();
