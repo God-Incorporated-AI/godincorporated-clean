@@ -4931,6 +4931,14 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         )   
 
     try:
+        ask_started_at = datetime.datetime.now()
+        retrieval_started_at = None
+        retrieval_finished_at = None
+        phase1_started_at = None
+        phase1_finished_at = None
+        final_model_started_at = None
+        final_model_finished_at = None
+
         question = payload.question
         question = question[:1000]
         deity = payload.deity
@@ -4962,8 +4970,10 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         passages = []
 
         if memory_intent != "recall":
+            retrieval_started_at = datetime.datetime.now()
             passages = retrieve_context(question, user_id)
             passages = rank_passages(passages, question)
+            retrieval_finished_at = datetime.datetime.now()
 
 
         
@@ -4984,8 +4994,10 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         # --— fallback retrieval if recall requested but memory is empty ---
         if memory_intent == "recall" and not memory_block.strip():
+            retrieval_started_at = datetime.datetime.now()
             passages = retrieve_context(question, user_id)
             passages = rank_passages(passages, question, max_items=2)
+            retrieval_finished_at = datetime.datetime.now()
 
         passages_before_llama = list(passages or [])
         long_term_memory_count = len([item for item in limited_memories if (item or "").strip()])
@@ -5021,7 +5033,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             passages=passages_before_llama
         )
 
+        phase1_started_at = datetime.datetime.now()
         llama_phase1 = await run_llama_phase1(support_packet)
+        phase1_finished_at = datetime.datetime.now()
         passages, llama_compact_brief = apply_phase1_result(passages_before_llama, llama_phase1)
 
         logger.info(
@@ -5109,6 +5123,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
                 context_block=context_block
             )
 
+        final_model_started_at = datetime.datetime.now()
         result = await get_oracle_response(
             enhanced_question,
             deity,
@@ -5122,6 +5137,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             moses_route_reason=moses_route_reason,
             moses_prompt_chars=moses_prompt_chars
         )
+        final_model_finished_at = datetime.datetime.now()
 
         raw_answer = result["answer"]
         source_model = result["source_model"]
@@ -5130,7 +5146,23 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             raw_answer = "The Oracle is silent."
 
         raw_answer = trim_response_to_word_cap(raw_answer, response_word_cap)
-           
+
+        def _ms(started_at, finished_at):
+            if not started_at or not finished_at:
+                return "-"
+            return round((finished_at - started_at).total_seconds() * 1000, 2)
+
+        logger.info(
+            "ASK_STAGE_TIMING deity=%s memory_intent=%s plan_code=%s retrieval_ms=%s phase1_ms=%s final_model_ms=%s total_ms=%s",
+            deity,
+            memory_intent,
+            plan_code,
+            _ms(retrieval_started_at, retrieval_finished_at),
+            _ms(phase1_started_at, phase1_finished_at),
+            _ms(final_model_started_at, final_model_finished_at),
+            _ms(ask_started_at, datetime.datetime.now())
+        )
+
         logger.info(f"ANSWER len={len(raw_answer)}")
 
         # --- Token metering ---
