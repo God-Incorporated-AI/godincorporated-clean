@@ -663,3 +663,31 @@ main.admin-console {
   outline: 3px solid rgba(111, 90, 58, 0.55);
   box-shadow: 0 0 0 3px rgba(111, 90, 58, 0.18);
 }
+
+.temple-hero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  margin-top: 0.2rem;
+}
+
+.branding .temple-title {
+  font-size: 2.2rem;
+  color: #6b1c1c;
+  margin-bottom: 0.2rem;
+}
+
+.branding .temple-title::before,
+.branding .temple-title::after {
+  content: none !important;
+}
+
+.temple-mark {
+  width: 54px;
+  height: 54px;
+  object-fit: contain;
+  display: block;
+}
+
