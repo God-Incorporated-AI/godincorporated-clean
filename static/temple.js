@@ -307,6 +307,38 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   });
 
+  function renderOracleHelper(identity) {
+    if (!oracleHelper) return;
+
+    const lines = [];
+    const authenticated = Boolean(identity && identity.authenticated);
+    const remaining = identity?.usage?.questions_remaining;
+    const remainingDisplay = identity?.usage?.questions_remaining_display;
+    const currentAccessLabel = identity?.current_access_label || identity?.support?.current_access_label || identity?.plan_code || "Anon";
+
+    if (identity?.renewal_message) {
+      lines.push(identity.renewal_message);
+    } else if (identity?.support_message && authenticated) {
+      lines.push(identity.support_message);
+    }
+
+    if (typeof remaining === "number") {
+      if (!authenticated && remaining <= 2) {
+        lines.push("Anonymous path: " + remaining + " question" + (remaining === 1 ? "" : "s") + " remaining. Create an account or activate support to continue this path.");
+      } else if (authenticated && remaining <= 3 && !identity?.usage?.is_unlimited_questions) {
+        lines.push(currentAccessLabel + " path: " + remaining + " question" + (remaining === 1 ? "" : "s") + " remaining in the current window.");
+      }
+    } else if (remainingDisplay === "Unlimited") {
+      lines.push(currentAccessLabel + " path has unlimited dialogue in the current window.");
+    }
+
+    if (!authenticated && Array.isArray(identity?.continuity_nudges) && identity.continuity_nudges.length > 0) {
+      lines.push(identity.continuity_nudges[0]);
+    }
+
+    oracleHelper.textContent = lines.join(" ");
+  }
+
   // Ask Oracle (text input)
   oracleForm.addEventListener("submit", async function (e) {
     e.preventDefault();
@@ -314,23 +346,47 @@ document.addEventListener("DOMContentLoaded", function () {
     if (!question) return;
     const voice = voiceSelect.value;
 
-    // Clear input and previous answer, show waiting message
     seekerInput.value = "";
     oracleAnswer.textContent = "🔮 Consulting the Oracle...";
-    // Disable Ask button
     askButton.disabled = true;
 
     try {
       const data = await submitOracleQuestion(question, voice);
       if (data.answer) {
         oracleAnswer.textContent = data.answer;
+        await updateIdentityDisplay();
       } else if (data.error) {
         oracleAnswer.textContent = "⚠️ Error: " + data.error;
       } else {
         oracleAnswer.textContent = "⚠️ No response received.";
       }
     } catch (err) {
-      oracleAnswer.textContent = "⚠️ Error: " + err.message;
+      const msg = err.message || "Oracle request failed";
+
+      if (msg.includes("The Oracle grows quiet")) {
+        oracleAnswer.textContent = "The Oracle grows quiet.";
+        if (currentIdentity?.authenticated) {
+          showFeedbackModal(
+            msg,
+            currentIdentity?.renewal_message ? [currentIdentity.renewal_message] : [],
+            "Temple Notice"
+          );
+          renderSupportModal();
+          openModal(supportModal);
+          applySupportIntentSelection(true);
+        } else {
+          showFeedbackModal(
+            msg,
+            currentIdentity?.continuity_nudges || [],
+            "Temple Notice",
+            { showCreateAccount: true }
+          );
+        }
+      } else {
+        oracleAnswer.textContent = "⚠️ Error: " + msg;
+      }
+
+      await updateIdentityDisplay();
     } finally {
       askButton.disabled = false;
     }
@@ -965,6 +1021,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       }
 
       renderSupportModal();
+      renderOracleHelper(data);
 
       if (openSupportOnLoad && !supportOpenedFromQuery) {
         supportOpenedFromQuery = true;
@@ -979,6 +1036,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       updateMenuToggleIdentity(null);
       updateAdminNav(null);
       renderSupportModal();
+      renderOracleHelper(null);
 
       if (openSupportOnLoad && !supportOpenedFromQuery) {
         supportOpenedFromQuery = true;
