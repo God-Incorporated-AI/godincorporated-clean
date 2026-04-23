@@ -225,13 +225,7 @@ document.addEventListener("DOMContentLoaded", function () {
   voiceSelect.addEventListener("change", function () {
     const selected = voiceSelect.value;
     localStorage.setItem(ORACLE_VOICE_STORAGE_KEY, selected);
-    if (selected === "Hathor") {
-      oracleHelper.textContent = "Hathor speaks from Egyptian Magick.";
-    } else if (selected === "Moses") {
-      oracleHelper.textContent = "Moses speaks from the Christian Canon.";
-    } else {
-      oracleHelper.textContent = "";
-    }
+    renderOracleHelper(null);
   });
   // Trigger initial helper text
   voiceSelect.dispatchEvent(new Event("change"));
@@ -310,30 +304,27 @@ document.addEventListener("DOMContentLoaded", function () {
   function renderOracleHelper(identity) {
     if (!oracleHelper) return;
 
+    const selected = voiceSelect?.value || "Hathor";
     const lines = [];
+
+    if (selected === "Hathor") {
+      lines.push("Hathor draws from Egyptian Magick.");
+    } else if (selected === "Moses") {
+      lines.push("Moses draws from the Christian Canon.");
+    }
+
     const authenticated = Boolean(identity && identity.authenticated);
     const remaining = identity?.usage?.questions_remaining;
-    const remainingDisplay = identity?.usage?.questions_remaining_display;
-    const currentAccessLabel = identity?.current_access_label || identity?.support?.current_access_label || identity?.plan_code || "Anon";
+    const unlimited = Boolean(identity?.usage?.is_unlimited_questions);
 
-    if (identity?.renewal_message) {
-      lines.push(identity.renewal_message);
-    } else if (identity?.support_message && authenticated) {
-      lines.push(identity.support_message);
-    }
-
-    if (typeof remaining === "number") {
-      if (!authenticated && remaining <= 2) {
-        lines.push("Anonymous path: " + remaining + " question" + (remaining === 1 ? "" : "s") + " remaining. Create an account or activate support to continue this path.");
-      } else if (authenticated && remaining <= 3 && !identity?.usage?.is_unlimited_questions) {
-        lines.push(currentAccessLabel + " path: " + remaining + " question" + (remaining === 1 ? "" : "s") + " remaining in the current window.");
+    if (!authenticated && typeof remaining === "number") {
+      if (remaining <= 0) {
+        lines.push("Anonymous path complete. Create an account or activate support to continue.");
+      } else if (remaining <= 2) {
+        lines.push("Anonymous path: " + remaining + " question" + (remaining === 1 ? "" : "s") + " remaining.");
       }
-    } else if (remainingDisplay === "Unlimited") {
-      lines.push(currentAccessLabel + " path has unlimited dialogue in the current window.");
-    }
-
-    if (!authenticated && Array.isArray(identity?.continuity_nudges) && identity.continuity_nudges.length > 0) {
-      lines.push(identity.continuity_nudges[0]);
+    } else if (authenticated && identity?.renewal_message && !unlimited) {
+      lines.push(identity.renewal_message);
     }
 
     oracleHelper.textContent = lines.join(" ");
@@ -993,6 +984,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
         setAuthenticatedMenuState(false);
         updateMenuToggleIdentity(null);
         updateAdminNav(null);
+        renderOracleHelper(null);
         return;
       }
 
