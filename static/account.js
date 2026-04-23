@@ -14,6 +14,55 @@ document.addEventListener("DOMContentLoaded", async function () {
     return String(value);
   }
 
+  function looksLikeIsoDate(value) {
+    return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value);
+  }
+
+  function formatDateTime(value) {
+    if (!looksLikeIsoDate(value)) return formatValue(value);
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return formatValue(value);
+
+    return date.toLocaleString([], {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    });
+  }
+
+  function formatDateOnly(value) {
+    if (!looksLikeIsoDate(value)) return formatValue(value);
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return formatValue(value);
+
+    return date.toLocaleDateString([], {
+      year: "numeric",
+      month: "short",
+      day: "numeric"
+    });
+  }
+
+  function formatUsageWindow(data) {
+    const currentAccess = (data.current_access_plan_code || "").toLowerCase();
+    const startedAt = data.usage?.usage_window_started_at;
+
+    if (currentAccess === "pilgrim") return "Daily";
+    if (["seeker", "magister", "sovereign", "philosophus", "theoricus"].includes(currentAccess)) {
+      return "Monthly";
+    }
+
+    return formatDateOnly(startedAt);
+  }
+
+  function cleanSupportMessage(value) {
+    if (!value) return "-";
+    return String(value).replace(/T(\d{2}:\d{2}:\d{2}(?:\.\d+)?)?(?:[+-]\d{2}:\d{2}|Z)?/g, " ");
+  }
+
   try {
     const response = await fetch("/me", { credentials: "same-origin" });
     const data = await response.json();
@@ -30,7 +79,7 @@ document.addEventListener("DOMContentLoaded", async function () {
     setText("accountDisplayName", formatValue(data.display_name));
     setText("accountCombinedTitle", formatValue(data.combined_title));
     setText("accountEmail", formatValue(data.email));
-    setText("accountLastLogin", formatValue(data.last_login));
+    setText("accountLastLogin", formatDateTime(data.last_login));
 
     setText("accountCurrentAccess", formatValue(data.current_access_label || data.current_access_plan_code));
     setText("accountStoredLevel", formatValue(data.stored_plan_label || data.stored_plan_code));
@@ -41,14 +90,14 @@ document.addEventListener("DOMContentLoaded", async function () {
     setText("accountQuestionsUsed", formatValue(data.usage?.questions_used));
     setText("accountQuestionLimit", data.usage?.is_unlimited_questions ? "Unlimited" : formatValue(data.usage?.question_limit_display ?? data.usage?.question_limit));
     setText("accountQuestionsRemaining", formatValue(data.usage?.questions_remaining_display ?? data.usage?.questions_remaining));
-    setText("accountUsageWindow", formatValue(data.usage?.usage_window_started_at));
+    setText("accountUsageWindow", formatUsageWindow(data));
 
     setText("accountScrolls", formatValue(data.scrolls_donated));
     setText("accountMoney", formatValue(data.money_donated));
     setText("accountDonationCount", formatValue(data.donation_count));
 
-    setText("accountSupportMessage", formatValue(data.support_message));
-    setText("accountRenewalMessage", formatValue(data.renewal_message));
+    setText("accountSupportMessage", cleanSupportMessage(data.support_message));
+    setText("accountRenewalMessage", cleanSupportMessage(data.renewal_message));
   } catch (err) {
     loadingEl.hidden = true;
     authPromptEl.hidden = false;
