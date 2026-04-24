@@ -463,7 +463,7 @@ document.addEventListener("DOMContentLoaded", function () {
   const templeContributionBtn = document.getElementById("templeContributionBtn");
   const supportCheckoutButtons = document.querySelectorAll(".support-checkout-btn");
 
-  const TEMPLE_CONTRIBUTION_URL = "";
+  const TEMPLE_CONTRIBUTION_URL = "https://buy.stripe.com/00wfZ98ur8EldDr7kjaEE00";
   let currentIdentity = null;
 
   // Phase 4.2.1: Modal elements
