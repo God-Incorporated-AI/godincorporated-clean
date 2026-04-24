@@ -90,6 +90,9 @@ STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 STRIPE_LIVEMODE = os.getenv("STRIPE_LIVEMODE", "false").lower() == "true"
+
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
 EMBEDDINGS_ENABLED = os.getenv("EMBEDDINGS_ENABLED", "false").lower() == "true"
 EMBEDDING_CACHE_PATH = os.getenv("EMBEDDING_CACHE_PATH", os.path.join(UPLOAD_DIR, "cache", "embedding_cache.json"))
 
