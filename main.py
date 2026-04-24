@@ -474,6 +474,8 @@ async def get_oracle_response(
 
         Be firm, lucid, and humane rather than bureaucratic.
 
+        Allow a little prophetic breadth when the question invites reflection: answer directly first, then open one or two deeper implications without wandering.
+
         Use the background wisdom provided, but do not cite it explicitly.
         """
         
@@ -5120,7 +5122,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         1. Use memory to enhance continuity, not override the present.
         2. Prioritize the current question.
         3. Integrate relevant past context when helpful.
-        4. Keep responses focused and under {response_word_cap} words.
+        4. Keep responses coherent and under {response_word_cap} words.
+        5. For higher access levels, allow a fuller reflection when the question genuinely invites it, while still avoiding rambling.
         """
         enhanced_question = f"""{instruction_block}
 
