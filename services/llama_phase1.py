@@ -49,13 +49,20 @@ def build_support_packet(
             trimmed_memories.append(text[:LLAMA_MEMORY_CHAR_LIMIT])
 
     trimmed_passages = []
+    max_passages = 3
+    count = 0
+
     for idx, item in enumerate(passages[:LLAMA_MAX_PASSAGES]):
+        if count >= max_passages:
+            break
+
         text = (item or "").strip()
         if text:
             trimmed_passages.append({
                 "index": idx,
-                "text": text[:LLAMA_PASSAGE_CHAR_LIMIT]
+                "text": text[:600]
             })
+            count += 1
 
     return {
         "question": (question or "").strip(),
