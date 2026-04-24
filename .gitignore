@@ -44,3 +44,7 @@ temple_backups/
 
 # local patch backup files
 *.bak.*
+
+# Local browser/session test artifacts
+cookies*.txt
+anon_cookies.txt
