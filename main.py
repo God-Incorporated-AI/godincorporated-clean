@@ -2775,6 +2775,61 @@ def build_anonymous_me_response(session_id: str) -> dict:
         }
     }
 
+@app.get("/audio/{filename}")
+def get_audio_file(filename: str):
+    if "/" in filename or "\\ " in filename or not filename.endswith(".mp3"):
+        raise HTTPException(status_code=404, detail="Audio file not found.")
+
+    audio_path = os.path.join(AUDIO_DIR, filename)
+    if not os.path.exists(audio_path):
+        raise HTTPException(status_code=404, detail="Audio file not found.")
+
+    return FileResponse(audio_path, media_type="audio/mpeg")
+
+
+@app.post("/whisper")
+async def whisper_endpoint(
+    request: Request,
+    file: UploadFile = File(...),
+    voice: str = Form("Hathor")
+):
+    try:
+        file_bytes = await file.read()
+        transcript = transcribe_audio(file_bytes)
+
+        if not transcript:
+            return JSONResponse(
+                content={"error": "Whisper could not transcribe.", "answer": "⚠️ Whisper could not transcribe."},
+                status_code=422
+            )
+
+        oracle_payload = QuestionInput(
+            question=transcript,
+            deity=voice
+        )
+
+        result = await ask_oracle(request, oracle_payload)
+
+        if isinstance(result, JSONResponse):
+            return result
+
+        answer = result.get("answer", "")
+        audio_url = generate_tts_audio(answer, voice) if answer else None
+
+        return {
+            "question": transcript,
+            "answer": answer,
+            "audio_url": audio_url
+        }
+
+    except Exception as e:
+        logger.exception("Whisper voice endpoint failed")
+        return JSONResponse(
+            content={"error": str(e), "answer": "⚠️ Voice request failed."},
+            status_code=500
+        )
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "service": "godinc", "time": str(datetime.datetime.now(timezone.utc))}
