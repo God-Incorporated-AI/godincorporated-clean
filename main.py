@@ -100,6 +100,29 @@ BROWSER_TOKEN_HEADER = "x-anonymous-user-id"
 ANONYMOUS_UPLOAD_COOLDOWN_SECONDS = 5
 ANONYMOUS_UPLOAD_LIMIT = 3
 
+LLAMA_PHASE1_VOICE_BYPASS_ENABLED = os.getenv(
+    "LLAMA_PHASE1_VOICE_BYPASS_ENABLED", "true"
+).strip().lower() in {"1", "true", "yes", "on"}
+
+LLAMA_PHASE1_VOICE_BYPASS_PLANS = {
+    item.strip().lower()
+    for item in os.getenv("LLAMA_PHASE1_VOICE_BYPASS_PLANS", "anon,pilgrim").split(",")
+    if item.strip()
+}
+
+
+def should_bypass_llama_phase1_for_request(plan_code: Optional[str], input_mode: str) -> bool:
+    """
+    Phase 10 seeker-experience guardrail.
+    Voice-first anon/pilgrim requests should not wait on Ollama Phase 1.
+    Higher tiers keep the existing LLaMA shaping path.
+    """
+    if not LLAMA_PHASE1_VOICE_BYPASS_ENABLED:
+        return False
+    if (input_mode or "text").lower() != "voice":
+        return False
+    return normalize_plan_code(plan_code) in LLAMA_PHASE1_VOICE_BYPASS_PLANS
+
 
 def get_ip_hash(request: Request) -> str:
     ip = request.client.host if request.client else "unknown"
@@ -2808,6 +2831,7 @@ async def whisper_endpoint(
             deity=voice
         )
 
+        request.state.oracle_input_mode = "voice"
         result = await ask_oracle(request, oracle_payload)
 
         if isinstance(result, JSONResponse):
@@ -5016,7 +5040,13 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         question = payload.question
         question = question[:1000]
         deity = payload.deity
-        logger.info(f"ASK deity={deity} len={len(question)}")
+        input_mode = getattr(request.state, "oracle_input_mode", "text")
+        logger.info(
+            "ASK input_mode=%s deity=%s len=%s",
+            input_mode,
+            deity,
+            len(question)
+        )
 
         # --— detect memory intent ---
         memory_intent = detect_memory_intent(question)
@@ -5101,30 +5131,57 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         llama_phase1 = None
         llama_compact_brief = ""
-
-        support_packet = build_support_packet(
-            question=question,
-            deity=deity,
-            memory_intent=memory_intent,
+        phase1_started_at = None
+        phase1_finished_at = None
+        bypass_llama_phase1 = should_bypass_llama_phase1_for_request(
             plan_code=plan_code,
-            recent_memory=helper_recent_memory,
-            compressed_memory=helper_compressed_memory,
-            limited_memories=helper_limited_memories,
-            passages=passages_before_llama
+            input_mode=input_mode
         )
 
-        phase1_started_at = datetime.datetime.now()
-        llama_phase1 = await run_llama_phase1(support_packet)
-        phase1_finished_at = datetime.datetime.now()
-        passages, llama_compact_brief = apply_phase1_result(passages_before_llama, llama_phase1)
+        if bypass_llama_phase1:
+            passages = passages_before_llama
+            llama_phase1 = {
+                "enabled": False,
+                "shadow_only": False,
+                "provider": "ollama",
+                "budget_tier": "skipped",
+                "selected_passage_indexes": [],
+                "compact_brief": "",
+                "reason": "skipped: voice_entry_plan"
+            }
+            logger.info(
+                "LLAMA_PHASE1_BYPASS input_mode=%s deity=%s memory_intent=%s plan_code=%s passages_before=%s reason=voice_entry_plan",
+                input_mode,
+                deity,
+                memory_intent,
+                plan_code,
+                len(passages_before_llama)
+            )
+        else:
+            support_packet = build_support_packet(
+                question=question,
+                deity=deity,
+                memory_intent=memory_intent,
+                plan_code=plan_code,
+                recent_memory=helper_recent_memory,
+                compressed_memory=helper_compressed_memory,
+                limited_memories=helper_limited_memories,
+                passages=passages_before_llama
+            )
+
+            phase1_started_at = datetime.datetime.now()
+            llama_phase1 = await run_llama_phase1(support_packet)
+            phase1_finished_at = datetime.datetime.now()
+            passages, llama_compact_brief = apply_phase1_result(passages_before_llama, llama_phase1)
 
         logger.info(
-            "%s deity=%s memory_intent=%s plan_code=%s",
+            "%s input_mode=%s deity=%s memory_intent=%s plan_code=%s",
             summarize_phase1_result(
                 llama_phase1,
                 passages_before=len(passages_before_llama),
                 passages_after=len(passages)
             ),
+            input_mode,
             deity,
             memory_intent,
             plan_code
@@ -5234,7 +5291,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             return round((finished_at - started_at).total_seconds() * 1000, 2)
 
         logger.info(
-            "ASK_STAGE_TIMING deity=%s memory_intent=%s plan_code=%s retrieval_ms=%s phase1_ms=%s final_model_ms=%s total_ms=%s",
+            "ASK_STAGE_TIMING input_mode=%s deity=%s memory_intent=%s plan_code=%s retrieval_ms=%s phase1_ms=%s final_model_ms=%s total_ms=%s",
+            input_mode,
             deity,
             memory_intent,
             plan_code,
