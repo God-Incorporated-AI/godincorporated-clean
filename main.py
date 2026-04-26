@@ -1,4 +1,5 @@
 import datetime
+import time
 from datetime import timezone
 import hashlib
 import json
@@ -95,6 +96,10 @@ if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
 EMBEDDINGS_ENABLED = os.getenv("EMBEDDINGS_ENABLED", "false").lower() == "true"
 EMBEDDING_CACHE_PATH = os.getenv("EMBEDDING_CACHE_PATH", os.path.join(UPLOAD_DIR, "cache", "embedding_cache.json"))
+
+RETRIEVAL_BACKEND = os.getenv("RETRIEVAL_BACKEND", "legacy_embeddings").strip().lower()
+PGVECTOR_RETRIEVAL_LIMIT = int(os.getenv("PGVECTOR_RETRIEVAL_LIMIT", "5"))
+VALID_RETRIEVAL_BACKENDS = {"legacy_embeddings", "pgvector", "fts"}
 
 BROWSER_TOKEN_HEADER = "x-anonymous-user-id"
 ANONYMOUS_UPLOAD_COOLDOWN_SECONDS = 5
@@ -950,6 +955,100 @@ def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: Optio
 
     return memories
 
+def _vector_literal(values: list[float]) -> str:
+    return "[" + ",".join(str(float(v)) for v in values) + "]"
+
+
+def get_retrieval_backend() -> str:
+    backend = (RETRIEVAL_BACKEND or "legacy_embeddings").strip().lower()
+    if backend not in VALID_RETRIEVAL_BACKENDS:
+        logger.warning(
+            "Invalid RETRIEVAL_BACKEND=%s; falling back to legacy_embeddings",
+            backend
+        )
+        return "legacy_embeddings"
+    return backend
+
+
+def retrieve_context_pgvector(question: str, user_id: Optional[str], top_k: Optional[int] = None):
+    """
+    Phase 10.1 pgvector retrieval path.
+
+    Staging-first retrieval backend.
+    Starts with canonical embedded chunks only.
+    Personal/community expansion can be added after canonical retrieval is stable.
+    """
+    limit = top_k or PGVECTOR_RETRIEVAL_LIMIT
+
+    total_started = time.time()
+
+    embed_started = time.time()
+    question_embedding = generate_text_embedding(question)
+    embed_ms = round((time.time() - embed_started) * 1000, 2)
+
+    if not question_embedding:
+        logger.warning("PGVECTOR_RETRIEVAL no_question_embedding")
+        return []
+
+    vector = _vector_literal(question_embedding)
+
+    conn = get_db_connection()
+    rows = []
+
+    try:
+        with conn.cursor() as cur:
+            sql_started = time.time()
+            cur.execute(
+                """
+                SELECT
+                    s.original_filename,
+                    s.corpus_layer,
+                    c.id AS chunk_id,
+                    c.chunk_text,
+                    c.embedding <=> %s::vector AS distance
+                FROM scroll_chunks c
+                JOIN scrolls s ON c.scroll_id = s.id
+                WHERE c.embedding IS NOT NULL
+                  AND s.corpus_layer = 'canonical'
+                ORDER BY c.embedding <=> %s::vector
+                LIMIT %s;
+                """,
+                (vector, vector, limit)
+            )
+            rows = cur.fetchall()
+            sql_ms = round((time.time() - sql_started) * 1000, 2)
+
+    finally:
+        conn.close()
+
+    total_ms = round((time.time() - total_started) * 1000, 2)
+
+    logger.info(
+        "PGVECTOR_RETRIEVAL backend=pgvector user_id_present=%s limit=%s rows=%s embed_ms=%s sql_ms=%s total_ms=%s",
+        bool(user_id),
+        limit,
+        len(rows),
+        embed_ms,
+        sql_ms,
+        total_ms
+    )
+
+    passages = []
+    for row in rows:
+        chunk_text = (row.get("chunk_text") or "").strip()
+        if not chunk_text:
+            continue
+
+        passages.append(
+            (
+                f"[{row['original_filename']} | {row['corpus_layer']} | "
+                f"pgvector distance={row['distance']}]\n{chunk_text[:800]}"
+            )
+        )
+
+    return passages
+
+
 def retrieve_context_embeddings(question: str, user_id: Optional[str]):
     """
     Phase 6.2 embedding retrieval path.
@@ -974,6 +1073,28 @@ def retrieve_context_embeddings(question: str, user_id: Optional[str]):
     return personal + canonical + community
 
 def retrieve_context(question: str, user_id: Optional[str]):
+
+    backend = get_retrieval_backend()
+
+    if backend == "pgvector":
+        passages = retrieve_context_pgvector(question, user_id, top_k=PGVECTOR_RETRIEVAL_LIMIT)
+        if passages:
+            return passages
+
+        logger.warning("PGVECTOR_RETRIEVAL returned no passages; falling back to FTS retrieval")
+
+        personal = search_personal_scrolls(user_id, question, limit=4)
+        canonical = search_canonical_scrolls(question, limit=6)
+        community = search_community_scrolls(question, limit=2)
+
+        return personal + canonical + community
+
+    if backend == "fts":
+        personal = search_personal_scrolls(user_id, question, limit=4)
+        canonical = search_canonical_scrolls(question, limit=6)
+        community = search_community_scrolls(question, limit=2)
+
+        return personal + canonical + community
 
     if should_use_embeddings():
         return retrieve_context_embeddings(question, user_id)
