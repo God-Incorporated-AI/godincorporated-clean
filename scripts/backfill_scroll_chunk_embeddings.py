@@ -118,6 +118,7 @@ def main():
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=25)
     parser.add_argument("--corpus-layer", choices=sorted(VALID_CORPUS_LAYERS), default=None)
+    parser.add_argument("--quiet", action="store_true", help="Suppress per-chunk update logging")
     args = parser.parse_args()
 
     if args.limit < 1:
@@ -158,11 +159,12 @@ def main():
 
                 for row, embedding in zip(batch_rows, embeddings):
                     chunk_id = row["id"]
-                    print(
-                        f"[UPDATE] chunk_id={chunk_id} "
-                        f"layer={row['corpus_layer']} "
-                        f"file={row['original_filename']}"
-                    )
+                    if not args.quiet:
+                        print(
+                            f"[UPDATE] chunk_id={chunk_id} "
+                            f"layer={row['corpus_layer']} "
+                            f"file={row['original_filename']}"
+                        )
 
                     cur.execute(
                         """
