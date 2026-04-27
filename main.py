@@ -1307,11 +1307,60 @@ PLAN_REFLECTION_WORD_CAPS = {
 RECALL_WORD_CAP = 220
 
 
-def get_response_word_cap(plan_code: Optional[str], memory_intent: str) -> int:
-    plan = normalize_plan_code(plan_code)
+def get_response_word_cap(
+    plan_code: Optional[str],
+    memory_intent: str,
+    deity: Optional[str] = None,
+    input_mode: str = "text"
+) -> int:
+    """
+    Phase 10 response-budget control.
+
+    Controls final answer length by access tier, deity, and input mode.
+    This is the primary latency/cost control after pgvector retrieval.
+    """
+
+    normalized_plan = normalize_plan_code(plan_code)
+    normalized_deity = (deity or "").strip().lower()
+    normalized_input = (input_mode or "text").strip().lower()
+
+    # Ordered access levels:
+    # anon -> pilgrim -> seeker -> magister -> sovereign -> theoricus
+    text_ranges = {
+        "anon": (90, 150),
+        "pilgrim": (140, 210),
+        "seeker": (190, 280),
+        "magister": (260, 360),
+        "sovereign": (330, 460),
+        "theoricus": (380, 520),
+    }
+
+    voice_ranges = {
+        "anon": (55, 100),
+        "pilgrim": (80, 135),
+        "seeker": (115, 170),
+        "magister": (150, 210),
+        "sovereign": (180, 250),
+        "theoricus": (210, 290),
+    }
+
+    ranges = voice_ranges if normalized_input == "voice" else text_ranges
+    low, high = ranges.get(normalized_plan, ranges["anon"])
+
+    # Recall should stay concise even for high tiers.
     if memory_intent == "recall":
-        return RECALL_WORD_CAP
-    return PLAN_REFLECTION_WORD_CAPS.get(plan, PLAN_REFLECTION_WORD_CAPS["anon"])
+        high = min(high, 180 if normalized_input == "voice" else 260)
+        low = min(low, high)
+
+    # Moses is more direct; Hathor is warmer but still bounded.
+    if normalized_deity == "moses":
+        target = int((low * 0.65) + (high * 0.35))
+    elif normalized_deity == "hathor":
+        target = int((low * 0.35) + (high * 0.65))
+    else:
+        target = int((low + high) / 2)
+
+    return max(60, target)
 
 
 def words_to_max_tokens(word_cap: int) -> int:
@@ -5318,7 +5367,12 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         # --— dual-mode prompt ---
 
-        response_word_cap = get_response_word_cap(plan_code, memory_intent)
+        response_word_cap = get_response_word_cap(
+            plan_code=plan_code,
+            memory_intent=memory_intent,
+            deity=deity,
+            input_mode=input_mode
+        )
         response_max_tokens = words_to_max_tokens(response_word_cap)
 
         if memory_intent == "recall":
