@@ -1318,13 +1318,27 @@ PLAN_LIMITS = {
 }
 
 PLAN_MEMORY_DEPTH = {
+    # Reflection mode uses a bounded working-memory window.
+    # Unlimited history should be reserved for targeted recall/search, not every answer.
     "anon": 1,
     "pilgrim": 1,
     "seeker": 3,
-    "magister": 7,
-    "sovereign": 9,
-    "philosophus": 33,
-    "theoricus": None,
+    "magister": 5,
+    "sovereign": 7,
+    "philosophus": 8,
+    "theoricus": 10,
+}
+
+PLAN_RECALL_MEMORY_DEPTH = {
+    # Recall mode can look deeper, but still avoids blindly sending unlimited history.
+    # Future work should replace this with targeted historical retrieval.
+    "anon": 3,
+    "pilgrim": 5,
+    "seeker": 10,
+    "magister": 20,
+    "sovereign": 40,
+    "philosophus": 60,
+    "theoricus": 80,
 }
 
 
@@ -2193,8 +2207,11 @@ def build_anonymous_support_status_payload() -> dict:
     }
 
 
-def get_memory_depth(plan_code: str):
-    return PLAN_MEMORY_DEPTH.get(normalize_plan_code(plan_code), 1)
+def get_memory_depth(plan_code: str, memory_intent: str = "reflection"):
+    plan = normalize_plan_code(plan_code)
+    if memory_intent == "recall":
+        return PLAN_RECALL_MEMORY_DEPTH.get(plan, PLAN_RECALL_MEMORY_DEPTH["anon"])
+    return PLAN_MEMORY_DEPTH.get(plan, PLAN_MEMORY_DEPTH["anon"])
 
 
 def get_question_display(plan_code: str, questions_used: int, question_limit: Optional[int]) -> dict:
@@ -5262,7 +5279,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         if user:
             entitlement = get_user_entitlement_snapshot(user_id)
             plan_code = entitlement["effective_plan_code"]
-            memory_depth = get_memory_depth(plan_code)
+            memory_depth = get_memory_depth(plan_code, memory_intent)
 
         # --- Retrieve seeker long-term memory ---
         memories = retrieve_seeker_memory(user_id, session_id, memory_depth)
