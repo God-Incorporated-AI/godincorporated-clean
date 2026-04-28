@@ -161,19 +161,38 @@ document.addEventListener("DOMContentLoaded", function () {
   let visitorId = getOrCreateVisitorId();
   let seekerId = localStorage.getItem("seeker_id") || null;
 
-  // Safe JSON parsing helper
+  // Safe response parsing helper
   async function safeReadJson(response) {
     const text = await response.text();
-    const contentType = response.headers.get("content-type");
-    if (contentType && contentType.includes("application/json")) {
+    const contentType = response.headers.get("content-type") || "";
+
+    if (contentType.includes("application/json")) {
       try {
         return JSON.parse(text);
       } catch (e) {
-        return { error: text || "Request failed" };
+        return { error: "The Temple returned malformed JSON. Please refresh and try again." };
       }
-    } else {
-      return { error: text || "Request failed" };
     }
+
+    if (looksLikeHtmlResponse(text)) {
+      if (response.status === 429) {
+        return {
+          oracle_message: "The Oracle grows quiet. To continue the dialogue, please log in or support the Temple."
+        };
+      }
+
+      if (response.status >= 500) {
+        return {
+          error: "The Temple returned a server page instead of an Oracle response. Please refresh and try again."
+        };
+      }
+
+      return {
+        error: "The Temple returned a page instead of an Oracle response. Please refresh and try again."
+      };
+    }
+
+    return { error: text || "Oracle request failed" };
   }
 
   // Unified /ask submission function
@@ -195,16 +214,17 @@ document.addEventListener("DOMContentLoaded", function () {
       body: JSON.stringify(payload)
     });
 
+    const data = await safeReadJson(response);
+
     if (!response.ok) {
-      const err = await response.json();
       throw new Error(
-        err.oracle_message ||
-        err.error ||
+        data.oracle_message ||
+        data.error ||
         "Oracle request failed"
       );
     }
 
-    return await response.json();
+    return data;
   }
 
   // Fetch scroll count on load
