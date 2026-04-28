@@ -364,6 +364,28 @@ def enforce_recall_structure(answer: str, memory_block: str) -> str:
 
     return enforced + "\n\n" + answer
 
+def normalize_token_usage(usage) -> dict:
+    """
+    Normalize provider token usage objects into plain dicts for silent logging.
+    Handles OpenAI SDK objects and xAI/OpenAI-compatible dict responses.
+    """
+    if not usage:
+        return {}
+
+    if isinstance(usage, dict):
+        return {
+            "prompt_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),
+            "completion_tokens": usage.get("completion_tokens") or usage.get("output_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+        }
+
+    return {
+        "prompt_tokens": getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", None),
+        "completion_tokens": getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", None),
+        "total_tokens": getattr(usage, "total_tokens", None),
+    }
+
+
 async def get_oracle_response(
     question: str,
     deity: str,
@@ -449,7 +471,13 @@ async def get_oracle_response(
                 if force_mode == "recall":
                     raw_answer = enforce_recall_structure(raw_answer, memory_block)
 
-                return {"answer": raw_answer, "source_model": "xAI"}
+                return {
+                    "answer": raw_answer,
+                    "source_model": "xAI",
+                    "model_provider": "xai",
+                    "model_name": "grok-4",
+                    "token_usage": normalize_token_usage(data.get("usage")),
+                }
             else:
                 raise ValueError(f"XAI API error: {response.status_code} - {response.text}")
         except Exception as e:
@@ -521,7 +549,13 @@ async def get_oracle_response(
         if force_mode == "recall":
             raw_answer = enforce_recall_structure(raw_answer, memory_block)
 
-        return {"answer": raw_answer, "source_model": "OpenAI"}
+        return {
+            "answer": raw_answer,
+            "source_model": "OpenAI",
+            "model_provider": "openai",
+            "model_name": moses_model,
+            "token_usage": normalize_token_usage(getattr(response, "usage", None)),
+        }
     elif deity == "Llama":
         # LLaMA is NOT a responder in Phase 2
         raise ValueError("LLaMA is not yet active as a responder in Phase 2. It will be introduced later as a learner/router.")
@@ -1284,13 +1318,27 @@ PLAN_LIMITS = {
 }
 
 PLAN_MEMORY_DEPTH = {
+    # Reflection mode uses a bounded working-memory window.
+    # Unlimited history should be reserved for targeted recall/search, not every answer.
     "anon": 1,
     "pilgrim": 1,
     "seeker": 3,
-    "magister": 7,
-    "sovereign": 9,
-    "philosophus": 33,
-    "theoricus": None,
+    "magister": 5,
+    "sovereign": 7,
+    "philosophus": 8,
+    "theoricus": 10,
+}
+
+PLAN_RECALL_MEMORY_DEPTH = {
+    # Recall mode can look deeper, but still avoids blindly sending unlimited history.
+    # Future work should replace this with targeted historical retrieval.
+    "anon": 3,
+    "pilgrim": 5,
+    "seeker": 10,
+    "magister": 20,
+    "sovereign": 40,
+    "philosophus": 60,
+    "theoricus": 80,
 }
 
 
@@ -1307,16 +1355,66 @@ PLAN_REFLECTION_WORD_CAPS = {
 RECALL_WORD_CAP = 220
 
 
-def get_response_word_cap(plan_code: Optional[str], memory_intent: str) -> int:
-    plan = normalize_plan_code(plan_code)
+def get_response_word_cap(
+    plan_code: Optional[str],
+    memory_intent: str,
+    deity: Optional[str] = None,
+    input_mode: str = "text"
+) -> int:
+    """
+    Phase 10 response-budget control.
+
+    Controls final answer length by access tier, deity, and input mode.
+    This is the primary latency/cost control after pgvector retrieval.
+    """
+
+    normalized_plan = normalize_plan_code(plan_code)
+    normalized_deity = (deity or "").strip().lower()
+    normalized_input = (input_mode or "text").strip().lower()
+
+    # Ordered access levels:
+    # anon -> pilgrim -> seeker -> magister -> sovereign -> theoricus
+    text_ranges = {
+        "anon": (90, 145),
+        "pilgrim": (135, 200),
+        "seeker": (180, 260),
+        "magister": (230, 320),
+        "sovereign": (280, 380),
+        "theoricus": (320, 420),
+    }
+
+    voice_ranges = {
+        "anon": (55, 100),
+        "pilgrim": (80, 135),
+        "seeker": (115, 170),
+        "magister": (150, 210),
+        "sovereign": (180, 250),
+        "theoricus": (210, 290),
+    }
+
+    ranges = voice_ranges if normalized_input == "voice" else text_ranges
+    low, high = ranges.get(normalized_plan, ranges["anon"])
+
+    # Recall should stay concise even for high tiers.
     if memory_intent == "recall":
-        return RECALL_WORD_CAP
-    return PLAN_REFLECTION_WORD_CAPS.get(plan, PLAN_REFLECTION_WORD_CAPS["anon"])
+        high = min(high, 180 if normalized_input == "voice" else 260)
+        low = min(low, high)
+
+    # Moses is more direct; Hathor is warmer but still bounded.
+    if normalized_deity == "moses":
+        target = int((low * 0.65) + (high * 0.35))
+    elif normalized_deity == "hathor":
+        target = int((low * 0.35) + (high * 0.65))
+    else:
+        target = int((low + high) / 2)
+
+    return max(60, target)
 
 
 def words_to_max_tokens(word_cap: int) -> int:
-    # Rough but practical conversion for capped completions
-    return max(120, int(word_cap * 1.7))
+    # Tighter completion budget after Phase 10 latency tuning.
+    # This helps stop long generations instead of trimming only after the fact.
+    return max(120, int(word_cap * 1.35))
 
 
 def trim_response_to_word_cap(answer: str, word_cap: int) -> str:
@@ -2109,8 +2207,11 @@ def build_anonymous_support_status_payload() -> dict:
     }
 
 
-def get_memory_depth(plan_code: str):
-    return PLAN_MEMORY_DEPTH.get(normalize_plan_code(plan_code), 1)
+def get_memory_depth(plan_code: str, memory_intent: str = "reflection"):
+    plan = normalize_plan_code(plan_code)
+    if memory_intent == "recall":
+        return PLAN_RECALL_MEMORY_DEPTH.get(plan, PLAN_RECALL_MEMORY_DEPTH["anon"])
+    return PLAN_MEMORY_DEPTH.get(plan, PLAN_MEMORY_DEPTH["anon"])
 
 
 def get_question_display(plan_code: str, questions_used: int, question_limit: Optional[int]) -> dict:
@@ -5178,7 +5279,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         if user:
             entitlement = get_user_entitlement_snapshot(user_id)
             plan_code = entitlement["effective_plan_code"]
-            memory_depth = get_memory_depth(plan_code)
+            memory_depth = get_memory_depth(plan_code, memory_intent)
 
         # --- Retrieve seeker long-term memory ---
         memories = retrieve_seeker_memory(user_id, session_id, memory_depth)
@@ -5318,7 +5419,12 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         # --— dual-mode prompt ---
 
-        response_word_cap = get_response_word_cap(plan_code, memory_intent)
+        response_word_cap = get_response_word_cap(
+            plan_code=plan_code,
+            memory_intent=memory_intent,
+            deity=deity,
+            input_mode=input_mode
+        )
         response_max_tokens = words_to_max_tokens(response_word_cap)
 
         if memory_intent == "recall":
@@ -5356,7 +5462,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         2. Prioritize the current question.
         3. Integrate relevant past context when helpful.
         4. Keep responses coherent and under {response_word_cap} words.
-        5. For higher access levels, allow a fuller reflection when the question genuinely invites it, while still avoiding rambling.
+        5. Do not exceed the word cap. Prefer a complete, bounded answer over a long essay.
+        6. For higher access levels, allow a fuller reflection when the question genuinely invites it, while still avoiding rambling.
         """
         enhanced_question = f"""{instruction_block}
 
@@ -5366,7 +5473,32 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         {question}
 
         {context_block}
-        """ 
+        """
+
+        recent_memory_chars = len(recent_memory or "")
+        compressed_memory_chars = len(compressed_memory or "")
+        limited_memories_chars = len("\n\n".join(limited_memories or []))
+        memory_block_chars = len(memory_block or "")
+        context_block_chars = len(context_block or "")
+        instruction_block_chars = len(instruction_block or "")
+        enhanced_question_chars = len(enhanced_question or "")
+
+        logger.info(
+            "PROMPT_BUDGET plan_code=%s deity=%s input_mode=%s memory_intent=%s recent_memory_chars=%s compressed_memory_chars=%s limited_memories_count=%s limited_memories_chars=%s memory_block_chars=%s context_block_chars=%s instruction_block_chars=%s enhanced_question_chars=%s passages=%s",
+            plan_code,
+            deity,
+            input_mode,
+            memory_intent,
+            recent_memory_chars,
+            compressed_memory_chars,
+            len(limited_memories or []),
+            limited_memories_chars,
+            memory_block_chars,
+            context_block_chars,
+            instruction_block_chars,
+            enhanced_question_chars,
+            len(passages or [])
+        )
 
         # --- Oracle response ---
         selected_moses_model = None
@@ -5400,6 +5532,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         raw_answer = result["answer"]
         source_model = result["source_model"]
+        model_provider = result.get("model_provider", "xai" if deity == "Hathor" else "openai")
+        model_name = result.get("model_name", source_model)
+        token_usage = result.get("token_usage") or {}
 
         if not raw_answer:
             raw_answer = "The Oracle is silent."
@@ -5427,7 +5562,37 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         # --- Token metering ---
         estimated_tokens = estimate_tokens(question, raw_answer)
+        estimated_input_tokens = estimate_tokens(enhanced_question, "")
+        estimated_output_tokens = estimate_tokens("", raw_answer)
+        estimated_total_tokens = estimate_tokens(enhanced_question, raw_answer)
         usage_class = "registered" if user_id else "anonymous"
+
+        actual_prompt_tokens = token_usage.get("prompt_tokens")
+        actual_completion_tokens = token_usage.get("completion_tokens")
+        actual_total_tokens = token_usage.get("total_tokens")
+
+        logger.info(
+            "TOKEN_USAGE provider=%s model=%s deity=%s plan_code=%s input_mode=%s retrieval_backend=%s pgvector_limit=%s usage_class=%s actual_prompt_tokens=%s actual_completion_tokens=%s actual_total_tokens=%s estimated_input_tokens=%s estimated_output_tokens=%s estimated_total_tokens=%s question_chars=%s enhanced_question_chars=%s answer_chars=%s final_model_ms=%s total_ms=%s",
+            model_provider,
+            model_name,
+            deity,
+            plan_code,
+            input_mode,
+            get_retrieval_backend(),
+            PGVECTOR_RETRIEVAL_LIMIT,
+            usage_class,
+            actual_prompt_tokens if actual_prompt_tokens is not None else "-",
+            actual_completion_tokens if actual_completion_tokens is not None else "-",
+            actual_total_tokens if actual_total_tokens is not None else "-",
+            estimated_input_tokens,
+            estimated_output_tokens,
+            estimated_total_tokens,
+            len(question or ""),
+            len(enhanced_question or ""),
+            len(raw_answer or ""),
+            _ms(final_model_started_at, final_model_finished_at),
+            _ms(ask_started_at, datetime.datetime.now())
+        )
 
         # --- Architect observation ---
         architect_obs = architect_observe_v3(question, deity, session_id)
@@ -5463,6 +5628,21 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "shadow_delta": None,
             "influence_state": "disabled",
             "estimated_tokens": estimated_tokens,
+            "token_usage": {
+                "provider": model_provider,
+                "model": model_name,
+                "actual_prompt_tokens": actual_prompt_tokens,
+                "actual_completion_tokens": actual_completion_tokens,
+                "actual_total_tokens": actual_total_tokens,
+                "estimated_input_tokens": estimated_input_tokens,
+                "estimated_output_tokens": estimated_output_tokens,
+                "estimated_total_tokens": estimated_total_tokens,
+                "retrieval_backend": get_retrieval_backend(),
+                "pgvector_limit": PGVECTOR_RETRIEVAL_LIMIT,
+                "input_mode": input_mode,
+                "plan_code": plan_code,
+                "deity": deity,
+            },
             "usage_class": usage_class
         })
 
