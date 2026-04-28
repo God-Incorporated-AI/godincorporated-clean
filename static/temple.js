@@ -517,18 +517,20 @@ document.addEventListener("DOMContentLoaded", function () {
       );
     }
 
-    if (data.transcript) {
-      seekerInput.value = data.transcript;
-      oracleAnswer.textContent = "You said: " + data.transcript + "\n\n🔮 Consulting the Oracle...";
+    const spokenQuestion = data.transcript || data.question || "";
+
+    if (spokenQuestion) {
+      seekerInput.value = spokenQuestion;
+      oracleAnswer.textContent = "You said: " + spokenQuestion + "\n\n🔮 Consulting the Oracle...";
     } else {
       oracleAnswer.textContent = "🔮 Consulting the Oracle...";
     }
 
     if (data.answer) {
-      if (data.transcript) {
-        seekerInput.value = data.transcript;
+      if (spokenQuestion) {
+        seekerInput.value = spokenQuestion;
       }
-      oracleAnswer.textContent = (data.transcript ? "You said: " + data.transcript + "\n\n" : "") + data.answer;
+      oracleAnswer.textContent = (spokenQuestion ? "You said: " + spokenQuestion + "\n\n" : "") + data.answer;
       await updateIdentityDisplay();
     } else if (data.error) {
       oracleAnswer.textContent = "⚠️ Error: " + data.error;
