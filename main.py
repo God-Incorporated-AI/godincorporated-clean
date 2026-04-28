@@ -5456,7 +5456,32 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         {question}
 
         {context_block}
-        """ 
+        """
+
+        recent_memory_chars = len(recent_memory or "")
+        compressed_memory_chars = len(compressed_memory or "")
+        limited_memories_chars = len("\n\n".join(limited_memories or []))
+        memory_block_chars = len(memory_block or "")
+        context_block_chars = len(context_block or "")
+        instruction_block_chars = len(instruction_block or "")
+        enhanced_question_chars = len(enhanced_question or "")
+
+        logger.info(
+            "PROMPT_BUDGET plan_code=%s deity=%s input_mode=%s memory_intent=%s recent_memory_chars=%s compressed_memory_chars=%s limited_memories_count=%s limited_memories_chars=%s memory_block_chars=%s context_block_chars=%s instruction_block_chars=%s enhanced_question_chars=%s passages=%s",
+            plan_code,
+            deity,
+            input_mode,
+            memory_intent,
+            recent_memory_chars,
+            compressed_memory_chars,
+            len(limited_memories or []),
+            limited_memories_chars,
+            memory_block_chars,
+            context_block_chars,
+            instruction_block_chars,
+            enhanced_question_chars,
+            len(passages or [])
+        )
 
         # --- Oracle response ---
         selected_moses_model = None
