@@ -1327,12 +1327,12 @@ def get_response_word_cap(
     # Ordered access levels:
     # anon -> pilgrim -> seeker -> magister -> sovereign -> theoricus
     text_ranges = {
-        "anon": (90, 150),
-        "pilgrim": (140, 210),
-        "seeker": (190, 280),
-        "magister": (260, 360),
-        "sovereign": (330, 460),
-        "theoricus": (380, 520),
+        "anon": (90, 145),
+        "pilgrim": (135, 200),
+        "seeker": (180, 260),
+        "magister": (230, 320),
+        "sovereign": (280, 380),
+        "theoricus": (320, 420),
     }
 
     voice_ranges = {
@@ -1364,8 +1364,9 @@ def get_response_word_cap(
 
 
 def words_to_max_tokens(word_cap: int) -> int:
-    # Rough but practical conversion for capped completions
-    return max(120, int(word_cap * 1.7))
+    # Tighter completion budget after Phase 10 latency tuning.
+    # This helps stop long generations instead of trimming only after the fact.
+    return max(120, int(word_cap * 1.35))
 
 
 def trim_response_to_word_cap(answer: str, word_cap: int) -> str:
@@ -5410,7 +5411,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         2. Prioritize the current question.
         3. Integrate relevant past context when helpful.
         4. Keep responses coherent and under {response_word_cap} words.
-        5. For higher access levels, allow a fuller reflection when the question genuinely invites it, while still avoiding rambling.
+        5. Do not exceed the word cap. Prefer a complete, bounded answer over a long essay.
+        6. For higher access levels, allow a fuller reflection when the question genuinely invites it, while still avoiding rambling.
         """
         enhanced_question = f"""{instruction_block}
 
