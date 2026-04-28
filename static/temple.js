@@ -403,63 +403,194 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   });
 
-  // Voice input and TTS output
-  speakButton.addEventListener("click", function () {
-    if (!navigator.mediaDevices) {
+  // Conversational voice input and TTS output
+  let voiceRecorder = null;
+  let voiceStream = null;
+  let voiceChunks = [];
+  let voiceIsRecording = false;
+  let oracleAudio = null;
+  let replayVoiceButton = null;
+
+  function ensureOracleAudio() {
+    if (!oracleAudio) {
+      oracleAudio = document.createElement("audio");
+      oracleAudio.preload = "auto";
+      oracleAudio.style.display = "none";
+      document.body.appendChild(oracleAudio);
+    }
+    return oracleAudio;
+  }
+
+  function ensureReplayVoiceButton() {
+    if (!replayVoiceButton) {
+      replayVoiceButton = document.createElement("button");
+      replayVoiceButton.type = "button";
+      replayVoiceButton.textContent = "▶ Play Oracle Voice";
+      replayVoiceButton.className = "oracle-replay-button";
+      replayVoiceButton.style.display = "none";
+      replayVoiceButton.addEventListener("click", async function () {
+        if (!oracleAudio || !oracleAudio.src) return;
+        try {
+          replayVoiceButton.disabled = true;
+          await oracleAudio.play();
+        } catch (err) {
+          oracleAnswer.textContent += "\n\n⚠️ Could not play the Oracle voice. Please try again.";
+        } finally {
+          replayVoiceButton.disabled = false;
+        }
+      });
+      oracleAnswer.insertAdjacentElement("afterend", replayVoiceButton);
+    }
+    return replayVoiceButton;
+  }
+
+  function stopVoiceTracks() {
+    if (voiceStream) {
+      voiceStream.getTracks().forEach((track) => track.stop());
+      voiceStream = null;
+    }
+  }
+
+  function resetVoiceButton() {
+    voiceIsRecording = false;
+    speakButton.disabled = false;
+    speakButton.textContent = "🎤 Speak";
+  }
+
+  async function playOracleAudio(audioUrl) {
+    if (!audioUrl) return;
+
+    const audio = ensureOracleAudio();
+    const replayButton = ensureReplayVoiceButton();
+    audio.src = audioUrl;
+    replayButton.style.display = "inline-block";
+    replayButton.disabled = false;
+
+    try {
+      oracleAnswer.textContent += "\n\n🔊 Speaking...";
+      await audio.play();
+    } catch (err) {
+      oracleAnswer.textContent += "\n\n▶ Oracle voice is ready. Tap “Play Oracle Voice” to listen.";
+    }
+  }
+
+  async function submitVoiceRecording(blob) {
+    const formData = new FormData();
+    formData.append("file", blob, "voice_input.webm");
+    formData.append("voice", voiceSelect.value);
+    formData.append("anonymous_user_id", visitorId);
+    if (seekerId) formData.append("seeker_id", seekerId);
+
+    oracleAnswer.textContent = "🔄 Transcribing...";
+
+    const response = await identityFetch("/whisper", {
+      method: "POST",
+      body: formData
+    });
+
+    const data = await safeReadJson(response);
+
+    if (!response.ok) {
+      throw new Error(
+        data.oracle_message ||
+        data.error ||
+        data.answer ||
+        "Voice request failed"
+      );
+    }
+
+    if (data.transcript) {
+      seekerInput.value = data.transcript;
+      oracleAnswer.textContent = "You said: " + data.transcript + "\n\n🔮 Consulting the Oracle...";
+    } else {
+      oracleAnswer.textContent = "🔮 Consulting the Oracle...";
+    }
+
+    if (data.answer) {
+      oracleAnswer.textContent = (data.transcript ? "You said: " + data.transcript + "\n\n" : "") + data.answer;
+      await updateIdentityDisplay();
+    } else if (data.error) {
+      oracleAnswer.textContent = "⚠️ Error: " + data.error;
+    } else {
+      oracleAnswer.textContent = "⚠️ No response received.";
+    }
+
+    if (data.audio_url) {
+      await playOracleAudio(data.audio_url);
+    }
+  }
+
+  async function startVoiceRecording() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       alert("🎤 Microphone not supported in this browser.");
       return;
     }
 
-    speakButton.disabled = true;
-    speakButton.textContent = "🎙 Listening...";
-    oracleAnswer.textContent = "🔄 Transcribing...";
+    const replayButton = ensureReplayVoiceButton();
+    replayButton.style.display = "none";
 
-    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-      const mediaRecorder = new MediaRecorder(stream);
-      const chunks = [];
+    voiceChunks = [];
+    voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    voiceRecorder = new MediaRecorder(voiceStream);
 
-      mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+    voiceRecorder.ondataavailable = function (event) {
+      if (event.data && event.data.size > 0) {
+        voiceChunks.push(event.data);
+      }
+    };
 
-      mediaRecorder.onstop = () => {
-        const blob = new Blob(chunks, { type: "audio/webm" });
-        const formData = new FormData();
-        formData.append("file", blob, "voice_input.webm");
-        formData.append("voice", voiceSelect.value);
-        formData.append("anonymous_user_id", visitorId);
-        if (seekerId) formData.append("seeker_id", seekerId);
+    voiceRecorder.onstop = async function () {
+      stopVoiceTracks();
 
-        fetch("/whisper", {
-          method: "POST",
-          body: formData,
-        })
-          .then((res) => res.json())
-          .then((data) => {
-            oracleAnswer.textContent = data.answer || "⚠️ No response";
-            seekerInput.value = "";
+      const blob = new Blob(voiceChunks, { type: "audio/webm" });
+      voiceChunks = [];
 
-            if (data.audio_url) {
-              // Create audio element instead of autoplay
-              const audioContainer = document.createElement('div');
-              audioContainer.innerHTML = '<audio controls><source src="' + data.audio_url + '" type="audio/mpeg"></audio>';
-              oracleAnswer.appendChild(audioContainer);
-            }
-          })
-          .catch((err) => {
-            oracleAnswer.textContent = "⚠️ Error: " + err.message;
-          })
-          .finally(() => {
-            speakButton.disabled = false;
-            speakButton.textContent = "🎤 Speak";
-          });
-      };
+      try {
+        speakButton.disabled = true;
+        speakButton.textContent = "⏳ Working...";
+        await submitVoiceRecording(blob);
+      } catch (err) {
+        const msg = err.message || "Voice request failed";
+        if (msg.includes("The Oracle grows quiet")) {
+          oracleAnswer.textContent = "The Oracle grows quiet.";
+          showFeedbackModal(
+            msg,
+            currentIdentity?.continuity_nudges || [],
+            "Temple Notice",
+            { showCreateAccount: !currentIdentity?.authenticated }
+          );
+        } else {
+          oracleAnswer.textContent = "⚠️ Error: " + msg;
+        }
+        await updateIdentityDisplay();
+      } finally {
+        resetVoiceButton();
+      }
+    };
 
-      mediaRecorder.start();
+    voiceRecorder.start();
+    voiceIsRecording = true;
+    speakButton.disabled = false;
+    speakButton.textContent = "⏹ Stop";
+    oracleAnswer.textContent = "🎙 Listening... Tap Stop when you are finished.";
+  }
 
-      setTimeout(() => {
-        mediaRecorder.stop();
-        stream.getTracks().forEach((track) => track.stop());
-      }, 5000); // 5 seconds recording
-    });
+  speakButton.addEventListener("click", async function () {
+    if (voiceIsRecording && voiceRecorder && voiceRecorder.state === "recording") {
+      speakButton.disabled = true;
+      speakButton.textContent = "🔄 Transcribing...";
+      oracleAnswer.textContent = "🔄 Transcribing...";
+      voiceRecorder.stop();
+      return;
+    }
+
+    try {
+      await startVoiceRecording();
+    } catch (err) {
+      stopVoiceTracks();
+      resetVoiceButton();
+      oracleAnswer.textContent = "⚠️ Microphone error: " + (err.message || "Could not start recording.");
+    }
   });
 
   const menuToggle = document.getElementById("menuToggle");
