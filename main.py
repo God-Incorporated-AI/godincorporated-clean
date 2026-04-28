@@ -1004,15 +1004,48 @@ def get_retrieval_backend() -> str:
     return backend
 
 
-def retrieve_context_pgvector(question: str, user_id: Optional[str], top_k: Optional[int] = None):
+def get_pgvector_blend_limits(plan_code: Optional[str], user_id: Optional[str], top_k: Optional[int] = None) -> dict:
+    """
+    Phase 10.1 controlled pgvector blend.
+
+    Personal scrolls are only used for registered users with higher access tiers.
+    Lower tiers stay canonical-only to preserve speed, cost control, and clean first-contact behavior.
+    """
+    plan = normalize_plan_code(plan_code)
+    fallback_limit = top_k or PGVECTOR_RETRIEVAL_LIMIT
+
+    blend = {
+        "anon": {"personal": 0, "canonical": fallback_limit},
+        "pilgrim": {"personal": 0, "canonical": fallback_limit},
+        "seeker": {"personal": 1, "canonical": 4},
+        "magister": {"personal": 2, "canonical": 4},
+        "sovereign": {"personal": 2, "canonical": 4},
+        "philosophus": {"personal": 2, "canonical": 5},
+        "theoricus": {"personal": 3, "canonical": 5},
+    }.get(plan, {"personal": 0, "canonical": fallback_limit})
+
+    if not user_id:
+        return {"personal": 0, "canonical": fallback_limit}
+
+    return blend
+
+
+def retrieve_context_pgvector(
+    question: str,
+    user_id: Optional[str],
+    top_k: Optional[int] = None,
+    plan_code: Optional[str] = None
+):
     """
     Phase 10.1 pgvector retrieval path.
 
-    Staging-first retrieval backend.
-    Starts with canonical embedded chunks only.
-    Personal/community expansion can be added after canonical retrieval is stable.
+    Uses a controlled blend of personal and canonical embedded chunks by access tier.
+    Personal retrieval is available only for registered users and only after personal embeddings exist.
     """
     limit = top_k or PGVECTOR_RETRIEVAL_LIMIT
+    blend_limits = get_pgvector_blend_limits(plan_code, user_id, top_k=limit)
+    personal_limit = int(blend_limits.get("personal", 0) or 0)
+    canonical_limit = int(blend_limits.get("canonical", limit) or 0)
 
     total_started = time.time()
 
@@ -1027,40 +1060,70 @@ def retrieve_context_pgvector(question: str, user_id: Optional[str], top_k: Opti
     vector = _vector_literal(question_embedding)
 
     conn = get_db_connection()
-    rows = []
+    personal_rows = []
+    canonical_rows = []
 
     try:
         with conn.cursor() as cur:
             sql_started = time.time()
-            cur.execute(
-                """
-                SELECT
-                    s.original_filename,
-                    s.corpus_layer,
-                    c.id AS chunk_id,
-                    c.chunk_text,
-                    c.embedding <=> %s::vector AS distance
-                FROM scroll_chunks c
-                JOIN scrolls s ON c.scroll_id = s.id
-                WHERE c.embedding IS NOT NULL
-                  AND s.corpus_layer = 'canonical'
-                ORDER BY c.embedding <=> %s::vector
-                LIMIT %s;
-                """,
-                (vector, vector, limit)
-            )
-            rows = cur.fetchall()
+
+            if personal_limit > 0:
+                cur.execute(
+                    """
+                    SELECT
+                        s.original_filename,
+                        s.corpus_layer,
+                        c.id AS chunk_id,
+                        c.chunk_text,
+                        c.embedding <=> %s::vector AS distance
+                    FROM scroll_chunks c
+                    JOIN scrolls s ON c.scroll_id = s.id
+                    WHERE c.embedding IS NOT NULL
+                      AND s.corpus_layer = 'personal'
+                    ORDER BY c.embedding <=> %s::vector
+                    LIMIT %s;
+                    """,
+                    (vector, vector, personal_limit)
+                )
+                personal_rows = cur.fetchall()
+
+            if canonical_limit > 0:
+                cur.execute(
+                    """
+                    SELECT
+                        s.original_filename,
+                        s.corpus_layer,
+                        c.id AS chunk_id,
+                        c.chunk_text,
+                        c.embedding <=> %s::vector AS distance
+                    FROM scroll_chunks c
+                    JOIN scrolls s ON c.scroll_id = s.id
+                    WHERE c.embedding IS NOT NULL
+                      AND s.corpus_layer = 'canonical'
+                    ORDER BY c.embedding <=> %s::vector
+                    LIMIT %s;
+                    """,
+                    (vector, vector, canonical_limit)
+                )
+                canonical_rows = cur.fetchall()
+
             sql_ms = round((time.time() - sql_started) * 1000, 2)
 
     finally:
         conn.close()
 
+    rows = list(personal_rows) + list(canonical_rows)
     total_ms = round((time.time() - total_started) * 1000, 2)
 
     logger.info(
-        "PGVECTOR_RETRIEVAL backend=pgvector user_id_present=%s limit=%s rows=%s embed_ms=%s sql_ms=%s total_ms=%s",
+        "PGVECTOR_RETRIEVAL backend=pgvector user_id_present=%s plan_code=%s limit=%s personal_limit=%s canonical_limit=%s personal_rows=%s canonical_rows=%s rows=%s embed_ms=%s sql_ms=%s total_ms=%s",
         bool(user_id),
+        normalize_plan_code(plan_code),
         limit,
+        personal_limit,
+        canonical_limit,
+        len(personal_rows),
+        len(canonical_rows),
         len(rows),
         embed_ms,
         sql_ms,
@@ -1081,7 +1144,6 @@ def retrieve_context_pgvector(question: str, user_id: Optional[str], top_k: Opti
         )
 
     return passages
-
 
 def retrieve_context_embeddings(question: str, user_id: Optional[str]):
     """
@@ -1111,7 +1173,12 @@ def retrieve_context(question: str, user_id: Optional[str]):
     backend = get_retrieval_backend()
 
     if backend == "pgvector":
-        passages = retrieve_context_pgvector(question, user_id, top_k=PGVECTOR_RETRIEVAL_LIMIT)
+        passages = retrieve_context_pgvector(
+            question,
+            user_id,
+            top_k=PGVECTOR_RETRIEVAL_LIMIT,
+            plan_code=getattr(retrieve_context, "_plan_code", None)
+        )
         if passages:
             return passages
 
@@ -5303,8 +5370,10 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         if memory_intent != "recall":
             retrieval_started_at = datetime.datetime.now()
+            retrieve_context._plan_code = plan_code
             passages = retrieve_context(question, user_id)
             passages = rank_passages(passages, question)
+            retrieve_context._plan_code = None
             retrieval_finished_at = datetime.datetime.now()
 
 
@@ -5327,8 +5396,10 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         # --— fallback retrieval if recall requested but memory is empty ---
         if memory_intent == "recall" and not memory_block.strip():
             retrieval_started_at = datetime.datetime.now()
+            retrieve_context._plan_code = plan_code
             passages = retrieve_context(question, user_id)
             passages = rank_passages(passages, question, max_items=2)
+            retrieve_context._plan_code = None
             retrieval_finished_at = datetime.datetime.now()
 
         passages_before_llama = list(passages or [])
