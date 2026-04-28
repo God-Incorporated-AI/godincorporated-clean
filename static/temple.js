@@ -462,15 +462,33 @@ document.addEventListener("DOMContentLoaded", function () {
 
     const audio = ensureOracleAudio();
     const replayButton = ensureReplayVoiceButton();
+
+    function setReplayReady() {
+      replayButton.textContent = "▶ Play Oracle Voice";
+      replayButton.disabled = false;
+    }
+
     audio.src = audioUrl;
     replayButton.style.display = "inline-block";
-    replayButton.disabled = false;
+    setReplayReady();
+
+    audio.onplay = function () {
+      replayButton.textContent = "🔊 Speaking...";
+      replayButton.disabled = true;
+    };
+
+    audio.onended = setReplayReady;
+
+    audio.onpause = function () {
+      if (audio.ended) {
+        setReplayReady();
+      }
+    };
 
     try {
-      oracleAnswer.textContent += "\n\n🔊 Speaking...";
       await audio.play();
     } catch (err) {
-      oracleAnswer.textContent += "\n\n▶ Oracle voice is ready. Tap “Play Oracle Voice” to listen.";
+      setReplayReady();
     }
   }
 
@@ -507,6 +525,9 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     if (data.answer) {
+      if (data.transcript) {
+        seekerInput.value = data.transcript;
+      }
       oracleAnswer.textContent = (data.transcript ? "You said: " + data.transcript + "\n\n" : "") + data.answer;
       await updateIdentityDisplay();
     } else if (data.error) {
