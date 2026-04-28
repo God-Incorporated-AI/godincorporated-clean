@@ -364,6 +364,28 @@ def enforce_recall_structure(answer: str, memory_block: str) -> str:
 
     return enforced + "\n\n" + answer
 
+def normalize_token_usage(usage) -> dict:
+    """
+    Normalize provider token usage objects into plain dicts for silent logging.
+    Handles OpenAI SDK objects and xAI/OpenAI-compatible dict responses.
+    """
+    if not usage:
+        return {}
+
+    if isinstance(usage, dict):
+        return {
+            "prompt_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),
+            "completion_tokens": usage.get("completion_tokens") or usage.get("output_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+        }
+
+    return {
+        "prompt_tokens": getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", None),
+        "completion_tokens": getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", None),
+        "total_tokens": getattr(usage, "total_tokens", None),
+    }
+
+
 async def get_oracle_response(
     question: str,
     deity: str,
@@ -449,7 +471,13 @@ async def get_oracle_response(
                 if force_mode == "recall":
                     raw_answer = enforce_recall_structure(raw_answer, memory_block)
 
-                return {"answer": raw_answer, "source_model": "xAI"}
+                return {
+                    "answer": raw_answer,
+                    "source_model": "xAI",
+                    "model_provider": "xai",
+                    "model_name": "grok-4",
+                    "token_usage": normalize_token_usage(data.get("usage")),
+                }
             else:
                 raise ValueError(f"XAI API error: {response.status_code} - {response.text}")
         except Exception as e:
@@ -521,7 +549,13 @@ async def get_oracle_response(
         if force_mode == "recall":
             raw_answer = enforce_recall_structure(raw_answer, memory_block)
 
-        return {"answer": raw_answer, "source_model": "OpenAI"}
+        return {
+            "answer": raw_answer,
+            "source_model": "OpenAI",
+            "model_provider": "openai",
+            "model_name": moses_model,
+            "token_usage": normalize_token_usage(getattr(response, "usage", None)),
+        }
     elif deity == "Llama":
         # LLaMA is NOT a responder in Phase 2
         raise ValueError("LLaMA is not yet active as a responder in Phase 2. It will be introduced later as a learner/router.")
@@ -5456,6 +5490,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         raw_answer = result["answer"]
         source_model = result["source_model"]
+        model_provider = result.get("model_provider", "xai" if deity == "Hathor" else "openai")
+        model_name = result.get("model_name", source_model)
+        token_usage = result.get("token_usage") or {}
 
         if not raw_answer:
             raw_answer = "The Oracle is silent."
@@ -5483,7 +5520,37 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         # --- Token metering ---
         estimated_tokens = estimate_tokens(question, raw_answer)
+        estimated_input_tokens = estimate_tokens(enhanced_question, "")
+        estimated_output_tokens = estimate_tokens("", raw_answer)
+        estimated_total_tokens = estimate_tokens(enhanced_question, raw_answer)
         usage_class = "registered" if user_id else "anonymous"
+
+        actual_prompt_tokens = token_usage.get("prompt_tokens")
+        actual_completion_tokens = token_usage.get("completion_tokens")
+        actual_total_tokens = token_usage.get("total_tokens")
+
+        logger.info(
+            "TOKEN_USAGE provider=%s model=%s deity=%s plan_code=%s input_mode=%s retrieval_backend=%s pgvector_limit=%s usage_class=%s actual_prompt_tokens=%s actual_completion_tokens=%s actual_total_tokens=%s estimated_input_tokens=%s estimated_output_tokens=%s estimated_total_tokens=%s question_chars=%s enhanced_question_chars=%s answer_chars=%s final_model_ms=%s total_ms=%s",
+            model_provider,
+            model_name,
+            deity,
+            plan_code,
+            input_mode,
+            get_retrieval_backend(),
+            PGVECTOR_RETRIEVAL_LIMIT,
+            usage_class,
+            actual_prompt_tokens if actual_prompt_tokens is not None else "-",
+            actual_completion_tokens if actual_completion_tokens is not None else "-",
+            actual_total_tokens if actual_total_tokens is not None else "-",
+            estimated_input_tokens,
+            estimated_output_tokens,
+            estimated_total_tokens,
+            len(question or ""),
+            len(enhanced_question or ""),
+            len(raw_answer or ""),
+            _ms(final_model_started_at, final_model_finished_at),
+            _ms(ask_started_at, datetime.datetime.now())
+        )
 
         # --- Architect observation ---
         architect_obs = architect_observe_v3(question, deity, session_id)
@@ -5519,6 +5586,21 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "shadow_delta": None,
             "influence_state": "disabled",
             "estimated_tokens": estimated_tokens,
+            "token_usage": {
+                "provider": model_provider,
+                "model": model_name,
+                "actual_prompt_tokens": actual_prompt_tokens,
+                "actual_completion_tokens": actual_completion_tokens,
+                "actual_total_tokens": actual_total_tokens,
+                "estimated_input_tokens": estimated_input_tokens,
+                "estimated_output_tokens": estimated_output_tokens,
+                "estimated_total_tokens": estimated_total_tokens,
+                "retrieval_backend": get_retrieval_backend(),
+                "pgvector_limit": PGVECTOR_RETRIEVAL_LIMIT,
+                "input_mode": input_mode,
+                "plan_code": plan_code,
+                "deity": deity,
+            },
             "usage_class": usage_class
         })
 
