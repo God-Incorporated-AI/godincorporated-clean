@@ -3156,9 +3156,10 @@ async def voice_transcribe_endpoint(
 
 
 @app.post("/voice/ask")
-async def voice_ask_endpoint(request: Request, payload: QuestionInput):
+async def voice_ask_endpoint(request: Request, payload: dict):
     request.state.oracle_input_mode = "voice"
-    return await ask_oracle(request, payload)
+    oracle_payload = QuestionInput(**payload)
+    return await ask_oracle(request, oracle_payload)
 
 
 @app.post("/voice/tts")
