@@ -3099,17 +3099,146 @@ def get_audio_file(filename: str):
     return FileResponse(audio_path, media_type="audio/mpeg")
 
 
+def voice_stage_ms(start, end):
+    if not start or not end:
+        return "-"
+    return round((end - start).total_seconds() * 1000, 2)
+
+
+@app.post("/voice/transcribe")
+async def voice_transcribe_endpoint(
+    file: UploadFile = File(...),
+    voice: str = Form("Hathor")
+):
+    started_at = datetime.datetime.now()
+    try:
+        file_bytes = await file.read()
+        transcribe_started_at = datetime.datetime.now()
+        transcript = transcribe_audio(file_bytes)
+        transcribe_finished_at = datetime.datetime.now()
+
+        if not transcript:
+            logger.info(
+                "VOICE_TRANSCRIBE_STAGE status=failed voice=%s transcribe_ms=%s total_ms=%s transcript_chars=0",
+                voice,
+                voice_stage_ms(transcribe_started_at, transcribe_finished_at),
+                voice_stage_ms(started_at, datetime.datetime.now())
+            )
+            return JSONResponse(
+                content={"error": "Whisper could not transcribe."},
+                status_code=422
+            )
+
+        logger.info(
+            "VOICE_TRANSCRIBE_STAGE status=ok voice=%s transcribe_ms=%s total_ms=%s transcript_chars=%s",
+            voice,
+            voice_stage_ms(transcribe_started_at, transcribe_finished_at),
+            voice_stage_ms(started_at, datetime.datetime.now()),
+            len(transcript or "")
+        )
+
+        return {
+            "question": transcript,
+            "transcript": transcript
+        }
+
+    except Exception:
+        logger.exception("Voice transcribe endpoint failed")
+        logger.info(
+            "VOICE_TRANSCRIBE_STAGE status=error voice=%s total_ms=%s transcript_chars=0",
+            voice,
+            voice_stage_ms(started_at, datetime.datetime.now())
+        )
+        return JSONResponse(
+            content={"error": "Voice transcription failed."},
+            status_code=500
+        )
+
+
+@app.post("/voice/ask")
+async def voice_ask_endpoint(request: Request, payload: dict):
+    request.state.oracle_input_mode = "voice"
+    oracle_payload = QuestionInput(**payload)
+    return await ask_oracle(request, oracle_payload)
+
+
+@app.post("/voice/tts")
+async def voice_tts_endpoint(request: Request):
+    started_at = datetime.datetime.now()
+    voice = "Hathor"
+    answer = ""
+
+    try:
+        data = await request.json()
+        answer = (data.get("answer") or "").strip()
+        voice = data.get("voice") or "Hathor"
+
+        if not answer:
+            return JSONResponse(
+                content={"error": "No answer text provided for voice playback."},
+                status_code=400
+            )
+
+        tts_started_at = datetime.datetime.now()
+        audio_url = generate_tts_audio(answer, voice)
+        tts_finished_at = datetime.datetime.now()
+
+        logger.info(
+            "VOICE_TTS_STAGE status=ok voice=%s tts_ms=%s total_ms=%s answer_chars=%s audio_url_present=%s",
+            voice,
+            voice_stage_ms(tts_started_at, tts_finished_at),
+            voice_stage_ms(started_at, datetime.datetime.now()),
+            len(answer or ""),
+            bool(audio_url)
+        )
+
+        return {"audio_url": audio_url}
+
+    except Exception:
+        logger.exception("Voice TTS endpoint failed")
+        logger.info(
+            "VOICE_TTS_STAGE status=error voice=%s total_ms=%s answer_chars=%s audio_url_present=false",
+            voice,
+            voice_stage_ms(started_at, datetime.datetime.now()),
+            len(answer or "")
+        )
+        return JSONResponse(
+            content={"error": "Oracle voice playback could not be prepared."},
+            status_code=500
+        )
+
+
 @app.post("/whisper")
 async def whisper_endpoint(
     request: Request,
     file: UploadFile = File(...),
     voice: str = Form("Hathor")
 ):
+    voice_started_at = datetime.datetime.now()
+    transcribe_started_at = None
+    transcribe_finished_at = None
+    oracle_started_at = None
+    oracle_finished_at = None
+    tts_started_at = None
+    tts_finished_at = None
+    transcript = ""
+    answer = ""
+    audio_url = None
+
     try:
         file_bytes = await file.read()
+
+        transcribe_started_at = datetime.datetime.now()
         transcript = transcribe_audio(file_bytes)
+        transcribe_finished_at = datetime.datetime.now()
 
         if not transcript:
+            logger.info(
+                "VOICE_STAGE_TIMING status=transcription_failed voice=%s transcribe_ms=%s total_ms=%s transcript_chars=0 answer_chars=0 audio_url_present=false",
+                voice,
+                voice_stage_ms(transcribe_started_at, transcribe_finished_at),
+                voice_stage_ms(voice_started_at, datetime.datetime.now())
+            )
             return JSONResponse(
                 content={"error": "Whisper could not transcribe.", "answer": "⚠️ Whisper could not transcribe."},
                 status_code=422
@@ -3121,22 +3250,60 @@ async def whisper_endpoint(
         )
 
         request.state.oracle_input_mode = "voice"
+
+        oracle_started_at = datetime.datetime.now()
         result = await ask_oracle(request, oracle_payload)
+        oracle_finished_at = datetime.datetime.now()
 
         if isinstance(result, JSONResponse):
+            logger.info(
+                "VOICE_STAGE_TIMING status=oracle_json_response voice=%s transcribe_ms=%s oracle_ms=%s total_ms=%s transcript_chars=%s answer_chars=0 audio_url_present=false",
+                voice,
+                voice_stage_ms(transcribe_started_at, transcribe_finished_at),
+                voice_stage_ms(oracle_started_at, oracle_finished_at),
+                voice_stage_ms(voice_started_at, datetime.datetime.now()),
+                len(transcript or "")
+            )
             return result
 
         answer = result.get("answer", "")
+
+        tts_started_at = datetime.datetime.now()
         audio_url = generate_tts_audio(answer, voice) if answer else None
+        tts_finished_at = datetime.datetime.now()
+
+        logger.info(
+            "VOICE_STAGE_TIMING status=ok voice=%s transcribe_ms=%s oracle_ms=%s tts_ms=%s total_ms=%s transcript_chars=%s answer_chars=%s audio_url_present=%s",
+            voice,
+            voice_stage_ms(transcribe_started_at, transcribe_finished_at),
+            voice_stage_ms(oracle_started_at, oracle_finished_at),
+            voice_stage_ms(tts_started_at, tts_finished_at),
+            voice_stage_ms(voice_started_at, datetime.datetime.now()),
+            len(transcript or ""),
+            len(answer or ""),
+            bool(audio_url)
+        )
 
         return {
             "question": transcript,
+            "transcript": transcript,
             "answer": answer,
             "audio_url": audio_url
         }
 
     except Exception as e:
         logger.exception("Whisper voice endpoint failed")
+        logger.info(
+            "VOICE_STAGE_TIMING status=error voice=%s transcribe_ms=%s oracle_ms=%s tts_ms=%s total_ms=%s transcript_chars=%s answer_chars=%s audio_url_present=%s",
+            voice,
+            voice_stage_ms(transcribe_started_at, transcribe_finished_at),
+            voice_stage_ms(oracle_started_at, oracle_finished_at),
+            voice_stage_ms(tts_started_at, tts_finished_at),
+            voice_stage_ms(voice_started_at, datetime.datetime.now()),
+            len(transcript or ""),
+            len(answer or ""),
+            bool(audio_url)
+        )
         return JSONResponse(
             content={"error": str(e), "answer": "⚠️ Voice request failed."},
             status_code=500

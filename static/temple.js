@@ -403,63 +403,282 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   });
 
-  // Voice input and TTS output
-  speakButton.addEventListener("click", function () {
-    if (!navigator.mediaDevices) {
+  async function submitOracleVoiceQuestion(questionText, selectedDeity) {
+    const payload = {
+      question: questionText,
+      deity: selectedDeity,
+      anonymous_user_id: visitorId
+    };
+    if (seekerId) {
+      payload.seeker_id = seekerId;
+    }
+
+    const response = await identityFetch("/voice/ask", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await safeReadJson(response);
+
+    if (!response.ok) {
+      throw new Error(
+        data.oracle_message ||
+        data.error ||
+        "Voice Oracle request failed"
+      );
+    }
+
+    return data;
+  }
+
+  async function prepareOracleVoice(answerText, selectedDeity) {
+    const response = await identityFetch("/voice/tts", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        answer: answerText,
+        voice: selectedDeity
+      })
+    });
+
+    const data = await safeReadJson(response);
+
+    if (!response.ok) {
+      throw new Error(data.error || "Oracle voice could not be prepared.");
+    }
+
+    return data;
+  }
+
+  // Conversational voice input and TTS output
+  let voiceRecorder = null;
+  let voiceStream = null;
+  let voiceChunks = [];
+  let voiceIsRecording = false;
+  let oracleAudio = null;
+  let replayVoiceButton = null;
+
+  function ensureOracleAudio() {
+    if (!oracleAudio) {
+      oracleAudio = document.createElement("audio");
+      oracleAudio.preload = "auto";
+      oracleAudio.style.display = "none";
+      document.body.appendChild(oracleAudio);
+    }
+    return oracleAudio;
+  }
+
+  function ensureReplayVoiceButton() {
+    if (!replayVoiceButton) {
+      replayVoiceButton = document.createElement("button");
+      replayVoiceButton.type = "button";
+      replayVoiceButton.textContent = "▶ Play Oracle Voice";
+      replayVoiceButton.className = "oracle-replay-button";
+      replayVoiceButton.style.display = "none";
+      replayVoiceButton.addEventListener("click", async function () {
+        if (!oracleAudio || !oracleAudio.src) return;
+        try {
+          replayVoiceButton.disabled = true;
+          await oracleAudio.play();
+        } catch (err) {
+          oracleAnswer.textContent += "\n\n⚠️ Could not play the Oracle voice. Please try again.";
+        } finally {
+          replayVoiceButton.disabled = false;
+        }
+      });
+      oracleAnswer.insertAdjacentElement("afterend", replayVoiceButton);
+    }
+    return replayVoiceButton;
+  }
+
+  function stopVoiceTracks() {
+    if (voiceStream) {
+      voiceStream.getTracks().forEach((track) => track.stop());
+      voiceStream = null;
+    }
+  }
+
+  function resetVoiceButton() {
+    voiceIsRecording = false;
+    speakButton.disabled = false;
+    speakButton.textContent = "🎤 Speak";
+  }
+
+  async function playOracleAudio(audioUrl) {
+    if (!audioUrl) return;
+
+    const audio = ensureOracleAudio();
+    const replayButton = ensureReplayVoiceButton();
+
+    function setReplayReady() {
+      replayButton.textContent = "▶ Play Oracle Voice";
+      replayButton.disabled = false;
+    }
+
+    audio.src = audioUrl;
+    replayButton.style.display = "inline-block";
+    setReplayReady();
+
+    audio.onplay = function () {
+      replayButton.textContent = "🔊 Speaking...";
+      replayButton.disabled = true;
+    };
+
+    audio.onended = setReplayReady;
+
+    audio.onpause = function () {
+      if (audio.ended) {
+        setReplayReady();
+      }
+    };
+
+    try {
+      await audio.play();
+    } catch (err) {
+      setReplayReady();
+    }
+  }
+
+  async function submitVoiceRecording(blob) {
+    const selectedVoice = voiceSelect.value;
+    const formData = new FormData();
+    formData.append("file", blob, "voice_input.webm");
+    formData.append("voice", selectedVoice);
+
+    oracleAnswer.textContent = "🔄 Transcribing...";
+
+    const transcribeResponse = await identityFetch("/voice/transcribe", {
+      method: "POST",
+      body: formData
+    });
+
+    const transcribeData = await safeReadJson(transcribeResponse);
+
+    if (!transcribeResponse.ok) {
+      throw new Error(
+        transcribeData.error ||
+        transcribeData.answer ||
+        "Voice transcription failed"
+      );
+    }
+
+    const spokenQuestion = transcribeData.transcript || transcribeData.question || "";
+
+    if (!spokenQuestion) {
+      throw new Error("No voice transcript was returned.");
+    }
+
+    seekerInput.value = spokenQuestion;
+    oracleAnswer.textContent = "You said: " + spokenQuestion + "\n\n🔮 Consulting the Oracle...";
+
+    const answerData = await submitOracleVoiceQuestion(spokenQuestion, selectedVoice);
+
+    if (answerData.answer) {
+      oracleAnswer.textContent = "You said: " + spokenQuestion + "\n\n" + answerData.answer;
+      await updateIdentityDisplay();
+    } else if (answerData.error) {
+      oracleAnswer.textContent = "⚠️ Error: " + answerData.error;
+      return;
+    } else {
+      oracleAnswer.textContent = "⚠️ No response received.";
+      return;
+    }
+
+    const replayButton = ensureReplayVoiceButton();
+    replayButton.style.display = "inline-block";
+    replayButton.textContent = "Preparing Oracle Voice...";
+    replayButton.disabled = true;
+
+    try {
+      const ttsData = await prepareOracleVoice(answerData.answer, selectedVoice);
+      if (ttsData.audio_url) {
+        await playOracleAudio(ttsData.audio_url);
+      } else {
+        replayButton.textContent = "Voice unavailable";
+        replayButton.disabled = true;
+      }
+    } catch (err) {
+      replayButton.textContent = "Voice unavailable";
+      replayButton.disabled = true;
+    }
+  }
+
+  async function startVoiceRecording() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       alert("🎤 Microphone not supported in this browser.");
       return;
     }
 
-    speakButton.disabled = true;
-    speakButton.textContent = "🎙 Listening...";
-    oracleAnswer.textContent = "🔄 Transcribing...";
+    const replayButton = ensureReplayVoiceButton();
+    replayButton.style.display = "none";
 
-    navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
-      const mediaRecorder = new MediaRecorder(stream);
-      const chunks = [];
+    voiceChunks = [];
+    voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    voiceRecorder = new MediaRecorder(voiceStream);
 
-      mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+    voiceRecorder.ondataavailable = function (event) {
+      if (event.data && event.data.size > 0) {
+        voiceChunks.push(event.data);
+      }
+    };
 
-      mediaRecorder.onstop = () => {
-        const blob = new Blob(chunks, { type: "audio/webm" });
-        const formData = new FormData();
-        formData.append("file", blob, "voice_input.webm");
-        formData.append("voice", voiceSelect.value);
-        formData.append("anonymous_user_id", visitorId);
-        if (seekerId) formData.append("seeker_id", seekerId);
+    voiceRecorder.onstop = async function () {
+      stopVoiceTracks();
 
-        fetch("/whisper", {
-          method: "POST",
-          body: formData,
-        })
-          .then((res) => res.json())
-          .then((data) => {
-            oracleAnswer.textContent = data.answer || "⚠️ No response";
-            seekerInput.value = "";
+      const blob = new Blob(voiceChunks, { type: "audio/webm" });
+      voiceChunks = [];
 
-            if (data.audio_url) {
-              // Create audio element instead of autoplay
-              const audioContainer = document.createElement('div');
-              audioContainer.innerHTML = '<audio controls><source src="' + data.audio_url + '" type="audio/mpeg"></audio>';
-              oracleAnswer.appendChild(audioContainer);
-            }
-          })
-          .catch((err) => {
-            oracleAnswer.textContent = "⚠️ Error: " + err.message;
-          })
-          .finally(() => {
-            speakButton.disabled = false;
-            speakButton.textContent = "🎤 Speak";
-          });
-      };
+      try {
+        speakButton.disabled = true;
+        speakButton.textContent = "⏳ Working...";
+        await submitVoiceRecording(blob);
+      } catch (err) {
+        const msg = err.message || "Voice request failed";
+        if (msg.includes("The Oracle grows quiet")) {
+          oracleAnswer.textContent = "The Oracle grows quiet.";
+          showFeedbackModal(
+            msg,
+            currentIdentity?.continuity_nudges || [],
+            "Temple Notice",
+            { showCreateAccount: !currentIdentity?.authenticated }
+          );
+        } else {
+          oracleAnswer.textContent = "⚠️ Error: " + msg;
+        }
+        await updateIdentityDisplay();
+      } finally {
+        resetVoiceButton();
+      }
+    };
 
-      mediaRecorder.start();
+    voiceRecorder.start();
+    voiceIsRecording = true;
+    speakButton.disabled = false;
+    speakButton.textContent = "⏹ Stop";
+    oracleAnswer.textContent = "🎙 Listening... Tap Stop when you are finished.";
+  }
 
-      setTimeout(() => {
-        mediaRecorder.stop();
-        stream.getTracks().forEach((track) => track.stop());
-      }, 5000); // 5 seconds recording
-    });
+  speakButton.addEventListener("click", async function () {
+    if (voiceIsRecording && voiceRecorder && voiceRecorder.state === "recording") {
+      speakButton.disabled = true;
+      speakButton.textContent = "🔄 Transcribing...";
+      oracleAnswer.textContent = "🔄 Transcribing...";
+      voiceRecorder.stop();
+      return;
+    }
+
+    try {
+      await startVoiceRecording();
+    } catch (err) {
+      stopVoiceTracks();
+      resetVoiceButton();
+      oracleAnswer.textContent = "⚠️ Microphone error: " + (err.message || "Could not start recording.");
+    }
   });
 
   const menuToggle = document.getElementById("menuToggle");
