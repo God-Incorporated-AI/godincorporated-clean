@@ -3099,6 +3099,12 @@ def get_audio_file(filename: str):
     return FileResponse(audio_path, media_type="audio/mpeg")
 
 
+def voice_stage_ms(start, end):
+    if not start or not end:
+        return "-"
+    return round((end - start).total_seconds() * 1000, 2)
+
+
 @app.post("/whisper")
 async def whisper_endpoint(
     request: Request,
@@ -3127,8 +3133,8 @@ async def whisper_endpoint(
             logger.info(
                 "VOICE_STAGE_TIMING status=transcription_failed voice=%s transcribe_ms=%s total_ms=%s transcript_chars=0 answer_chars=0 audio_url_present=false",
                 voice,
-                _ms(transcribe_started_at, transcribe_finished_at),
-                _ms(voice_started_at, datetime.datetime.now())
+                voice_stage_ms(transcribe_started_at, transcribe_finished_at),
+                voice_stage_ms(voice_started_at, datetime.datetime.now())
             )
             return JSONResponse(
                 content={"error": "Whisper could not transcribe.", "answer": "⚠️ Whisper could not transcribe."},
@@ -3150,9 +3156,9 @@ async def whisper_endpoint(
             logger.info(
                 "VOICE_STAGE_TIMING status=oracle_json_response voice=%s transcribe_ms=%s oracle_ms=%s total_ms=%s transcript_chars=%s answer_chars=0 audio_url_present=false",
                 voice,
-                _ms(transcribe_started_at, transcribe_finished_at),
-                _ms(oracle_started_at, oracle_finished_at),
-                _ms(voice_started_at, datetime.datetime.now()),
+                voice_stage_ms(transcribe_started_at, transcribe_finished_at),
+                voice_stage_ms(oracle_started_at, oracle_finished_at),
+                voice_stage_ms(voice_started_at, datetime.datetime.now()),
                 len(transcript or "")
             )
             return result
@@ -3166,10 +3172,10 @@ async def whisper_endpoint(
         logger.info(
             "VOICE_STAGE_TIMING status=ok voice=%s transcribe_ms=%s oracle_ms=%s tts_ms=%s total_ms=%s transcript_chars=%s answer_chars=%s audio_url_present=%s",
             voice,
-            _ms(transcribe_started_at, transcribe_finished_at),
-            _ms(oracle_started_at, oracle_finished_at),
-            _ms(tts_started_at, tts_finished_at),
-            _ms(voice_started_at, datetime.datetime.now()),
+            voice_stage_ms(transcribe_started_at, transcribe_finished_at),
+            voice_stage_ms(oracle_started_at, oracle_finished_at),
+            voice_stage_ms(tts_started_at, tts_finished_at),
+            voice_stage_ms(voice_started_at, datetime.datetime.now()),
             len(transcript or ""),
             len(answer or ""),
             bool(audio_url)
@@ -3187,10 +3193,10 @@ async def whisper_endpoint(
         logger.info(
             "VOICE_STAGE_TIMING status=error voice=%s transcribe_ms=%s oracle_ms=%s tts_ms=%s total_ms=%s transcript_chars=%s answer_chars=%s audio_url_present=%s",
             voice,
-            _ms(transcribe_started_at, transcribe_finished_at),
-            _ms(oracle_started_at, oracle_finished_at),
-            _ms(tts_started_at, tts_finished_at),
-            _ms(voice_started_at, datetime.datetime.now()),
+            voice_stage_ms(transcribe_started_at, transcribe_finished_at),
+            voice_stage_ms(oracle_started_at, oracle_finished_at),
+            voice_stage_ms(tts_started_at, tts_finished_at),
+            voice_stage_ms(voice_started_at, datetime.datetime.now()),
             len(transcript or ""),
             len(answer or ""),
             bool(audio_url)
