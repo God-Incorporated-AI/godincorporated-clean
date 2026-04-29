@@ -403,6 +403,58 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   });
 
+  async function submitOracleVoiceQuestion(questionText, selectedDeity) {
+    const payload = {
+      question: questionText,
+      deity: selectedDeity,
+      anonymous_user_id: visitorId
+    };
+    if (seekerId) {
+      payload.seeker_id = seekerId;
+    }
+
+    const response = await identityFetch("/voice/ask", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await safeReadJson(response);
+
+    if (!response.ok) {
+      throw new Error(
+        data.oracle_message ||
+        data.error ||
+        "Voice Oracle request failed"
+      );
+    }
+
+    return data;
+  }
+
+  async function prepareOracleVoice(answerText, selectedDeity) {
+    const response = await identityFetch("/voice/tts", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        answer: answerText,
+        voice: selectedDeity
+      })
+    });
+
+    const data = await safeReadJson(response);
+
+    if (!response.ok) {
+      throw new Error(data.error || "Oracle voice could not be prepared.");
+    }
+
+    return data;
+  }
+
   // Conversational voice input and TTS output
   let voiceRecorder = null;
   let voiceStream = null;
@@ -493,53 +545,66 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   async function submitVoiceRecording(blob) {
+    const selectedVoice = voiceSelect.value;
     const formData = new FormData();
     formData.append("file", blob, "voice_input.webm");
-    formData.append("voice", voiceSelect.value);
-    formData.append("anonymous_user_id", visitorId);
-    if (seekerId) formData.append("seeker_id", seekerId);
+    formData.append("voice", selectedVoice);
 
     oracleAnswer.textContent = "🔄 Transcribing...";
 
-    const response = await identityFetch("/whisper", {
+    const transcribeResponse = await identityFetch("/voice/transcribe", {
       method: "POST",
       body: formData
     });
 
-    const data = await safeReadJson(response);
+    const transcribeData = await safeReadJson(transcribeResponse);
 
-    if (!response.ok) {
+    if (!transcribeResponse.ok) {
       throw new Error(
-        data.oracle_message ||
-        data.error ||
-        data.answer ||
-        "Voice request failed"
+        transcribeData.error ||
+        transcribeData.answer ||
+        "Voice transcription failed"
       );
     }
 
-    const spokenQuestion = data.transcript || data.question || "";
+    const spokenQuestion = transcribeData.transcript || transcribeData.question || "";
 
-    if (spokenQuestion) {
-      seekerInput.value = spokenQuestion;
-      oracleAnswer.textContent = "You said: " + spokenQuestion + "\n\n🔮 Consulting the Oracle...";
-    } else {
-      oracleAnswer.textContent = "🔮 Consulting the Oracle...";
+    if (!spokenQuestion) {
+      throw new Error("No voice transcript was returned.");
     }
 
-    if (data.answer) {
-      if (spokenQuestion) {
-        seekerInput.value = spokenQuestion;
-      }
-      oracleAnswer.textContent = (spokenQuestion ? "You said: " + spokenQuestion + "\n\n" : "") + data.answer;
+    seekerInput.value = spokenQuestion;
+    oracleAnswer.textContent = "You said: " + spokenQuestion + "\n\n🔮 Consulting the Oracle...";
+
+    const answerData = await submitOracleVoiceQuestion(spokenQuestion, selectedVoice);
+
+    if (answerData.answer) {
+      oracleAnswer.textContent = "You said: " + spokenQuestion + "\n\n" + answerData.answer;
       await updateIdentityDisplay();
-    } else if (data.error) {
-      oracleAnswer.textContent = "⚠️ Error: " + data.error;
+    } else if (answerData.error) {
+      oracleAnswer.textContent = "⚠️ Error: " + answerData.error;
+      return;
     } else {
       oracleAnswer.textContent = "⚠️ No response received.";
+      return;
     }
 
-    if (data.audio_url) {
-      await playOracleAudio(data.audio_url);
+    const replayButton = ensureReplayVoiceButton();
+    replayButton.style.display = "inline-block";
+    replayButton.textContent = "Preparing Oracle Voice...";
+    replayButton.disabled = true;
+
+    try {
+      const ttsData = await prepareOracleVoice(answerData.answer, selectedVoice);
+      if (ttsData.audio_url) {
+        await playOracleAudio(ttsData.audio_url);
+      } else {
+        replayButton.textContent = "Voice unavailable";
+        replayButton.disabled = true;
+      }
+    } catch (err) {
+      replayButton.textContent = "Voice unavailable";
+      replayButton.disabled = true;
     }
   }
 
