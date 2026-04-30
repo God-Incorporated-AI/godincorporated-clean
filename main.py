@@ -513,6 +513,136 @@ def record_oracle_usage_event(
             conn.close()
 
 
+def get_voice_usage_context(request: Request, voice: Optional[str] = None) -> dict:
+    """
+    Phase 10.5 helper for voice-stage persistence.
+
+    This is intentionally defensive because voice transcription should not fail
+    just because reporting context could not be resolved.
+    """
+    context = {
+        "session_id": None,
+        "anonymous_user_id": None,
+        "user_id": None,
+        "plan_code": "anon",
+    }
+
+    try:
+        session_id = get_or_create_session_id(request)
+        context["session_id"] = session_id
+        context["anonymous_user_id"] = session_id
+    except Exception as e:
+        logger.warning("VOICE_USAGE_CONTEXT session resolution failed: %s", e)
+
+    try:
+        user = get_current_user(request)
+        if user:
+            context["user_id"] = user.get("user_id")
+            entitlement = get_user_entitlement_snapshot(user["user_id"])
+            context["plan_code"] = entitlement.get("effective_plan_code") or "anon"
+    except Exception as e:
+        logger.warning("VOICE_USAGE_CONTEXT user resolution failed: %s", e)
+
+    return context
+
+
+def record_voice_usage_event(
+    session_id=None,
+    user_id=None,
+    anonymous_user_id=None,
+    plan_code=None,
+    input_mode="voice",
+    deity=None,
+    stage=None,
+    status=None,
+    transcribe_ms=None,
+    oracle_ms=None,
+    tts_ms=None,
+    total_ms=None,
+    transcript_chars=None,
+    answer_chars=None,
+    audio_url_present=None,
+    tts_provider=None,
+    tts_model=None,
+    tts_voice=None,
+    estimated_tts_cost_usd=None,
+    metadata_json=None,
+) -> None:
+    """
+    Phase 10.5 silent voice-stage persistence.
+
+    This must never break transcription, asking, or playback.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO voice_usage_events (
+                    session_id,
+                    user_id,
+                    anonymous_user_id,
+                    plan_code,
+                    input_mode,
+                    deity,
+                    stage,
+                    status,
+                    transcribe_ms,
+                    oracle_ms,
+                    tts_ms,
+                    total_ms,
+                    transcript_chars,
+                    answer_chars,
+                    audio_url_present,
+                    tts_provider,
+                    tts_model,
+                    tts_voice,
+                    estimated_tts_cost_usd,
+                    metadata_json
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb
+                )
+                """,
+                (
+                    session_id,
+                    user_id,
+                    anonymous_user_id,
+                    plan_code,
+                    input_mode,
+                    deity,
+                    stage,
+                    status,
+                    _usage_numeric_or_none(transcribe_ms),
+                    _usage_numeric_or_none(oracle_ms),
+                    _usage_numeric_or_none(tts_ms),
+                    _usage_numeric_or_none(total_ms),
+                    _usage_int_or_none(transcript_chars),
+                    _usage_int_or_none(answer_chars),
+                    audio_url_present,
+                    tts_provider,
+                    tts_model,
+                    tts_voice,
+                    _usage_numeric_or_none(estimated_tts_cost_usd),
+                    json.dumps(metadata_json or {}, default=str),
+                )
+            )
+        conn.commit()
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        logger.warning("Failed to persist voice_usage_event: %s", e)
+    finally:
+        if conn:
+            conn.close()
+
+
+
 async def get_oracle_response(
     question: str,
     deity: str,
@@ -3234,10 +3364,12 @@ def voice_stage_ms(start, end):
 
 @app.post("/voice/transcribe")
 async def voice_transcribe_endpoint(
+    request: Request,
     file: UploadFile = File(...),
     voice: str = Form("Hathor")
 ):
     started_at = datetime.datetime.now()
+    usage_context = get_voice_usage_context(request, voice)
     try:
         file_bytes = await file.read()
         transcribe_started_at = datetime.datetime.now()
@@ -3245,23 +3377,55 @@ async def voice_transcribe_endpoint(
         transcribe_finished_at = datetime.datetime.now()
 
         if not transcript:
+            transcribe_ms = voice_stage_ms(transcribe_started_at, transcribe_finished_at)
+            total_ms = voice_stage_ms(started_at, datetime.datetime.now())
             logger.info(
                 "VOICE_TRANSCRIBE_STAGE status=failed voice=%s transcribe_ms=%s total_ms=%s transcript_chars=0",
                 voice,
-                voice_stage_ms(transcribe_started_at, transcribe_finished_at),
-                voice_stage_ms(started_at, datetime.datetime.now())
+                transcribe_ms,
+                total_ms
+            )
+            record_voice_usage_event(
+                **usage_context,
+                input_mode="voice",
+                deity=voice,
+                stage="transcribe",
+                status="failed",
+                transcribe_ms=transcribe_ms,
+                total_ms=total_ms,
+                transcript_chars=0,
+                metadata_json={
+                    "phase": "10.5",
+                    "event_source": "voice_transcribe_endpoint",
+                }
             )
             return JSONResponse(
                 content={"error": "Whisper could not transcribe."},
                 status_code=422
             )
 
+        transcribe_ms = voice_stage_ms(transcribe_started_at, transcribe_finished_at)
+        total_ms = voice_stage_ms(started_at, datetime.datetime.now())
         logger.info(
             "VOICE_TRANSCRIBE_STAGE status=ok voice=%s transcribe_ms=%s total_ms=%s transcript_chars=%s",
             voice,
-            voice_stage_ms(transcribe_started_at, transcribe_finished_at),
-            voice_stage_ms(started_at, datetime.datetime.now()),
+            transcribe_ms,
+            total_ms,
             len(transcript or "")
+        )
+        record_voice_usage_event(
+            **usage_context,
+            input_mode="voice",
+            deity=voice,
+            stage="transcribe",
+            status="ok",
+            transcribe_ms=transcribe_ms,
+            total_ms=total_ms,
+            transcript_chars=len(transcript or ""),
+            metadata_json={
+                "phase": "10.5",
+                "event_source": "voice_transcribe_endpoint",
+            }
         )
 
         return {
@@ -3271,10 +3435,24 @@ async def voice_transcribe_endpoint(
 
     except Exception:
         logger.exception("Voice transcribe endpoint failed")
+        total_ms = voice_stage_ms(started_at, datetime.datetime.now())
         logger.info(
             "VOICE_TRANSCRIBE_STAGE status=error voice=%s total_ms=%s transcript_chars=0",
             voice,
-            voice_stage_ms(started_at, datetime.datetime.now())
+            total_ms
+        )
+        record_voice_usage_event(
+            **usage_context,
+            input_mode="voice",
+            deity=voice,
+            stage="transcribe",
+            status="error",
+            total_ms=total_ms,
+            transcript_chars=0,
+            metadata_json={
+                "phase": "10.5",
+                "event_source": "voice_transcribe_endpoint",
+            }
         )
         return JSONResponse(
             content={"error": "Voice transcription failed."},
@@ -3299,8 +3477,27 @@ async def voice_tts_endpoint(request: Request):
         data = await request.json()
         answer = (data.get("answer") or "").strip()
         voice = data.get("voice") or "Hathor"
+        usage_context = get_voice_usage_context(request, voice)
 
         if not answer:
+            record_voice_usage_event(
+                **usage_context,
+                input_mode="voice",
+                deity=voice,
+                stage="tts",
+                status="failed",
+                total_ms=voice_stage_ms(started_at, datetime.datetime.now()),
+                answer_chars=0,
+                audio_url_present=False,
+                tts_provider=os.getenv("TTS_PROVIDER", "openai"),
+                tts_model=os.getenv("TTS_MODEL"),
+                tts_voice=voice,
+                metadata_json={
+                    "phase": "10.5",
+                    "event_source": "voice_tts_endpoint",
+                    "reason": "empty_answer",
+                }
+            )
             return JSONResponse(
                 content={"error": "No answer text provided for voice playback."},
                 status_code=400
@@ -3310,24 +3507,63 @@ async def voice_tts_endpoint(request: Request):
         audio_url = generate_tts_audio(answer, voice)
         tts_finished_at = datetime.datetime.now()
 
+        tts_ms = voice_stage_ms(tts_started_at, tts_finished_at)
+        total_ms = voice_stage_ms(started_at, datetime.datetime.now())
         logger.info(
             "VOICE_TTS_STAGE status=ok voice=%s tts_ms=%s total_ms=%s answer_chars=%s audio_url_present=%s",
             voice,
-            voice_stage_ms(tts_started_at, tts_finished_at),
-            voice_stage_ms(started_at, datetime.datetime.now()),
+            tts_ms,
+            total_ms,
             len(answer or ""),
             bool(audio_url)
+        )
+        record_voice_usage_event(
+            **usage_context,
+            input_mode="voice",
+            deity=voice,
+            stage="tts",
+            status="ok",
+            tts_ms=tts_ms,
+            total_ms=total_ms,
+            answer_chars=len(answer or ""),
+            audio_url_present=bool(audio_url),
+            tts_provider=os.getenv("TTS_PROVIDER", "openai"),
+            tts_model=os.getenv("TTS_MODEL"),
+            tts_voice=voice,
+            metadata_json={
+                "phase": "10.5",
+                "event_source": "voice_tts_endpoint",
+            }
         )
 
         return {"audio_url": audio_url}
 
     except Exception:
         logger.exception("Voice TTS endpoint failed")
+        usage_context = get_voice_usage_context(request, voice)
+        total_ms = voice_stage_ms(started_at, datetime.datetime.now())
         logger.info(
             "VOICE_TTS_STAGE status=error voice=%s total_ms=%s answer_chars=%s audio_url_present=false",
             voice,
-            voice_stage_ms(started_at, datetime.datetime.now()),
+            total_ms,
             len(answer or "")
+        )
+        record_voice_usage_event(
+            **usage_context,
+            input_mode="voice",
+            deity=voice,
+            stage="tts",
+            status="error",
+            total_ms=total_ms,
+            answer_chars=len(answer or ""),
+            audio_url_present=False,
+            tts_provider=os.getenv("TTS_PROVIDER", "openai"),
+            tts_model=os.getenv("TTS_MODEL"),
+            tts_voice=voice,
+            metadata_json={
+                "phase": "10.5",
+                "event_source": "voice_tts_endpoint",
+            }
         )
         return JSONResponse(
             content={"error": "Oracle voice playback could not be prepared."},
