@@ -20,6 +20,7 @@
 
     <div class="admin-grid">
       <section class="admin-panel span-12">
+        <h2>Operations Overview</h2>
         <div class="control-row">
           <div class="control-group">
             <label for="overviewDays">Overview window (days)</label>
@@ -94,8 +95,33 @@
         </details>
       </section>
 
+      <section class="admin-panel span-6">
+        <h2>Overview Breakdown</h2>
+        <div id="overviewBreakdown" class="summary-list"></div>
+      </section>
+
+      <section class="admin-panel span-6">
+        <h2>Recent Admin Actions</h2>
+        <div class="control-row">
+          <div class="control-group">
+            <label for="adminActionsLimit">Limit</label>
+            <input type="number" id="adminActionsLimit" value="100" min="1" max="500" />
+          </div>
+        </div>
+        <div id="adminActionsStatus" class="status-line muted">Loading admin actions...</div>
+        <div id="adminActionsList" class="action-list"></div>
+        <details>
+          <summary>Raw admin actions JSON</summary>
+          <pre id="adminActionsRaw">Loading admin actions...</pre>
+        </details>
+      </section>
+
+
       <section class="admin-panel span-12">
-        <h2>Mutation Controls</h2>
+        <h2>Operational Controls / Mutations</h2>
+        <div class="status-line muted">
+          These controls change user access, roles, and entitlement state. Use after loading and verifying a user.
+        </div>
         <div id="mutationTarget" class="status-line muted">Load a user first.</div>
 
         <div class="mutation-grid">
@@ -243,26 +269,6 @@
         </details>
       </section>
 
-      <section class="admin-panel span-6">
-        <h2>Overview Breakdown</h2>
-        <div id="overviewBreakdown" class="summary-list"></div>
-      </section>
-
-      <section class="admin-panel span-6">
-        <h2>Recent Admin Actions</h2>
-        <div class="control-row">
-          <div class="control-group">
-            <label for="adminActionsLimit">Limit</label>
-            <input type="number" id="adminActionsLimit" value="100" min="1" max="500" />
-          </div>
-        </div>
-        <div id="adminActionsStatus" class="status-line muted">Loading admin actions...</div>
-        <div id="adminActionsList" class="action-list"></div>
-        <details>
-          <summary>Raw admin actions JSON</summary>
-          <pre id="adminActionsRaw">Loading admin actions...</pre>
-        </details>
-      </section>
     </div>
   </main>
 
