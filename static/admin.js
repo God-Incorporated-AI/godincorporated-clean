@@ -7,6 +7,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const overviewMetrics = document.getElementById("overviewMetrics");
   const overviewBreakdown = document.getElementById("overviewBreakdown");
 
+  const refreshUsageReportsBtn = document.getElementById("refreshUsageReportsBtn");
+  const usageStatus = document.getElementById("usageStatus");
+  const usageMetrics = document.getElementById("usageMetrics");
+  const usageBreakdown = document.getElementById("usageBreakdown");
+
   const adminSearchForm = document.getElementById("adminSearchForm");
   const searchEmail = document.getElementById("searchEmail");
   const searchDisplayName = document.getElementById("searchDisplayName");
@@ -84,6 +89,28 @@ document.addEventListener("DOMContentLoaded", () => {
         <div class="${mono ? "mono" : ""}">${escapeHtml(value ?? "—")}</div>
       </div>
     `;
+  }
+
+
+  function formatNumber(value) {
+    if (value === null || value === undefined || value === "") return "0";
+    const number = Number(value);
+    if (Number.isNaN(number)) return String(value);
+    return number.toLocaleString();
+  }
+
+  function formatMs(value) {
+    if (value === null || value === undefined || value === "") return "—";
+    const number = Number(value);
+    if (Number.isNaN(number)) return String(value);
+    return (number / 1000).toFixed(2) + "s";
+  }
+
+  function formatMoney(value) {
+    if (value === null || value === undefined || value === "") return "$0.00";
+    const number = Number(value);
+    if (Number.isNaN(number)) return String(value);
+    return "$" + number.toFixed(4);
   }
 
   function renderSummaryCard(title, items) {
@@ -219,6 +246,95 @@ document.addEventListener("DOMContentLoaded", () => {
     overviewStatus.textContent = `Overview loaded for the last ${data.report.window_days} day(s).`;
     renderOverview(data.report);
   }
+
+  function renderUsageList(rows, labelFn, valueFn) {
+    return (rows || []).map(row => renderKV(labelFn(row), valueFn(row)));
+  }
+
+  function renderUsageReport(report) {
+    if (!usageMetrics || !usageBreakdown) return;
+
+    const oracleSummary = report?.oracle?.summary || {};
+    const voiceSummary = report?.voice?.summary || {};
+
+    usageMetrics.innerHTML = [
+      renderMetricCard("Oracle events", formatNumber(oracleSummary.total_events ?? 0)),
+      renderMetricCard("Text asks", formatNumber(oracleSummary.text_events ?? 0)),
+      renderMetricCard("Voice asks", formatNumber(oracleSummary.voice_events ?? 0)),
+      renderMetricCard("Total tokens", formatNumber(oracleSummary.total_tokens ?? 0)),
+      renderMetricCard("Avg Oracle time", formatMs(oracleSummary.avg_total_ms)),
+      renderMetricCard("Voice stage events", formatNumber(voiceSummary.total_events ?? 0)),
+      renderMetricCard("Avg transcription", formatMs(voiceSummary.avg_transcribe_ms)),
+      renderMetricCard("Avg TTS", formatMs(voiceSummary.avg_tts_ms)),
+      renderMetricCard("Est. cost", formatMoney(oracleSummary.estimated_cost_usd ?? 0))
+    ].join("");
+
+    const byInputMode = renderUsageList(
+      report?.oracle?.by_input_mode || [],
+      row => `${row.input_mode || "unknown"} (${row.total_events || 0})`,
+      row => `${formatNumber(row.total_tokens || 0)} tokens · avg ${formatMs(row.avg_total_ms)}`
+    );
+
+    const byDeity = renderUsageList(
+      report?.oracle?.by_deity || [],
+      row => `${row.deity || "unknown"} (${row.total_events || 0})`,
+      row => `${formatNumber(row.total_tokens || 0)} tokens · avg ${formatMs(row.avg_total_ms)}`
+    );
+
+    const byProviderModel = renderUsageList(
+      report?.oracle?.by_provider_model || [],
+      row => `${row.provider || "unknown"} / ${row.model || "unknown"}`,
+      row => `${row.total_events || 0} event(s) · ${formatNumber(row.total_tokens || 0)} tokens · avg ${formatMs(row.avg_total_ms)}`
+    );
+
+    const voiceByStage = renderUsageList(
+      report?.voice?.by_stage_status || [],
+      row => `${row.stage || "unknown"} / ${row.status || "unknown"}`,
+      row => `${row.total_events || 0} event(s) · transcribe ${formatMs(row.avg_transcribe_ms)} · tts ${formatMs(row.avg_tts_ms)} · total ${formatMs(row.avg_total_ms)}`
+    );
+
+    const slowestOracle = renderUsageList(
+      report?.oracle?.slowest_events || [],
+      row => `${row.created_at || "unknown"} · ${row.deity || "unknown"} · ${row.input_mode || "unknown"}`,
+      row => `${formatNumber(row.total_tokens || 0)} tokens · ${formatMs(row.total_ms)} · ${row.provider || "unknown"}/${row.model || "unknown"}`
+    );
+
+    const slowestVoice = renderUsageList(
+      report?.voice?.slowest_events || [],
+      row => `${row.created_at || "unknown"} · ${row.stage || "unknown"} · ${row.status || "unknown"}`,
+      row => `total ${formatMs(row.total_ms)} · transcribe ${formatMs(row.transcribe_ms)} · tts ${formatMs(row.tts_ms)}`
+    );
+
+    usageBreakdown.innerHTML = [
+      renderSummaryCard("Oracle by Input Mode", byInputMode),
+      renderSummaryCard("Oracle by Deity", byDeity),
+      renderSummaryCard("Oracle by Provider / Model", byProviderModel),
+      renderSummaryCard("Voice by Stage / Status", voiceByStage),
+      renderSummaryCard("Slowest Oracle Events", slowestOracle),
+      renderSummaryCard("Slowest Voice Events", slowestVoice)
+    ].join("");
+  }
+
+  async function loadUsageReport() {
+    if (!usageStatus) return;
+
+    usageStatus.textContent = "Loading usage reports...";
+    const days = Number(overviewDays.value || 30);
+
+    const { response, data } = await getJson(`/admin/reports/usage-summary?days=${encodeURIComponent(days)}`);
+
+    if (!response.ok) {
+      usageStatus.textContent = data.error || "Failed to load usage reports.";
+      if (usageMetrics) usageMetrics.innerHTML = "";
+      if (usageBreakdown) usageBreakdown.innerHTML = "";
+      return;
+    }
+
+    usageStatus.textContent = `Usage reports loaded for the last ${data.report.window_days} day(s).`;
+    renderUsageReport(data.report);
+  }
+
+
 
   function renderSearchResults(results) {
     if (!results.length) {
@@ -505,6 +621,12 @@ document.addEventListener("DOMContentLoaded", () => {
     await loadOverview();
   });
 
+  if (refreshUsageReportsBtn) {
+    refreshUsageReportsBtn.addEventListener("click", async () => {
+      await loadUsageReport();
+    });
+  }
+
   refreshAdminActionsBtn.addEventListener("click", async () => {
     await loadAdminActions();
   });
@@ -610,6 +732,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   fetchAdminMe();
   loadOverview();
+  loadUsageReport();
   loadAdminActions();
   clearMutationStatus();
 });
