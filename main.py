@@ -386,6 +386,133 @@ def normalize_token_usage(usage) -> dict:
     }
 
 
+def _usage_numeric_or_none(value):
+    if value in (None, "", "-"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _usage_int_or_none(value):
+    if value in (None, "", "-"):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def record_oracle_usage_event(
+    session_id=None,
+    user_id=None,
+    anonymous_user_id=None,
+    plan_code=None,
+    usage_class=None,
+    input_mode=None,
+    deity=None,
+    provider=None,
+    model=None,
+    retrieval_backend=None,
+    pgvector_limit=None,
+    prompt_tokens=None,
+    completion_tokens=None,
+    total_tokens=None,
+    estimated_input_tokens=None,
+    estimated_output_tokens=None,
+    estimated_total_tokens=None,
+    question_chars=None,
+    enhanced_question_chars=None,
+    answer_chars=None,
+    final_model_ms=None,
+    total_ms=None,
+    estimated_cost_usd=None,
+    metadata_json=None,
+) -> None:
+    """
+    Phase 10.5 silent usage persistence.
+
+    This must never break the seeker experience. If persistence fails,
+    log a warning and continue.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO oracle_usage_events (
+                    session_id,
+                    user_id,
+                    anonymous_user_id,
+                    plan_code,
+                    usage_class,
+                    input_mode,
+                    deity,
+                    provider,
+                    model,
+                    retrieval_backend,
+                    pgvector_limit,
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                    estimated_input_tokens,
+                    estimated_output_tokens,
+                    estimated_total_tokens,
+                    question_chars,
+                    enhanced_question_chars,
+                    answer_chars,
+                    final_model_ms,
+                    total_ms,
+                    estimated_cost_usd,
+                    metadata_json
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb
+                )
+                """,
+                (
+                    session_id,
+                    user_id,
+                    anonymous_user_id,
+                    plan_code,
+                    usage_class,
+                    input_mode,
+                    deity,
+                    provider,
+                    model,
+                    retrieval_backend,
+                    _usage_int_or_none(pgvector_limit),
+                    _usage_int_or_none(prompt_tokens),
+                    _usage_int_or_none(completion_tokens),
+                    _usage_int_or_none(total_tokens),
+                    _usage_int_or_none(estimated_input_tokens),
+                    _usage_int_or_none(estimated_output_tokens),
+                    _usage_int_or_none(estimated_total_tokens),
+                    _usage_int_or_none(question_chars),
+                    _usage_int_or_none(enhanced_question_chars),
+                    _usage_int_or_none(answer_chars),
+                    _usage_numeric_or_none(final_model_ms),
+                    _usage_numeric_or_none(total_ms),
+                    _usage_numeric_or_none(estimated_cost_usd),
+                    json.dumps(metadata_json or {}, default=str),
+                )
+            )
+        conn.commit()
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        logger.warning("Failed to persist oracle_usage_event: %s", e)
+    finally:
+        if conn:
+            conn.close()
+
+
 async def get_oracle_response(
     question: str,
     deity: str,
@@ -5830,6 +5957,40 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             len(raw_answer or ""),
             _ms(final_model_started_at, final_model_finished_at),
             _ms(ask_started_at, datetime.datetime.now())
+        )
+
+
+        record_oracle_usage_event(
+            session_id=session_id,
+            user_id=user_id,
+            anonymous_user_id=session_id,
+            plan_code=plan_code,
+            usage_class=usage_class,
+            input_mode=input_mode,
+            deity=deity,
+            provider=model_provider,
+            model=model_name,
+            retrieval_backend=get_retrieval_backend(),
+            pgvector_limit=PGVECTOR_RETRIEVAL_LIMIT,
+            prompt_tokens=actual_prompt_tokens,
+            completion_tokens=actual_completion_tokens,
+            total_tokens=actual_total_tokens,
+            estimated_input_tokens=estimated_input_tokens,
+            estimated_output_tokens=estimated_output_tokens,
+            estimated_total_tokens=estimated_total_tokens,
+            question_chars=len(question or ""),
+            enhanced_question_chars=len(enhanced_question or ""),
+            answer_chars=len(raw_answer or ""),
+            final_model_ms=_ms(final_model_started_at, final_model_finished_at),
+            total_ms=_ms(ask_started_at, datetime.datetime.now()),
+            estimated_cost_usd=None,
+            metadata_json={
+                "phase": "10.5",
+                "event_source": "ask_oracle",
+                "memory_intent": memory_intent,
+                "source_model": source_model,
+                "response_word_cap": response_word_cap,
+            }
         )
 
         # --- Architect observation ---
