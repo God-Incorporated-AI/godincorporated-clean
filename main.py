@@ -3116,6 +3116,424 @@ def get_admin_reporting_overview(days: int = 30) -> dict:
         }
     }
 
+
+def _admin_report_value(value):
+    if value is None:
+        return None
+    if isinstance(value, datetime.datetime):
+        return serialize_dt(value)
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if value.__class__.__name__ == "Decimal":
+        number = float(value)
+        if number.is_integer():
+            return int(number)
+        return round(number, 4)
+    return value
+
+
+def _admin_report_row(row: dict) -> dict:
+    return {
+        key: _admin_report_value(value)
+        for key, value in dict(row or {}).items()
+    }
+
+
+def _admin_report_rows(rows) -> list[dict]:
+    return [_admin_report_row(row) for row in rows or []]
+
+
+def get_admin_usage_summary(days: int = 30) -> dict:
+    """
+    Phase 10.6 reporting foundation.
+
+    Summarizes Phase 10.5 usage tables for admin reporting.
+    No pricing math yet; token and latency visibility come first.
+    """
+    window_start = datetime.datetime.now(timezone.utc) - datetime.timedelta(days=days)
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_events,
+                    COUNT(*) FILTER (WHERE user_id IS NOT NULL) AS registered_events,
+                    COUNT(*) FILTER (WHERE user_id IS NULL) AS anonymous_events,
+                    COUNT(*) FILTER (WHERE input_mode = 'text') AS text_events,
+                    COUNT(*) FILTER (WHERE input_mode = 'voice') AS voice_events,
+                    COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    COALESCE(SUM(estimated_input_tokens), 0) AS estimated_input_tokens,
+                    COALESCE(SUM(estimated_output_tokens), 0) AS estimated_output_tokens,
+                    COALESCE(SUM(estimated_total_tokens), 0) AS estimated_total_tokens,
+                    AVG(final_model_ms) AS avg_final_model_ms,
+                    AVG(total_ms) AS avg_total_ms,
+                    MAX(total_ms) AS max_total_ms,
+                    COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd
+                FROM oracle_usage_events
+                WHERE created_at >= %s
+                """,
+                (window_start,)
+            )
+            oracle_summary = cur.fetchone() or {}
+
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(plan_code, 'unknown') AS plan_code,
+                    COUNT(*) AS total_events,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    AVG(total_ms) AS avg_total_ms
+                FROM oracle_usage_events
+                WHERE created_at >= %s
+                GROUP BY COALESCE(plan_code, 'unknown')
+                ORDER BY total_events DESC, plan_code ASC
+                """,
+                (window_start,)
+            )
+            by_plan = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(input_mode, 'unknown') AS input_mode,
+                    COUNT(*) AS total_events,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    AVG(total_ms) AS avg_total_ms
+                FROM oracle_usage_events
+                WHERE created_at >= %s
+                GROUP BY COALESCE(input_mode, 'unknown')
+                ORDER BY total_events DESC, input_mode ASC
+                """,
+                (window_start,)
+            )
+            by_input_mode = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(deity, 'unknown') AS deity,
+                    COUNT(*) AS total_events,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    AVG(total_ms) AS avg_total_ms
+                FROM oracle_usage_events
+                WHERE created_at >= %s
+                GROUP BY COALESCE(deity, 'unknown')
+                ORDER BY total_events DESC, deity ASC
+                """,
+                (window_start,)
+            )
+            by_deity = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(provider, 'unknown') AS provider,
+                    COALESCE(model, 'unknown') AS model,
+                    COUNT(*) AS total_events,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    AVG(total_ms) AS avg_total_ms
+                FROM oracle_usage_events
+                WHERE created_at >= %s
+                GROUP BY COALESCE(provider, 'unknown'), COALESCE(model, 'unknown')
+                ORDER BY total_tokens DESC, total_events DESC
+                """,
+                (window_start,)
+            )
+            by_provider_model = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT
+                    created_at,
+                    user_id::text AS user_id,
+                    anonymous_user_id,
+                    session_id::text AS session_id,
+                    plan_code,
+                    input_mode,
+                    deity,
+                    provider,
+                    model,
+                    total_tokens,
+                    final_model_ms,
+                    total_ms
+                FROM oracle_usage_events
+                WHERE created_at >= %s
+                ORDER BY total_ms DESC NULLS LAST
+                LIMIT 10
+                """,
+                (window_start,)
+            )
+            slowest_oracle_events = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_events,
+                    COUNT(*) FILTER (WHERE stage = 'transcribe') AS transcribe_events,
+                    COUNT(*) FILTER (WHERE stage = 'tts') AS tts_events,
+                    COUNT(*) FILTER (WHERE status = 'ok') AS ok_events,
+                    COUNT(*) FILTER (WHERE status <> 'ok') AS non_ok_events,
+                    AVG(transcribe_ms) AS avg_transcribe_ms,
+                    AVG(tts_ms) AS avg_tts_ms,
+                    AVG(total_ms) AS avg_total_ms,
+                    MAX(total_ms) AS max_total_ms,
+                    COUNT(*) FILTER (WHERE audio_url_present = true) AS audio_url_events
+                FROM voice_usage_events
+                WHERE created_at >= %s
+                """,
+                (window_start,)
+            )
+            voice_summary = cur.fetchone() or {}
+
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(stage, 'unknown') AS stage,
+                    COALESCE(status, 'unknown') AS status,
+                    COUNT(*) AS total_events,
+                    AVG(transcribe_ms) AS avg_transcribe_ms,
+                    AVG(tts_ms) AS avg_tts_ms,
+                    AVG(total_ms) AS avg_total_ms
+                FROM voice_usage_events
+                WHERE created_at >= %s
+                GROUP BY COALESCE(stage, 'unknown'), COALESCE(status, 'unknown')
+                ORDER BY total_events DESC, stage ASC, status ASC
+                """,
+                (window_start,)
+            )
+            voice_by_stage_status = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT
+                    created_at,
+                    user_id::text AS user_id,
+                    anonymous_user_id,
+                    session_id::text AS session_id,
+                    plan_code,
+                    input_mode,
+                    deity,
+                    stage,
+                    status,
+                    transcribe_ms,
+                    tts_ms,
+                    total_ms,
+                    transcript_chars,
+                    answer_chars,
+                    audio_url_present,
+                    tts_provider,
+                    tts_model,
+                    tts_voice
+                FROM voice_usage_events
+                WHERE created_at >= %s
+                ORDER BY total_ms DESC NULLS LAST
+                LIMIT 10
+                """,
+                (window_start,)
+            )
+            slowest_voice_events = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    return {
+        "window_days": days,
+        "window_start": serialize_dt(window_start),
+        "oracle": {
+            "summary": _admin_report_row(oracle_summary),
+            "by_plan": _admin_report_rows(by_plan),
+            "by_input_mode": _admin_report_rows(by_input_mode),
+            "by_deity": _admin_report_rows(by_deity),
+            "by_provider_model": _admin_report_rows(by_provider_model),
+            "slowest_events": _admin_report_rows(slowest_oracle_events),
+        },
+        "voice": {
+            "summary": _admin_report_row(voice_summary),
+            "by_stage_status": _admin_report_rows(voice_by_stage_status),
+            "slowest_events": _admin_report_rows(slowest_voice_events),
+        },
+    }
+
+
+def get_admin_user_usage_report(user_id: str, days: int = 30) -> dict:
+    """
+    Phase 10.6 per-user usage report.
+
+    This is read-only and complements the existing user detail endpoint.
+    """
+    window_start = datetime.datetime.now(timezone.utc) - datetime.timedelta(days=days)
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id::text AS id,
+                    email,
+                    display_name,
+                    seeker_id,
+                    COALESCE(role, 'user') AS role,
+                    COALESCE(plan_code, 'anon') AS stored_plan_code
+                FROM users
+                WHERE id = %s
+                """,
+                (user_id,)
+            )
+            user_row = cur.fetchone()
+
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_events,
+                    COUNT(*) FILTER (WHERE input_mode = 'text') AS text_events,
+                    COUNT(*) FILTER (WHERE input_mode = 'voice') AS voice_events,
+                    COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    AVG(final_model_ms) AS avg_final_model_ms,
+                    AVG(total_ms) AS avg_total_ms,
+                    MAX(total_ms) AS max_total_ms,
+                    COALESCE(SUM(estimated_cost_usd), 0) AS estimated_cost_usd
+                FROM oracle_usage_events
+                WHERE user_id = %s
+                  AND created_at >= %s
+                """,
+                (user_id, window_start)
+            )
+            oracle_summary = cur.fetchone() or {}
+
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(deity, 'unknown') AS deity,
+                    COUNT(*) AS total_events,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    AVG(total_ms) AS avg_total_ms
+                FROM oracle_usage_events
+                WHERE user_id = %s
+                  AND created_at >= %s
+                GROUP BY COALESCE(deity, 'unknown')
+                ORDER BY total_events DESC, deity ASC
+                """,
+                (user_id, window_start)
+            )
+            oracle_by_deity = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(provider, 'unknown') AS provider,
+                    COALESCE(model, 'unknown') AS model,
+                    COUNT(*) AS total_events,
+                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    AVG(total_ms) AS avg_total_ms
+                FROM oracle_usage_events
+                WHERE user_id = %s
+                  AND created_at >= %s
+                GROUP BY COALESCE(provider, 'unknown'), COALESCE(model, 'unknown')
+                ORDER BY total_tokens DESC, total_events DESC
+                """,
+                (user_id, window_start)
+            )
+            oracle_by_provider_model = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT
+                    created_at,
+                    plan_code,
+                    input_mode,
+                    deity,
+                    provider,
+                    model,
+                    total_tokens,
+                    final_model_ms,
+                    total_ms
+                FROM oracle_usage_events
+                WHERE user_id = %s
+                  AND created_at >= %s
+                ORDER BY created_at DESC
+                LIMIT 20
+                """,
+                (user_id, window_start)
+            )
+            recent_oracle_events = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_events,
+                    COUNT(*) FILTER (WHERE stage = 'transcribe') AS transcribe_events,
+                    COUNT(*) FILTER (WHERE stage = 'tts') AS tts_events,
+                    COUNT(*) FILTER (WHERE status = 'ok') AS ok_events,
+                    COUNT(*) FILTER (WHERE status <> 'ok') AS non_ok_events,
+                    AVG(transcribe_ms) AS avg_transcribe_ms,
+                    AVG(tts_ms) AS avg_tts_ms,
+                    AVG(total_ms) AS avg_total_ms,
+                    MAX(total_ms) AS max_total_ms,
+                    COUNT(*) FILTER (WHERE audio_url_present = true) AS audio_url_events
+                FROM voice_usage_events
+                WHERE user_id = %s
+                  AND created_at >= %s
+                """,
+                (user_id, window_start)
+            )
+            voice_summary = cur.fetchone() or {}
+
+            cur.execute(
+                """
+                SELECT
+                    created_at,
+                    plan_code,
+                    input_mode,
+                    deity,
+                    stage,
+                    status,
+                    transcribe_ms,
+                    tts_ms,
+                    total_ms,
+                    transcript_chars,
+                    answer_chars,
+                    audio_url_present,
+                    tts_provider,
+                    tts_model,
+                    tts_voice
+                FROM voice_usage_events
+                WHERE user_id = %s
+                  AND created_at >= %s
+                ORDER BY created_at DESC
+                LIMIT 20
+                """,
+                (user_id, window_start)
+            )
+            recent_voice_events = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    return {
+        "window_days": days,
+        "window_start": serialize_dt(window_start),
+        "user": _admin_report_row(user_row or {"id": user_id, "found": False}),
+        "oracle": {
+            "summary": _admin_report_row(oracle_summary),
+            "by_deity": _admin_report_rows(oracle_by_deity),
+            "by_provider_model": _admin_report_rows(oracle_by_provider_model),
+            "recent_events": _admin_report_rows(recent_oracle_events),
+        },
+        "voice": {
+            "summary": _admin_report_row(voice_summary),
+            "recent_events": _admin_report_rows(recent_voice_events),
+        },
+    }
+
+
+
 def build_authenticated_me_response(user: dict, session_id: str) -> dict:
     donation_stats = get_user_donation_stats(user["user_id"])
     entitlement = get_user_entitlement_snapshot(user["user_id"])
@@ -4125,6 +4543,38 @@ def admin_reports_overview(
 ):
     admin_user = require_admin(request)
     report = get_admin_reporting_overview(days=days)
+
+    return {
+        "ok": True,
+        "requested_by": admin_user["user_id"],
+        "report": report
+    }
+
+
+
+@app.get("/admin/reports/usage-summary")
+def admin_reports_usage_summary(
+    request: Request,
+    days: int = Query(30, ge=1, le=365)
+):
+    admin_user = require_admin(request)
+    report = get_admin_usage_summary(days=days)
+
+    return {
+        "ok": True,
+        "requested_by": admin_user["user_id"],
+        "report": report
+    }
+
+
+@app.get("/admin/users/{user_id}/usage-report")
+def admin_get_user_usage_report(
+    request: Request,
+    user_id: uuid.UUID,
+    days: int = Query(30, ge=1, le=365)
+):
+    admin_user = require_admin(request)
+    report = get_admin_user_usage_report(str(user_id), days=days)
 
     return {
         "ok": True,

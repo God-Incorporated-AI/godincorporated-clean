@@ -7,6 +7,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const overviewMetrics = document.getElementById("overviewMetrics");
   const overviewBreakdown = document.getElementById("overviewBreakdown");
 
+  const refreshUsageReportsBtn = document.getElementById("refreshUsageReportsBtn");
+  const usageStatus = document.getElementById("usageStatus");
+  const usageMetrics = document.getElementById("usageMetrics");
+  const usageBreakdown = document.getElementById("usageBreakdown");
+
   const adminSearchForm = document.getElementById("adminSearchForm");
   const searchEmail = document.getElementById("searchEmail");
   const searchDisplayName = document.getElementById("searchDisplayName");
@@ -20,6 +25,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const loadDetailBtn = document.getElementById("loadDetailBtn");
   const detailStatus = document.getElementById("detailStatus");
   const detailCards = document.getElementById("detailCards");
+  const detailUsageStatus = document.getElementById("detailUsageStatus");
+  const detailUsageCards = document.getElementById("detailUsageCards");
   const detailRaw = document.getElementById("detailRaw");
 
   const mutationTarget = document.getElementById("mutationTarget");
@@ -84,6 +91,28 @@ document.addEventListener("DOMContentLoaded", () => {
         <div class="${mono ? "mono" : ""}">${escapeHtml(value ?? "—")}</div>
       </div>
     `;
+  }
+
+
+  function formatNumber(value) {
+    if (value === null || value === undefined || value === "") return "0";
+    const number = Number(value);
+    if (Number.isNaN(number)) return String(value);
+    return number.toLocaleString();
+  }
+
+  function formatMs(value) {
+    if (value === null || value === undefined || value === "") return "—";
+    const number = Number(value);
+    if (Number.isNaN(number)) return String(value);
+    return (number / 1000).toFixed(2) + "s";
+  }
+
+  function formatMoney(value) {
+    if (value === null || value === undefined || value === "") return "$0.00";
+    const number = Number(value);
+    if (Number.isNaN(number)) return String(value);
+    return "$" + number.toFixed(4);
   }
 
   function renderSummaryCard(title, items) {
@@ -220,6 +249,95 @@ document.addEventListener("DOMContentLoaded", () => {
     renderOverview(data.report);
   }
 
+  function renderUsageList(rows, labelFn, valueFn) {
+    return (rows || []).map(row => renderKV(labelFn(row), valueFn(row)));
+  }
+
+  function renderUsageReport(report) {
+    if (!usageMetrics || !usageBreakdown) return;
+
+    const oracleSummary = report?.oracle?.summary || {};
+    const voiceSummary = report?.voice?.summary || {};
+
+    usageMetrics.innerHTML = [
+      renderMetricCard("Oracle events", formatNumber(oracleSummary.total_events ?? 0)),
+      renderMetricCard("Text asks", formatNumber(oracleSummary.text_events ?? 0)),
+      renderMetricCard("Voice asks", formatNumber(oracleSummary.voice_events ?? 0)),
+      renderMetricCard("Total tokens", formatNumber(oracleSummary.total_tokens ?? 0)),
+      renderMetricCard("Avg Oracle time", formatMs(oracleSummary.avg_total_ms)),
+      renderMetricCard("Voice stage events", formatNumber(voiceSummary.total_events ?? 0)),
+      renderMetricCard("Avg transcription", formatMs(voiceSummary.avg_transcribe_ms)),
+      renderMetricCard("Avg TTS", formatMs(voiceSummary.avg_tts_ms)),
+      renderMetricCard("Est. cost", formatMoney(oracleSummary.estimated_cost_usd ?? 0))
+    ].join("");
+
+    const byInputMode = renderUsageList(
+      report?.oracle?.by_input_mode || [],
+      row => `${row.input_mode || "unknown"} (${row.total_events || 0})`,
+      row => `${formatNumber(row.total_tokens || 0)} tokens · avg ${formatMs(row.avg_total_ms)}`
+    );
+
+    const byDeity = renderUsageList(
+      report?.oracle?.by_deity || [],
+      row => `${row.deity || "unknown"} (${row.total_events || 0})`,
+      row => `${formatNumber(row.total_tokens || 0)} tokens · avg ${formatMs(row.avg_total_ms)}`
+    );
+
+    const byProviderModel = renderUsageList(
+      report?.oracle?.by_provider_model || [],
+      row => `${row.provider || "unknown"} / ${row.model || "unknown"}`,
+      row => `${row.total_events || 0} event(s) · ${formatNumber(row.total_tokens || 0)} tokens · avg ${formatMs(row.avg_total_ms)}`
+    );
+
+    const voiceByStage = renderUsageList(
+      report?.voice?.by_stage_status || [],
+      row => `${row.stage || "unknown"} / ${row.status || "unknown"}`,
+      row => `${row.total_events || 0} event(s) · transcribe ${formatMs(row.avg_transcribe_ms)} · tts ${formatMs(row.avg_tts_ms)} · total ${formatMs(row.avg_total_ms)}`
+    );
+
+    const slowestOracle = renderUsageList(
+      report?.oracle?.slowest_events || [],
+      row => `${row.created_at || "unknown"} · ${row.deity || "unknown"} · ${row.input_mode || "unknown"}`,
+      row => `${formatNumber(row.total_tokens || 0)} tokens · ${formatMs(row.total_ms)} · ${row.provider || "unknown"}/${row.model || "unknown"}`
+    );
+
+    const slowestVoice = renderUsageList(
+      report?.voice?.slowest_events || [],
+      row => `${row.created_at || "unknown"} · ${row.stage || "unknown"} · ${row.status || "unknown"}`,
+      row => `total ${formatMs(row.total_ms)} · transcribe ${formatMs(row.transcribe_ms)} · tts ${formatMs(row.tts_ms)}`
+    );
+
+    usageBreakdown.innerHTML = [
+      renderSummaryCard("Oracle by Input Mode", byInputMode),
+      renderSummaryCard("Oracle by Deity", byDeity),
+      renderSummaryCard("Oracle by Provider / Model", byProviderModel),
+      renderSummaryCard("Voice by Stage / Status", voiceByStage),
+      renderSummaryCard("Slowest Oracle Events", slowestOracle),
+      renderSummaryCard("Slowest Voice Events", slowestVoice)
+    ].join("");
+  }
+
+  async function loadUsageReport() {
+    if (!usageStatus) return;
+
+    usageStatus.textContent = "Loading usage reports...";
+    const days = Number(overviewDays.value || 30);
+
+    const { response, data } = await getJson(`/admin/reports/usage-summary?days=${encodeURIComponent(days)}`);
+
+    if (!response.ok) {
+      usageStatus.textContent = data.error || "Failed to load usage reports.";
+      if (usageMetrics) usageMetrics.innerHTML = "";
+      if (usageBreakdown) usageBreakdown.innerHTML = "";
+      return;
+    }
+
+    usageStatus.textContent = `Usage reports loaded for the last ${data.report.window_days} day(s).`;
+    renderUsageReport(data.report);
+  }
+
+
+
   function renderSearchResults(results) {
     if (!results.length) {
       searchResults.innerHTML = '<div class="muted">No matching users found.</div>';
@@ -328,6 +446,134 @@ document.addEventListener("DOMContentLoaded", () => {
     `;
   }
 
+  function renderRecentOracleEvents(events) {
+    if (!events || !events.length) {
+      return '<div class="muted">No recent Oracle usage events in this window.</div>';
+    }
+
+    return events.map(event => `
+      <div class="action-card">
+        <div><strong>${escapeHtml(event.deity || "unknown")} · ${escapeHtml(event.input_mode || "unknown")}</strong></div>
+        <div class="muted">${escapeHtml(event.created_at || "—")}</div>
+        ${renderKV("Provider/model", `${event.provider || "unknown"} / ${event.model || "unknown"}`)}
+        ${renderKV("Tokens", formatNumber(event.total_tokens || 0))}
+        ${renderKV("Final model time", formatMs(event.final_model_ms))}
+        ${renderKV("Total time", formatMs(event.total_ms))}
+      </div>
+    `).join("");
+  }
+
+  function renderRecentVoiceEvents(events) {
+    if (!events || !events.length) {
+      return '<div class="muted">No recent voice usage events in this window.</div>';
+    }
+
+    return events.map(event => `
+      <div class="action-card">
+        <div><strong>${escapeHtml(event.stage || "unknown")} · ${escapeHtml(event.status || "unknown")}</strong></div>
+        <div class="muted">${escapeHtml(event.created_at || "—")}</div>
+        ${renderKV("Deity", event.deity || "—")}
+        ${renderKV("Transcription", formatMs(event.transcribe_ms))}
+        ${renderKV("TTS", formatMs(event.tts_ms))}
+        ${renderKV("Total time", formatMs(event.total_ms))}
+        ${renderKV("Transcript chars", formatNumber(event.transcript_chars || 0))}
+        ${renderKV("Answer chars", formatNumber(event.answer_chars || 0))}
+        ${renderKV("Audio URL present", event.audio_url_present === true ? "yes" : event.audio_url_present === false ? "no" : "—")}
+      </div>
+    `).join("");
+  }
+
+  function renderUserUsageReport(report) {
+    if (!detailUsageCards) return;
+
+    const oracleSummary = report?.oracle?.summary || {};
+    const voiceSummary = report?.voice?.summary || {};
+    const byDeity = renderUsageList(
+      report?.oracle?.by_deity || [],
+      row => `${row.deity || "unknown"} (${row.total_events || 0})`,
+      row => `${formatNumber(row.total_tokens || 0)} tokens · avg ${formatMs(row.avg_total_ms)}`
+    );
+
+    const byProviderModel = renderUsageList(
+      report?.oracle?.by_provider_model || [],
+      row => `${row.provider || "unknown"} / ${row.model || "unknown"}`,
+      row => `${row.total_events || 0} event(s) · ${formatNumber(row.total_tokens || 0)} tokens · avg ${formatMs(row.avg_total_ms)}`
+    );
+
+    detailUsageCards.innerHTML = `
+      <div class="detail-card">
+        <h3>Oracle Usage</h3>
+        ${renderKV("Window days", report?.window_days)}
+        ${renderKV("Oracle events", formatNumber(oracleSummary.total_events || 0))}
+        ${renderKV("Text asks", formatNumber(oracleSummary.text_events || 0))}
+        ${renderKV("Voice asks", formatNumber(oracleSummary.voice_events || 0))}
+        ${renderKV("Prompt tokens", formatNumber(oracleSummary.prompt_tokens || 0))}
+        ${renderKV("Completion tokens", formatNumber(oracleSummary.completion_tokens || 0))}
+        ${renderKV("Total tokens", formatNumber(oracleSummary.total_tokens || 0))}
+        ${renderKV("Avg final model time", formatMs(oracleSummary.avg_final_model_ms))}
+        ${renderKV("Avg total time", formatMs(oracleSummary.avg_total_ms))}
+        ${renderKV("Max total time", formatMs(oracleSummary.max_total_ms))}
+        ${renderKV("Estimated cost", formatMoney(oracleSummary.estimated_cost_usd || 0))}
+      </div>
+
+      <div class="detail-card">
+        <h3>Voice Usage</h3>
+        ${renderKV("Voice stage events", formatNumber(voiceSummary.total_events || 0))}
+        ${renderKV("Transcribe events", formatNumber(voiceSummary.transcribe_events || 0))}
+        ${renderKV("TTS events", formatNumber(voiceSummary.tts_events || 0))}
+        ${renderKV("OK events", formatNumber(voiceSummary.ok_events || 0))}
+        ${renderKV("Non-OK events", formatNumber(voiceSummary.non_ok_events || 0))}
+        ${renderKV("Avg transcription", formatMs(voiceSummary.avg_transcribe_ms))}
+        ${renderKV("Avg TTS", formatMs(voiceSummary.avg_tts_ms))}
+        ${renderKV("Avg voice stage time", formatMs(voiceSummary.avg_total_ms))}
+        ${renderKV("Max voice stage time", formatMs(voiceSummary.max_total_ms))}
+        ${renderKV("Audio URL events", formatNumber(voiceSummary.audio_url_events || 0))}
+      </div>
+
+      ${renderSummaryCard("Oracle by Deity", byDeity)}
+      ${renderSummaryCard("Oracle by Provider / Model", byProviderModel)}
+
+      <div class="summary-card">
+        <h3>Recent Oracle Events</h3>
+        ${renderRecentOracleEvents(report?.oracle?.recent_events || [])}
+      </div>
+
+      <div class="summary-card">
+        <h3>Recent Voice Events</h3>
+        ${renderRecentVoiceEvents(report?.voice?.recent_events || [])}
+      </div>
+    `;
+  }
+
+  async function loadUserUsageReport(userId) {
+    const trimmed = (userId || "").trim();
+
+    if (!trimmed) {
+      if (detailUsageStatus) detailUsageStatus.textContent = "Load a user to see usage events.";
+      if (detailUsageCards) detailUsageCards.innerHTML = "";
+      return;
+    }
+
+    if (detailUsageStatus) detailUsageStatus.textContent = "Loading individual usage report...";
+    if (detailUsageCards) detailUsageCards.innerHTML = "";
+
+    const days = Number(overviewDays.value || 30);
+    const { response, data } = await getJson(`/admin/users/${encodeURIComponent(trimmed)}/usage-report?days=${encodeURIComponent(days)}`);
+
+    if (!response.ok) {
+      if (detailUsageStatus) detailUsageStatus.textContent = data.error || "Failed to load individual usage report.";
+      if (detailUsageCards) detailUsageCards.innerHTML = "";
+      return;
+    }
+
+    if (detailUsageStatus) {
+      detailUsageStatus.textContent = `Individual usage loaded for the last ${data.report.window_days} day(s).`;
+    }
+    renderUserUsageReport(data.report);
+  }
+
+
+
   function populateMutationControls(user) {
     currentLoadedUser = user;
 
@@ -381,6 +627,7 @@ document.addEventListener("DOMContentLoaded", () => {
     detailStatus.textContent = `Loaded user detail for ${data.user.display_name || data.user.email}.`;
     detailRaw.textContent = pretty(data.user);
     renderUserDetail(data.user);
+    await loadUserUsageReport(data.user.id);
     populateMutationControls(data.user);
     clearMutationStatus();
   }
@@ -505,6 +752,12 @@ document.addEventListener("DOMContentLoaded", () => {
     await loadOverview();
   });
 
+  if (refreshUsageReportsBtn) {
+    refreshUsageReportsBtn.addEventListener("click", async () => {
+      await loadUsageReport();
+    });
+  }
+
   refreshAdminActionsBtn.addEventListener("click", async () => {
     await loadAdminActions();
   });
@@ -610,6 +863,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   fetchAdminMe();
   loadOverview();
+  loadUsageReport();
   loadAdminActions();
   clearMutationStatus();
 });
