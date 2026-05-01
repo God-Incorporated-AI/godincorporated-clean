@@ -404,6 +404,80 @@ def _usage_int_or_none(value):
         return None
 
 
+
+def _pricing_float_env(name: str, default=None):
+    value = os.getenv(name)
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        logger.warning("Invalid pricing env value for %s=%r", name, value)
+        return default
+
+
+def get_oracle_pricing_info(provider: str, model: str) -> dict:
+    """
+    Phase 10.7 Oracle pricing.
+
+    Prices are USD per 1M tokens.
+
+    OpenAI gpt-5.4-mini defaults to Standard pricing as of the Phase 10.7
+    implementation date, with env overrides available.
+
+    xAI grok-4 pricing is intentionally environment-configured because the
+    public xAI docs direct account-specific model/pricing checks to console.
+    """
+    provider_key = (provider or "").strip().lower()
+    model_key = (model or "").strip().lower()
+
+    if provider_key == "openai" and model_key == "gpt-5.4-mini":
+        return {
+            "input_per_1m": _pricing_float_env("OPENAI_GPT54_MINI_INPUT_PER_1M", 0.75),
+            "output_per_1m": _pricing_float_env("OPENAI_GPT54_MINI_OUTPUT_PER_1M", 4.50),
+            "source": "openai:gpt-5.4-mini:standard",
+        }
+
+    if provider_key == "xai" and model_key.startswith("grok-4"):
+        input_rate = _pricing_float_env("XAI_GROK4_INPUT_PER_1M")
+        output_rate = _pricing_float_env("XAI_GROK4_OUTPUT_PER_1M")
+        return {
+            "input_per_1m": input_rate,
+            "output_per_1m": output_rate,
+            "source": "xai:grok-4:env" if input_rate is not None and output_rate is not None else "xai:grok-4:env_missing",
+        }
+
+    return {
+        "input_per_1m": None,
+        "output_per_1m": None,
+        "source": "unknown",
+    }
+
+
+def calculate_oracle_estimated_cost_usd(
+    provider: str,
+    model: str,
+    prompt_tokens=None,
+    completion_tokens=None,
+):
+    pricing = get_oracle_pricing_info(provider, model)
+    input_rate = pricing.get("input_per_1m")
+    output_rate = pricing.get("output_per_1m")
+
+    if input_rate is None or output_rate is None:
+        return None
+
+    prompt_count = _usage_int_or_none(prompt_tokens) or 0
+    completion_count = _usage_int_or_none(completion_tokens) or 0
+
+    cost = (
+        (prompt_count / 1_000_000) * input_rate
+        + (completion_count / 1_000_000) * output_rate
+    )
+    return round(cost, 8)
+
+
+
 def record_oracle_usage_event(
     session_id=None,
     user_id=None,
@@ -6646,6 +6720,14 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         )
 
 
+        oracle_pricing = get_oracle_pricing_info(model_provider, model_name)
+        estimated_oracle_cost_usd = calculate_oracle_estimated_cost_usd(
+            provider=model_provider,
+            model=model_name,
+            prompt_tokens=actual_prompt_tokens,
+            completion_tokens=actual_completion_tokens,
+        )
+
         record_oracle_usage_event(
             session_id=session_id,
             user_id=user_id,
@@ -6669,13 +6751,16 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             answer_chars=len(raw_answer or ""),
             final_model_ms=_ms(final_model_started_at, final_model_finished_at),
             total_ms=_ms(ask_started_at, datetime.datetime.now()),
-            estimated_cost_usd=None,
+            estimated_cost_usd=estimated_oracle_cost_usd,
             metadata_json={
-                "phase": "10.5",
+                "phase": "10.7",
                 "event_source": "ask_oracle",
                 "memory_intent": memory_intent,
                 "source_model": source_model,
                 "response_word_cap": response_word_cap,
+                "pricing_source": oracle_pricing.get("source"),
+                "pricing_input_per_1m": oracle_pricing.get("input_per_1m"),
+                "pricing_output_per_1m": oracle_pricing.get("output_per_1m"),
             }
         )
 
