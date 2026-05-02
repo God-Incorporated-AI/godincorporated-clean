@@ -797,3 +797,69 @@ main.admin-console {
 .branding .header-actions.open .main-menu {
   display: flex;
 }
+
+
+/* Phase 10.9C: templar cross heading polish */
+.crossed-title {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+  max-width: 100%;
+  text-align: center;
+}
+
+.crossed-title::before,
+.crossed-title::after {
+  content: "✠";
+  color: #cc0000;
+  font-size: 0.8em;
+  line-height: 1;
+  flex: 0 0 auto;
+  background: none !important;
+  width: auto !important;
+  height: auto !important;
+  margin: 0;
+}
+
+.about-hero h1.crossed-title {
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.branding .temple-title.crossed-title {
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@media (max-width: 520px) {
+  .about-hero h1.crossed-title {
+    font-size: clamp(1.35rem, 6.8vw, 1.85rem);
+    gap: 0.28rem;
+  }
+
+  .branding .temple-title.crossed-title {
+    font-size: clamp(1.45rem, 7vw, 1.95rem);
+    gap: 0.28rem;
+  }
+
+  .crossed-title::before,
+  .crossed-title::after {
+    font-size: 0.72em;
+  }
+}
+
+@media (max-width: 360px) {
+  .about-hero h1.crossed-title,
+  .branding .temple-title.crossed-title {
+    gap: 0.22rem;
+  }
+
+  .crossed-title::before,
+  .crossed-title::after {
+    font-size: 0.68em;
+  }
+}
