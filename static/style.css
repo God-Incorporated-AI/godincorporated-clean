@@ -863,3 +863,85 @@ main.admin-console {
     font-size: 0.68em;
   }
 }
+
+
+/* Phase 10.9D: mobile temple cross and compact user menu polish */
+
+/* Stronger than the older temple-title logo rules: force simple red crosses. */
+.branding .temple-title.crossed-title::before,
+.branding .temple-title.crossed-title::after,
+.about-hero h1.crossed-title::before,
+.about-hero h1.crossed-title::after {
+  content: "✠" !important;
+  color: #cc0000 !important;
+  font-size: 0.8em !important;
+  line-height: 1 !important;
+  background: none !important;
+  background-image: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  width: auto !important;
+  height: auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: inline-block !important;
+  flex: 0 0 auto !important;
+}
+
+/* Keep the mobile header action from growing over the page when user name appears. */
+.branding .header-actions {
+  max-width: min(42vw, 12rem);
+}
+
+.branding .header-actions .menu-toggle {
+  max-width: min(38vw, 10.5rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* If the menu button becomes a username, keep it compact on phone. */
+@media (max-width: 520px) {
+  .branding .header-actions {
+    top: 0.55rem;
+    right: 0.55rem;
+    max-width: 34vw;
+  }
+
+  .branding .header-actions .menu-toggle {
+    font-size: 0.78rem;
+    line-height: 1;
+    padding: 0.35rem 0.45rem;
+    max-width: 32vw;
+    min-width: 2.15rem;
+    min-height: 2.15rem;
+  }
+
+  .branding .temple-title.crossed-title,
+  .about-hero h1.crossed-title {
+    white-space: nowrap;
+  }
+
+  .branding .temple-title.crossed-title::before,
+  .branding .temple-title.crossed-title::after,
+  .about-hero h1.crossed-title::before,
+  .about-hero h1.crossed-title::after {
+    font-size: 0.68em !important;
+  }
+}
+
+@media (max-width: 390px) {
+  .branding .header-actions {
+    max-width: 30vw;
+  }
+
+  .branding .header-actions .menu-toggle {
+    max-width: 28vw;
+    font-size: 0.72rem;
+    padding: 0.32rem 0.38rem;
+  }
+}
