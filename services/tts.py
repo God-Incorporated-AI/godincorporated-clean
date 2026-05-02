@@ -36,6 +36,21 @@ def prune_old_audio_files(max_age_hours: int = 24) -> None:
         except OSError:
             pass
 
+def get_openai_tts_model() -> str:
+    """
+    Phase 10.7 TTS model selector.
+
+    Default remains tts-1 for production safety.
+    Staging can test gpt-4o-mini-tts with:
+      OPENAI_TTS_MODEL=gpt-4o-mini-tts
+    """
+    return (
+        os.getenv("OPENAI_TTS_MODEL")
+        or os.getenv("TTS_MODEL")
+        or "tts-1"
+    ).strip()
+
+
 def generate_tts_audio(answer: str, voice: str) -> str:
     voice_map = {
         "Hathor": "shimmer",
@@ -49,7 +64,7 @@ def generate_tts_audio(answer: str, voice: str) -> str:
 
     client = get_openai_client()
     tts_response = client.audio.speech.create(
-        model="tts-1",
+        model=get_openai_tts_model(),
         voice=selected_voice,
         input=answer
     )

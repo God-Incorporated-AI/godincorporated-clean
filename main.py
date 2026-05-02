@@ -30,7 +30,7 @@ import psycopg2
 import stripe
 
 from config.settings import LLAMA_ENABLED, xai_api_key
-from services.tts import generate_tts_audio
+from services.tts import generate_tts_audio, get_openai_tts_model
 from services.whisper import transcribe_audio
 from services.llama_phase1 import build_support_packet, run_llama_phase1, apply_phase1_result, summarize_phase1_result
 from services.mail import send_email
@@ -402,6 +402,131 @@ def _usage_int_or_none(value):
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+
+def _pricing_float_env(name: str, default=None):
+    value = os.getenv(name)
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        logger.warning("Invalid pricing env value for %s=%r", name, value)
+        return default
+
+
+def get_oracle_pricing_info(provider: str, model: str) -> dict:
+    """
+    Phase 10.7 Oracle pricing.
+
+    Prices are USD per 1M tokens.
+
+    OpenAI gpt-5.4-mini defaults to Standard pricing as of the Phase 10.7
+    implementation date, with env overrides available.
+
+    xAI grok-4 pricing is intentionally environment-configured because the
+    public xAI docs direct account-specific model/pricing checks to console.
+    """
+    provider_key = (provider or "").strip().lower()
+    model_key = (model or "").strip().lower()
+
+    if provider_key == "openai" and model_key == "gpt-5.4-mini":
+        return {
+            "input_per_1m": _pricing_float_env("OPENAI_GPT54_MINI_INPUT_PER_1M", 0.75),
+            "output_per_1m": _pricing_float_env("OPENAI_GPT54_MINI_OUTPUT_PER_1M", 4.50),
+            "source": "openai:gpt-5.4-mini:standard",
+        }
+
+    if provider_key == "xai" and model_key.startswith("grok-4"):
+        input_rate = _pricing_float_env("XAI_GROK4_INPUT_PER_1M")
+        output_rate = _pricing_float_env("XAI_GROK4_OUTPUT_PER_1M")
+        return {
+            "input_per_1m": input_rate,
+            "output_per_1m": output_rate,
+            "source": "xai:grok-4:env" if input_rate is not None and output_rate is not None else "xai:grok-4:env_missing",
+        }
+
+    return {
+        "input_per_1m": None,
+        "output_per_1m": None,
+        "source": "unknown",
+    }
+
+
+def calculate_oracle_estimated_cost_usd(
+    provider: str,
+    model: str,
+    prompt_tokens=None,
+    completion_tokens=None,
+):
+    pricing = get_oracle_pricing_info(provider, model)
+    input_rate = pricing.get("input_per_1m")
+    output_rate = pricing.get("output_per_1m")
+
+    if input_rate is None or output_rate is None:
+        return None
+
+    prompt_count = _usage_int_or_none(prompt_tokens) or 0
+    completion_count = _usage_int_or_none(completion_tokens) or 0
+
+    cost = (
+        (prompt_count / 1_000_000) * input_rate
+        + (completion_count / 1_000_000) * output_rate
+    )
+    return round(cost, 8)
+
+
+
+
+def get_tts_pricing_info(provider: str, model: str) -> dict:
+    """
+    Phase 10.7 TTS pricing.
+
+    Estimated per-character tracker because voice_usage_events stores answer_chars,
+    not provider audio output tokens.
+    """
+    provider_key = (provider or "").strip().lower()
+    model_key = (model or "").strip().lower()
+
+    if provider_key == "openai" and model_key == "gpt-4o-mini-tts":
+        rate = _pricing_float_env("OPENAI_GPT4O_MINI_TTS_EFFECTIVE_PER_1M_CHARS")
+        return {
+            "effective_per_1m_chars": rate,
+            "source": "openai:gpt-4o-mini-tts:effective_env" if rate is not None else "openai:gpt-4o-mini-tts:effective_env_missing",
+        }
+
+    if provider_key == "openai" and model_key in {"tts-1", ""}:
+        rate = _pricing_float_env("OPENAI_TTS1_EFFECTIVE_PER_1M_CHARS", 15.00)
+        return {
+            "effective_per_1m_chars": rate,
+            "source": "openai:tts-1:effective",
+        }
+
+    if provider_key == "xai":
+        rate = _pricing_float_env("XAI_TTS_PRICE_PER_1M_CHARS", 4.20)
+        return {
+            "effective_per_1m_chars": rate,
+            "source": "xai:tts:chars",
+        }
+
+    return {
+        "effective_per_1m_chars": None,
+        "source": "unknown",
+    }
+
+
+def calculate_tts_estimated_cost_usd(provider: str, model: str, answer_chars=None):
+    pricing = get_tts_pricing_info(provider, model)
+    rate = pricing.get("effective_per_1m_chars")
+
+    if rate is None:
+        return None
+
+    char_count = _usage_int_or_none(answer_chars) or 0
+    cost = (char_count / 1_000_000) * rate
+    return round(cost, 8)
+
 
 
 def record_oracle_usage_event(
@@ -3281,7 +3406,8 @@ def get_admin_usage_summary(days: int = 30) -> dict:
                     AVG(tts_ms) AS avg_tts_ms,
                     AVG(total_ms) AS avg_total_ms,
                     MAX(total_ms) AS max_total_ms,
-                    COUNT(*) FILTER (WHERE audio_url_present = true) AS audio_url_events
+                    COUNT(*) FILTER (WHERE audio_url_present = true) AS audio_url_events,
+                    COALESCE(SUM(estimated_tts_cost_usd), 0) AS estimated_tts_cost_usd
                 FROM voice_usage_events
                 WHERE created_at >= %s
                 """,
@@ -3327,7 +3453,8 @@ def get_admin_usage_summary(days: int = 30) -> dict:
                     audio_url_present,
                     tts_provider,
                     tts_model,
-                    tts_voice
+                    tts_voice,
+                    estimated_tts_cost_usd
                 FROM voice_usage_events
                 WHERE created_at >= %s
                 ORDER BY total_ms DESC NULLS LAST
@@ -3476,7 +3603,8 @@ def get_admin_user_usage_report(user_id: str, days: int = 30) -> dict:
                     AVG(tts_ms) AS avg_tts_ms,
                     AVG(total_ms) AS avg_total_ms,
                     MAX(total_ms) AS max_total_ms,
-                    COUNT(*) FILTER (WHERE audio_url_present = true) AS audio_url_events
+                    COUNT(*) FILTER (WHERE audio_url_present = true) AS audio_url_events,
+                    COALESCE(SUM(estimated_tts_cost_usd), 0) AS estimated_tts_cost_usd
                 FROM voice_usage_events
                 WHERE user_id = %s
                   AND created_at >= %s
@@ -3502,7 +3630,8 @@ def get_admin_user_usage_report(user_id: str, days: int = 30) -> dict:
                     audio_url_present,
                     tts_provider,
                     tts_model,
-                    tts_voice
+                    tts_voice,
+                    estimated_tts_cost_usd
                 FROM voice_usage_events
                 WHERE user_id = %s
                   AND created_at >= %s
@@ -3911,7 +4040,7 @@ async def voice_tts_endpoint(request: Request):
                 tts_model=os.getenv("TTS_MODEL"),
                 tts_voice=voice,
                 metadata_json={
-                    "phase": "10.5",
+                    "phase": "10.7",
                     "event_source": "voice_tts_endpoint",
                     "reason": "empty_answer",
                 }
@@ -3927,13 +4056,27 @@ async def voice_tts_endpoint(request: Request):
 
         tts_ms = voice_stage_ms(tts_started_at, tts_finished_at)
         total_ms = voice_stage_ms(started_at, datetime.datetime.now())
+        answer_char_count = len(answer or "")
+        active_tts_provider = os.getenv("TTS_PROVIDER", "openai")
+        active_tts_model = os.getenv("TTS_MODEL") or os.getenv("OPENAI_TTS_MODEL") or get_openai_tts_model()
+        tts_pricing = get_tts_pricing_info(active_tts_provider, active_tts_model)
+        estimated_tts_cost_usd = calculate_tts_estimated_cost_usd(
+            provider=active_tts_provider,
+            model=active_tts_model,
+            answer_chars=answer_char_count,
+        )
+
         logger.info(
-            "VOICE_TTS_STAGE status=ok voice=%s tts_ms=%s total_ms=%s answer_chars=%s audio_url_present=%s",
+            "VOICE_TTS_STAGE status=ok voice=%s provider=%s model=%s tts_ms=%s total_ms=%s answer_chars=%s audio_url_present=%s estimated_tts_cost_usd=%s pricing_source=%s",
             voice,
+            active_tts_provider,
+            active_tts_model,
             tts_ms,
             total_ms,
-            len(answer or ""),
-            bool(audio_url)
+            answer_char_count,
+            bool(audio_url),
+            estimated_tts_cost_usd if estimated_tts_cost_usd is not None else "-",
+            tts_pricing.get("source")
         )
         record_voice_usage_event(
             **usage_context,
@@ -3943,14 +4086,17 @@ async def voice_tts_endpoint(request: Request):
             status="ok",
             tts_ms=tts_ms,
             total_ms=total_ms,
-            answer_chars=len(answer or ""),
+            answer_chars=answer_char_count,
             audio_url_present=bool(audio_url),
-            tts_provider=os.getenv("TTS_PROVIDER", "openai"),
-            tts_model=os.getenv("TTS_MODEL"),
+            tts_provider=active_tts_provider,
+            tts_model=active_tts_model,
             tts_voice=voice,
+            estimated_tts_cost_usd=estimated_tts_cost_usd,
             metadata_json={
-                "phase": "10.5",
+                "phase": "10.7",
                 "event_source": "voice_tts_endpoint",
+                "pricing_source": tts_pricing.get("source"),
+                "pricing_effective_per_1m_chars": tts_pricing.get("effective_per_1m_chars"),
             }
         )
 
@@ -6646,6 +6792,14 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         )
 
 
+        oracle_pricing = get_oracle_pricing_info(model_provider, model_name)
+        estimated_oracle_cost_usd = calculate_oracle_estimated_cost_usd(
+            provider=model_provider,
+            model=model_name,
+            prompt_tokens=actual_prompt_tokens,
+            completion_tokens=actual_completion_tokens,
+        )
+
         record_oracle_usage_event(
             session_id=session_id,
             user_id=user_id,
@@ -6669,13 +6823,16 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             answer_chars=len(raw_answer or ""),
             final_model_ms=_ms(final_model_started_at, final_model_finished_at),
             total_ms=_ms(ask_started_at, datetime.datetime.now()),
-            estimated_cost_usd=None,
+            estimated_cost_usd=estimated_oracle_cost_usd,
             metadata_json={
-                "phase": "10.5",
+                "phase": "10.7",
                 "event_source": "ask_oracle",
                 "memory_intent": memory_intent,
                 "source_model": source_model,
                 "response_word_cap": response_word_cap,
+                "pricing_source": oracle_pricing.get("source"),
+                "pricing_input_per_1m": oracle_pricing.get("input_per_1m"),
+                "pricing_output_per_1m": oracle_pricing.get("output_per_1m"),
             }
         )
 

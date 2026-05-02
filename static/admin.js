@@ -266,6 +266,7 @@ document.addEventListener("DOMContentLoaded", () => {
       renderMetricCard("Total tokens", formatNumber(oracleSummary.total_tokens ?? 0)),
       renderMetricCard("Avg Oracle time", formatMs(oracleSummary.avg_total_ms)),
       renderMetricCard("Voice stage events", formatNumber(voiceSummary.total_events ?? 0)),
+      renderMetricCard("Est. TTS cost", formatMoney(voiceSummary.estimated_tts_cost_usd || 0)),
       renderMetricCard("Avg transcription", formatMs(voiceSummary.avg_transcribe_ms)),
       renderMetricCard("Avg TTS", formatMs(voiceSummary.avg_tts_ms)),
       renderMetricCard("Est. cost", formatMoney(oracleSummary.estimated_cost_usd ?? 0))
@@ -479,6 +480,7 @@ document.addEventListener("DOMContentLoaded", () => {
         ${renderKV("Transcript chars", formatNumber(event.transcript_chars || 0))}
         ${renderKV("Answer chars", formatNumber(event.answer_chars || 0))}
         ${renderKV("Audio URL present", event.audio_url_present === true ? "yes" : event.audio_url_present === false ? "no" : "—")}
+        ${renderKV("Estimated TTS cost", formatMoney(event.estimated_tts_cost_usd || 0))}
       </div>
     `).join("");
   }
@@ -528,6 +530,7 @@ document.addEventListener("DOMContentLoaded", () => {
         ${renderKV("Avg voice stage time", formatMs(voiceSummary.avg_total_ms))}
         ${renderKV("Max voice stage time", formatMs(voiceSummary.max_total_ms))}
         ${renderKV("Audio URL events", formatNumber(voiceSummary.audio_url_events || 0))}
+        ${renderKV("Estimated TTS cost", formatMoney(voiceSummary.estimated_tts_cost_usd || 0))}
       </div>
 
       ${renderSummaryCard("Oracle by Deity", byDeity)}
