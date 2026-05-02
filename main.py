@@ -2651,10 +2651,10 @@ def compute_monetary_title(plan_code: str):
         "anon": "Pilgrim",
         "pilgrim": "Pilgrim",
         "seeker": "Seeker",
-        "magister": "Magister",
+        "magister": "Magus",
         "sovereign": "Sovereign",
-        "philosophus": "Philosophus",
-        "theoricus": "Theoricus"
+        "philosophus": "Philosopher",
+        "theoricus": "Theosopher"
     }
 
     return mapping.get((plan_code or "anon").lower(), "Pilgrim")
