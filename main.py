@@ -768,6 +768,62 @@ def record_voice_usage_event(
 
 
 
+
+def _env_provider_choice(name: str) -> Optional[str]:
+    value = (os.getenv(name) or "").strip().lower()
+    return value if value in {"openai", "xai"} else None
+
+
+def get_hathor_xai_model() -> str:
+    return (os.getenv("HATHOR_XAI_MODEL") or "grok-4").strip()
+
+
+def get_hathor_openai_model() -> str:
+    return (
+        os.getenv("HATHOR_OPENAI_MODEL")
+        or os.getenv("MOSES_MODEL_MINI")
+        or "gpt-5.4-mini"
+    ).strip()
+
+
+def get_hathor_lower_tier_plans() -> set[str]:
+    raw = os.getenv("HATHOR_LOWER_TIER_PLANS", "anon,pilgrim,seeker")
+    return {
+        item.strip().lower()
+        for item in raw.split(",")
+        if item.strip()
+    }
+
+
+def choose_hathor_provider(plan_code: Optional[str], input_mode: str = "text") -> tuple[str, str]:
+    """
+    Phase 10.8 Hathor provider router.
+
+    Defaults preserve production behavior:
+      Hathor -> xAI
+
+    Staging can test:
+      HATHOR_VOICE_PROVIDER=openai
+      HATHOR_LOWER_TIER_PROVIDER=openai
+      HATHOR_LOWER_TIER_PLANS=anon,pilgrim,seeker
+    """
+    plan = normalize_plan_code(plan_code)
+    mode = (input_mode or "text").strip().lower()
+
+    if mode == "voice":
+        voice_provider = _env_provider_choice("HATHOR_VOICE_PROVIDER")
+        if voice_provider:
+            return voice_provider, "voice_provider_env"
+
+    lower_provider = _env_provider_choice("HATHOR_LOWER_TIER_PROVIDER")
+    if lower_provider and plan in get_hathor_lower_tier_plans():
+        return lower_provider, "lower_tier_provider_env"
+
+    default_provider = _env_provider_choice("HATHOR_PROVIDER") or "xai"
+    return default_provider, "default_provider"
+
+
+
 async def get_oracle_response(
     question: str,
     deity: str,
@@ -777,6 +833,7 @@ async def get_oracle_response(
     max_output_tokens: Optional[int] = None,
     memory_intent="reflection",
     plan_code="anon",
+    input_mode: str = "text",
     selected_moses_model: Optional[str] = None,
     moses_route_reason: Optional[str] = None,
     moses_prompt_chars: Optional[int] = None
@@ -828,6 +885,58 @@ async def get_oracle_response(
         """
         
         
+        hathor_provider, hathor_route_reason = choose_hathor_provider(
+            plan_code=plan_code,
+            input_mode=input_mode
+        )
+
+        logger.info(
+            "HATHOR_PROVIDER_ROUTER provider=%s reason=%s deity=%s input_mode=%s plan_code=%s memory_intent=%s",
+            hathor_provider,
+            hathor_route_reason,
+            deity,
+            input_mode,
+            plan_code,
+            memory_intent
+        )
+
+        if hathor_provider == "openai":
+            hathor_model = get_hathor_openai_model()
+
+            try:
+                client = get_openai_client()
+                response = client.chat.completions.create(
+                    model=hathor_model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "system", "content": memory_block or ""},
+                        {"role": "user", "content": question}
+                    ],
+                    max_completion_tokens=max_output_tokens
+                )
+
+                raw_answer = response.choices[0].message.content
+
+                if force_mode == "recall":
+                    raw_answer = enforce_recall_structure(raw_answer, memory_block)
+
+                return {
+                    "answer": raw_answer,
+                    "source_model": "OpenAI",
+                    "model_provider": "openai",
+                    "model_name": hathor_model,
+                    "route_reason": hathor_route_reason,
+                    "token_usage": normalize_token_usage(getattr(response, "usage", None)),
+                }
+            except Exception as e:
+                raise ValueError(f"OpenAI Hathor API call failed: {type(e).__name__}: {str(e)}")
+
+        # Default/deep Hathor path remains xAI.
+        if not xai_api_key:
+            raise ValueError("XAI_API_KEY not set for Hathor oracle")
+
+        hathor_model = get_hathor_xai_model()
+
         try:
             async with httpx.AsyncClient(timeout=60) as client:
                 response = await client.post(
@@ -837,7 +946,7 @@ async def get_oracle_response(
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": "grok-4",
+                        "model": hathor_model,
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "system", "content": memory_block or ""},
@@ -857,7 +966,8 @@ async def get_oracle_response(
                     "answer": raw_answer,
                     "source_model": "xAI",
                     "model_provider": "xai",
-                    "model_name": "grok-4",
+                    "model_name": hathor_model,
+                    "route_reason": hathor_route_reason,
                     "token_usage": normalize_token_usage(data.get("usage")),
                 }
             else:
@@ -6721,6 +6831,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             max_output_tokens=response_max_tokens,
             memory_intent=memory_intent,
             plan_code=plan_code,
+            input_mode=input_mode,
             selected_moses_model=selected_moses_model,
             moses_route_reason=moses_route_reason,
             moses_prompt_chars=moses_prompt_chars
@@ -6732,6 +6843,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         model_provider = result.get("model_provider", "xai" if deity == "Hathor" else "openai")
         model_name = result.get("model_name", source_model)
         token_usage = result.get("token_usage") or {}
+        oracle_route_reason = result.get("route_reason")
 
         if not raw_answer:
             raw_answer = "The Oracle is silent."
@@ -6833,6 +6945,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
                 "pricing_source": oracle_pricing.get("source"),
                 "pricing_input_per_1m": oracle_pricing.get("input_per_1m"),
                 "pricing_output_per_1m": oracle_pricing.get("output_per_1m"),
+                "route_reason": oracle_route_reason,
             }
         )
 
@@ -6903,8 +7016,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
                     "text",
                     question,
                     raw_answer,
-                    "xai" if deity == "Hathor" else "openai",
-                    source_model,
+                    model_provider,
+                    model_name,
                     deity
                 )
             )
