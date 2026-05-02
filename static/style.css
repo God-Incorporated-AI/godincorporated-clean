@@ -691,3 +691,95 @@ main.admin-console {
   display: block;
 }
 
+
+
+/* Phase 10.9B: centered brand link and mobile temple title polish */
+.branding {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+.branding .brand-home-link {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
+  text-align: center;
+  text-decoration: none;
+  line-height: 1.15;
+}
+
+.branding nav {
+  position: absolute;
+  top: 0.75rem;
+  right: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.branding .temple-title {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.branding .temple-title::before,
+.branding .temple-title::after {
+  flex: 0 0 auto;
+  display: inline-block;
+  margin: 0;
+}
+
+@media (max-width: 520px) {
+  .branding {
+    padding-left: 3.25rem;
+    padding-right: 3.25rem;
+  }
+
+  .branding .brand-home-link {
+    font-size: clamp(1rem, 5vw, 1.35rem);
+  }
+
+  .branding nav {
+    top: 0.65rem;
+    right: 0.65rem;
+  }
+
+  .menu-toggle {
+    line-height: 1;
+  }
+
+  .branding .temple-title {
+    font-size: clamp(1.5rem, 7.5vw, 2rem);
+    gap: 0.35rem;
+  }
+
+  .branding .temple-title::before,
+  .branding .temple-title::after {
+    width: clamp(28px, 9vw, 40px);
+    height: clamp(28px, 9vw, 40px);
+  }
+}
+
+@media (max-width: 360px) {
+  .branding {
+    padding-left: 2.75rem;
+    padding-right: 2.75rem;
+  }
+
+  .branding .temple-title {
+    gap: 0.25rem;
+  }
+
+  .branding .temple-title::before,
+  .branding .temple-title::after {
+    width: 26px;
+    height: 26px;
+  }
+}
