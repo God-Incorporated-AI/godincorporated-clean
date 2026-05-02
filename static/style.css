@@ -711,13 +711,14 @@ main.admin-console {
   line-height: 1.15;
 }
 
-.branding nav {
+.branding .header-actions {
   position: absolute;
   top: 0.75rem;
   right: 1rem;
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  z-index: 20;
 }
 
 .branding .temple-title {
@@ -746,7 +747,7 @@ main.admin-console {
     font-size: clamp(1rem, 5vw, 1.35rem);
   }
 
-  .branding nav {
+  .branding .header-actions {
     top: 0.65rem;
     right: 0.65rem;
   }
@@ -782,4 +783,17 @@ main.admin-console {
     width: 26px;
     height: 26px;
   }
+}
+
+
+/* Phase 10.9B hotfix: keep hamburger dropdown controlled by JS */
+.branding .main-menu {
+  display: none;
+}
+
+.branding .main-menu.open,
+.branding .main-menu.show,
+.branding .main-menu.active,
+.branding .header-actions.open .main-menu {
+  display: flex;
 }
