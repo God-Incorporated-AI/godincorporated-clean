@@ -830,10 +830,10 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
   function planLabelFromCode(planCode) {
     const labels = {
       seeker: "Seeker",
-      magister: "Magister",
+      magister: "Magus",
       sovereign: "Sovereign",
-      philosophus: "Philosophus",
-      theoricus: "Theoricus"
+      philosophus: "Philosopher",
+      theoricus: "Theosopher"
     };
     return labels[planCode] || planCode || "Selected";
   }
