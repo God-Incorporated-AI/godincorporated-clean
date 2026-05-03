@@ -1042,3 +1042,31 @@ main.admin-console {
     margin-top: 1.5rem;
   }
 }
+
+
+/* Phase 10.9F: remove temple image marks and founder border */
+
+/* The old temple-mark images are no longer part of the mobile/launch title treatment. */
+.temple-mark,
+.temple-mark-left,
+.temple-mark-right {
+  display: none !important;
+}
+
+/* Keep the Temple title centered now that image marks are removed. */
+.temple-hero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+
+/* Remove the left-side founder card stripe that looked like a shadow/overlap on mobile. */
+.founder-welcome {
+  border-left: none !important;
+}
+
+/* Keep the About first content card clean below the CTA. */
+.about-page .founder-welcome {
+  box-shadow: none;
+}
