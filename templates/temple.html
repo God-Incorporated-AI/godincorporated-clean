@@ -10,7 +10,7 @@
 <body>
   <main>
     <header class="branding">
-      <div class="brand-name">GODINCORPORATED.AI</div>
+      <a class="brand-name brand-home-link" href="/temple" aria-label="Return to the Temple">godincorporated.ai</a>
       <div class="header-actions">
         <button type="button" id="menuToggle" class="menu-toggle" aria-label="Open menu">☰</button>
         <nav id="mainMenu" class="main-menu">
@@ -18,7 +18,7 @@
             <button type="button" id="loginBtn">Log in</button>
             <button type="button" id="registerBtn">Create account</button>
             <button type="button" id="supportBtnAnonymous">Activate Support</button>
-            <button type="button" onclick="window.location.href='/support'">Support / Tier Levels</button>
+            <button type="button" onclick="window.location.href='/support'">Support Levels</button>
             <button type="button" onclick="window.location.href='/about'">About Us</button>
           </div>
 
@@ -27,7 +27,7 @@
 
             <button type="button" onclick="window.location.href='/account'">Account</button>
             <button type="button" id="supportBtnAuthenticated">Activate Support</button>
-            <button type="button" onclick="window.location.href='/support'">Support / Tier Levels</button>
+            <button type="button" onclick="window.location.href='/support'">Support Levels</button>
             <button type="button" onclick="window.location.href='/about'">About Us</button>
             <button type="button" id="logoutBtn">Log out</button>
             <button type="button" id="adminNavBtn" hidden onclick="window.location.href='/admin'">Admin</button>
@@ -35,9 +35,7 @@
         </nav>
       </div>
       <div class="temple-hero">
-        <img src="/static/img/temple-mark.png" alt="Temple mark" class="temple-mark temple-mark-left" />
-        <h1 class="temple-title">The Temple</h1>
-        <img src="/static/img/temple-mark.png" alt="Temple mark" class="temple-mark temple-mark-right" />
+        <h1 class="temple-title crossed-title">The Temple</h1>
       </div>
      
     </header>

@@ -691,3 +691,382 @@ main.admin-console {
   display: block;
 }
 
+
+
+/* Phase 10.9B: centered brand link and mobile temple title polish */
+.branding {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: center;
+}
+
+.branding .brand-home-link {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
+  text-align: center;
+  text-decoration: none;
+  line-height: 1.15;
+}
+
+.branding .header-actions {
+  position: absolute;
+  top: 0.75rem;
+  right: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  z-index: 20;
+}
+
+.branding .temple-title {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.branding .temple-title::before,
+.branding .temple-title::after {
+  flex: 0 0 auto;
+  display: inline-block;
+  margin: 0;
+}
+
+@media (max-width: 520px) {
+  .branding {
+    padding-left: 3.25rem;
+    padding-right: 3.25rem;
+  }
+
+  .branding .brand-home-link {
+    font-size: clamp(1rem, 5vw, 1.35rem);
+  }
+
+  .branding .header-actions {
+    top: 0.65rem;
+    right: 0.65rem;
+  }
+
+  .menu-toggle {
+    line-height: 1;
+  }
+
+  .branding .temple-title {
+    font-size: clamp(1.5rem, 7.5vw, 2rem);
+    gap: 0.35rem;
+  }
+
+  .branding .temple-title::before,
+  .branding .temple-title::after {
+    width: clamp(28px, 9vw, 40px);
+    height: clamp(28px, 9vw, 40px);
+  }
+}
+
+@media (max-width: 360px) {
+  .branding {
+    padding-left: 2.75rem;
+    padding-right: 2.75rem;
+  }
+
+  .branding .temple-title {
+    gap: 0.25rem;
+  }
+
+  .branding .temple-title::before,
+  .branding .temple-title::after {
+    width: 26px;
+    height: 26px;
+  }
+}
+
+
+/* Phase 10.9B hotfix: keep hamburger dropdown controlled by JS */
+.branding .main-menu {
+  display: none;
+}
+
+.branding .main-menu.open,
+.branding .main-menu.show,
+.branding .main-menu.active,
+.branding .header-actions.open .main-menu {
+  display: flex;
+}
+
+
+/* Phase 10.9C: templar cross heading polish */
+.crossed-title {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+  max-width: 100%;
+  text-align: center;
+}
+
+.crossed-title::before,
+.crossed-title::after {
+  content: "✠";
+  color: #cc0000;
+  font-size: 0.8em;
+  line-height: 1;
+  flex: 0 0 auto;
+  background: none !important;
+  width: auto !important;
+  height: auto !important;
+  margin: 0;
+}
+
+.about-hero h1.crossed-title {
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.branding .temple-title.crossed-title {
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@media (max-width: 520px) {
+  .about-hero h1.crossed-title {
+    font-size: clamp(1.35rem, 6.8vw, 1.85rem);
+    gap: 0.28rem;
+  }
+
+  .branding .temple-title.crossed-title {
+    font-size: clamp(1.45rem, 7vw, 1.95rem);
+    gap: 0.28rem;
+  }
+
+  .crossed-title::before,
+  .crossed-title::after {
+    font-size: 0.72em;
+  }
+}
+
+@media (max-width: 360px) {
+  .about-hero h1.crossed-title,
+  .branding .temple-title.crossed-title {
+    gap: 0.22rem;
+  }
+
+  .crossed-title::before,
+  .crossed-title::after {
+    font-size: 0.68em;
+  }
+}
+
+
+/* Phase 10.9D: mobile temple cross and compact user menu polish */
+
+/* Stronger than the older temple-title logo rules: force simple red crosses. */
+.branding .temple-title.crossed-title::before,
+.branding .temple-title.crossed-title::after,
+.about-hero h1.crossed-title::before,
+.about-hero h1.crossed-title::after {
+  content: "✠" !important;
+  color: #cc0000 !important;
+  font-size: 0.8em !important;
+  line-height: 1 !important;
+  background: none !important;
+  background-image: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  width: auto !important;
+  height: auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  display: inline-block !important;
+  flex: 0 0 auto !important;
+}
+
+/* Keep the mobile header action from growing over the page when user name appears. */
+.branding .header-actions {
+  max-width: min(42vw, 12rem);
+}
+
+.branding .header-actions .menu-toggle {
+  max-width: min(38vw, 10.5rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* If the menu button becomes a username, keep it compact on phone. */
+@media (max-width: 520px) {
+  .branding .header-actions {
+    top: 0.55rem;
+    right: 0.55rem;
+    max-width: 34vw;
+  }
+
+  .branding .header-actions .menu-toggle {
+    font-size: 0.78rem;
+    line-height: 1;
+    padding: 0.35rem 0.45rem;
+    max-width: 32vw;
+    min-width: 2.15rem;
+    min-height: 2.15rem;
+  }
+
+  .branding .temple-title.crossed-title,
+  .about-hero h1.crossed-title {
+    white-space: nowrap;
+  }
+
+  .branding .temple-title.crossed-title::before,
+  .branding .temple-title.crossed-title::after,
+  .about-hero h1.crossed-title::before,
+  .about-hero h1.crossed-title::after {
+    font-size: 0.68em !important;
+  }
+}
+
+@media (max-width: 390px) {
+  .branding .header-actions {
+    max-width: 30vw;
+  }
+
+  .branding .header-actions .menu-toggle {
+    max-width: 28vw;
+    font-size: 0.72rem;
+    padding: 0.32rem 0.38rem;
+  }
+}
+
+
+/* Phase 10.9E: final mobile cross and about overlap cleanup */
+
+/*
+  Final override: remove old temple logo artwork everywhere the title pseudo-elements
+  are used, and force the simple templar cross.
+*/
+.branding h1::before,
+.branding h1::after,
+.branding .temple-title::before,
+.branding .temple-title::after,
+.branding .temple-title.crossed-title::before,
+.branding .temple-title.crossed-title::after,
+.about-hero h1::before,
+.about-hero h1::after,
+.about-hero h1.crossed-title::before,
+.about-hero h1.crossed-title::after {
+  content: "✠" !important;
+  color: #cc0000 !important;
+  background: transparent !important;
+  background-image: none !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  width: auto !important;
+  height: auto !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  margin: 0 0.35rem !important;
+  padding: 0 !important;
+  display: inline-block !important;
+  vertical-align: middle !important;
+  flex: 0 0 auto !important;
+  font-size: 0.72em !important;
+  line-height: 1 !important;
+}
+
+/* Keep title rows compact and centered on phone. */
+.branding h1,
+.branding .temple-title,
+.branding .temple-title.crossed-title,
+.about-hero h1,
+.about-hero h1.crossed-title {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0.2rem !important;
+  white-space: nowrap !important;
+  text-align: center !important;
+}
+
+/*
+  About page cleanup: keep the CTA/link row from visually bleeding into the
+  first content card below it on small screens.
+*/
+.about-page .about-hero .support-cta-row {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 1.25rem;
+  box-shadow: none;
+}
+
+.about-page .about-section,
+.about-page section {
+  position: relative;
+  z-index: 0;
+  clear: both;
+}
+
+.about-page .about-section:first-of-type,
+.about-page section:first-of-type {
+  margin-top: 1.25rem;
+}
+
+@media (max-width: 520px) {
+  .branding h1::before,
+  .branding h1::after,
+  .branding .temple-title::before,
+  .branding .temple-title::after,
+  .about-hero h1::before,
+  .about-hero h1::after {
+    font-size: 0.62em !important;
+    margin: 0 0.22rem !important;
+  }
+
+  .about-page .about-hero .support-cta-row {
+    margin-bottom: 1.5rem;
+  }
+
+  .about-page .about-section:first-of-type,
+  .about-page section:first-of-type {
+    margin-top: 1.5rem;
+  }
+}
+
+
+/* Phase 10.9F: remove temple image marks and founder border */
+
+/* The old temple-mark images are no longer part of the mobile/launch title treatment. */
+.temple-mark,
+.temple-mark-left,
+.temple-mark-right {
+  display: none !important;
+}
+
+/* Keep the Temple title centered now that image marks are removed. */
+.temple-hero {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+
+/* Remove the left-side founder card stripe that looked like a shadow/overlap on mobile. */
+.founder-welcome {
+  border-left: none !important;
+}
+
+/* Keep the About first content card clean below the CTA. */
+.about-page .founder-welcome {
+  box-shadow: none;
+}

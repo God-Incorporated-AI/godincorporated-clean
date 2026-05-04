@@ -10,7 +10,7 @@
 <body>
   <main class="account-page">
     <header class="branding account-hero">
-      <div class="brand-name">GODINCORPORATED.AI</div>
+      <a class="brand-name brand-home-link" href="/temple" aria-label="Return to the Temple">godincorporated.ai</a>
       <div class="header-actions">
         <button type="button" id="menuToggle" class="menu-toggle" aria-label="Open menu">☰</button>
         <nav id="mainMenu" class="main-menu">
@@ -18,7 +18,7 @@
             <button type="button" data-nav="/temple">Log in</button>
             <button type="button" data-nav="/temple">Create account</button>
             <button type="button" id="supportBtnAnonymous">Activate Support</button>
-            <button type="button" data-nav="/support">Support / Tier Levels</button>
+            <button type="button" data-nav="/support">Support Levels</button>
             <button type="button" data-nav="/about">About Us</button>
           </div>
 
@@ -26,7 +26,7 @@
             <div id="userInfo">Welcome, <span id="userDisplayName"></span></div>
             <button type="button" data-nav="/account">Account</button>
             <button type="button" id="supportBtnAuthenticated">Activate Support</button>
-            <button type="button" data-nav="/support">Support / Tier Levels</button>
+            <button type="button" data-nav="/support">Support Levels</button>
             <button type="button" data-nav="/about">About Us</button>
             <button type="button" id="logoutBtn">Log out</button>
             <button type="button" id="adminNavBtn" hidden data-nav="/admin">Admin</button>
@@ -39,8 +39,7 @@
         View your path, current access, support status, and continuity details.
       </div>
       <div class="support-cta-row">
-        <a class="button-link secondary" href="/temple">Return to the Temple</a>
-        <a class="button-link" href="/support">Support / Tier Levels</a>
+        <a class="button-link" href="/support">Support Levels</a>
       </div>
     </header>
 
