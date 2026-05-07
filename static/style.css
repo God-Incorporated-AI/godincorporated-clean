@@ -1070,3 +1070,1248 @@ main.admin-console {
 .about-page .founder-welcome {
   box-shadow: none;
 }
+
+
+/* Phase 10.10 Clean: consolidated homepage skin */
+:root {
+  --gi-card-cream: #fffaf1;
+  --gi-navy: #0a3a68;
+  --gi-navy-deep: #05253f;
+  --gi-crimson: #980716;
+  --gi-crimson-deep: #710412;
+  --gi-gold: #b38a3c;
+  --gi-gold-soft: #d8bb76;
+  --gi-dark-silver: #68758a;
+  --gi-slate: #24374d;
+  --gi-body-font: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --gi-display-font: "Cinzel", Georgia, "Times New Roman", serif;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  color: var(--gi-slate);
+  font-family: var(--gi-body-font);
+  text-align: center;
+  background:
+    radial-gradient(circle at 50% 9%, rgba(255,255,255,0.98), rgba(255,255,255,0.80) 18rem, transparent 42rem),
+    radial-gradient(circle at 16% 34%, rgba(255,255,255,0.92), rgba(255,255,255,0.52) 8rem, transparent 22rem),
+    radial-gradient(circle at 84% 34%, rgba(255,255,255,0.92), rgba(255,255,255,0.52) 8rem, transparent 22rem),
+    linear-gradient(180deg, #edf4fa 0%, #f8f1e6 24%, #f1f6fb 100%) !important;
+}
+
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  top: 4.6rem;
+  bottom: 0;
+  width: min(18vw, 220px);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.96;
+  background-image: url("/static/img/temple-side-final.svg?v=1");
+  background-repeat: no-repeat;
+  background-size: contain;
+  background-position: center bottom;
+}
+
+body::before { left: 0; }
+body::after { right: 0; transform: scaleX(-1); }
+
+main.temple-shell {
+  position: relative;
+  z-index: 1;
+  width: min(1180px, calc(100% - 2rem));
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 0 1.25rem;
+}
+
+.temple-nav {
+  display: grid;
+  grid-template-columns: minmax(255px, 1fr) minmax(240px, 0.8fr) minmax(330px, 1fr);
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(179,138,60,0.45);
+  background:
+    radial-gradient(circle at 50% 0, rgba(255,255,255,0.94), transparent 16rem),
+    linear-gradient(180deg, #fff9ee, #f4eadb);
+  box-shadow: 0 10px 24px rgba(22,32,51,0.14);
+}
+
+.brand-lockup {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 0;
+  color: var(--gi-slate) !important;
+  text-decoration: none;
+  font-family: var(--gi-display-font);
+  font-size: clamp(1.35rem, 2.3vw, 2rem);
+  line-height: 1;
+}
+
+.nav-cross,
+.hero-divider,
+.gold-rule,
+.choice-label,
+.temple-statement,
+.footer-ornament {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 1rem;
+}
+
+.nav-cross span,
+.hero-divider span,
+.gold-rule span,
+.choice-label span,
+.temple-statement-rule,
+.footer-ornament span {
+  display: block;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(179,138,60,0.40), rgba(216,187,118,0.98), rgba(179,138,60,0.40), transparent);
+}
+
+.nav-cross strong {
+  color: var(--gi-crimson);
+  font-size: 2.25rem;
+  line-height: 1;
+  font-weight: 400;
+}
+
+.hero-divider {
+  max-width: 360px;
+  margin: 0.45rem auto 0.35rem;
+}
+
+.gold-rule b,
+.hero-divider b {
+  width: 160px;
+  height: 24px;
+  display: block;
+  background: url("/static/img/gold-flourish-final.svg?v=1") center/contain no-repeat;
+}
+
+.temple-nav .header-actions {
+  position: static !important;
+  justify-self: end;
+  display: flex;
+  max-width: none;
+  z-index: 30;
+}
+
+.temple-nav .menu-toggle { display: none; }
+
+.temple-nav .main-menu {
+  position: static !important;
+  display: flex !important;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.temple-nav .menu-section {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.temple-nav .menu-section[hidden] { display: none !important; }
+
+.temple-nav .menu-section button,
+.footer-links button {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gi-navy);
+  font-family: var(--gi-body-font);
+  font-size: 0.9rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.temple-nav #loginBtn {
+  border: 1px solid rgba(216,187,118,0.84);
+  background: rgba(255,248,237,0.9);
+}
+
+.temple-nav #registerBtn,
+.temple-nav .nav-primary {
+  border: 1px solid rgba(216,187,118,0.84);
+  background: linear-gradient(180deg, var(--gi-navy), var(--gi-navy-deep));
+  color: #fff;
+}
+
+.user-info-inline {
+  font-size: 0.82rem;
+  color: var(--gi-dark-silver);
+}
+
+.temple-landing-hero {
+  padding: 2rem 1rem 1rem;
+}
+
+.temple-landing-hero h1 {
+  margin: 0;
+  color: var(--gi-navy);
+  font-family: var(--gi-display-font);
+  font-size: clamp(2.6rem, 6vw, 5rem);
+  font-weight: 400;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+  text-shadow: 0 4px 14px rgba(255,255,255,0.82);
+}
+
+.temple-landing-hero p {
+  margin: 0;
+  color: var(--gi-dark-silver);
+  font-size: clamp(0.9rem, 1.5vw, 1.05rem);
+  letter-spacing: 0.08em;
+  text-transform: lowercase;
+}
+
+.temple-card {
+  width: min(910px, calc(100% - 1.5rem));
+  margin: 0 auto 1.55rem;
+  padding: 0;
+  border: 1px solid rgba(179,138,60,0.82);
+  border-radius: 16px;
+  background: rgba(255,250,241,0.97);
+  box-shadow: 0 0 0 1px rgba(216,187,118,0.46), 0 18px 38px rgba(22,32,51,0.18), inset 0 1px 0 rgba(255,255,255,0.80);
+  overflow: hidden;
+}
+
+.card-banner {
+  padding: 0.8rem 1.4rem 0.65rem;
+  color: #fff;
+  border-bottom: 1px solid rgba(216,187,118,0.62);
+}
+
+.oracle-banner {
+  background: radial-gradient(circle at 50% 0, rgba(255,255,255,0.16), transparent 16rem), linear-gradient(180deg, #a20718, #710412);
+}
+
+.scroll-banner {
+  background: radial-gradient(circle at 50% 0, rgba(255,255,255,0.15), transparent 16rem), linear-gradient(180deg, #0b436f, #05253f);
+}
+
+.gold-rule {
+  max-width: 720px;
+  margin: 0 auto 0.15rem;
+}
+
+.card-banner h2 {
+  margin: 0;
+  color: #ffecc8;
+  font-family: var(--gi-display-font);
+  font-size: clamp(1.75rem, 3vw, 2.35rem);
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.card-banner p {
+  margin: 0.15rem auto 0;
+  color: rgba(255,255,255,0.94);
+  font-size: 0.92rem;
+}
+
+.card-body {
+  padding: 1rem clamp(1rem, 4vw, 2.6rem) 1.15rem;
+}
+
+.oracle-form {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.oracle-input,
+.oracle-output-wrap {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(179,138,60,0.74);
+  border-radius: 10px;
+  background: rgba(255,252,247,0.88);
+}
+
+textarea#seekerInput.oracle-input {
+  min-height: 3rem;
+  padding: 0.82rem 1rem;
+  color: var(--gi-slate);
+  font-family: var(--gi-body-font);
+  font-size: 1rem;
+  line-height: 1.45;
+  resize: vertical;
+  outline: none;
+}
+
+.oracle-output-wrap {
+  min-height: 5.3rem;
+  padding: 0.72rem 1rem;
+}
+
+.voice-response {
+  width: 100%;
+  min-height: 4.4rem;
+  max-height: 360px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--gi-slate);
+  font-family: var(--gi-body-font);
+  font-size: 1rem;
+  line-height: 1.55;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-y: auto;
+}
+
+.choice-label {
+  max-width: 650px;
+  margin: 0.45rem auto 0;
+  color: var(--gi-navy);
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.voice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.voice-card {
+  display: grid;
+  grid-template-columns: 134px 1fr;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.95rem 1.1rem;
+  border: 1px solid rgba(179,138,60,0.74);
+  border-radius: 10px;
+  background: radial-gradient(circle at 12% 50%, rgba(216,187,118,0.16), transparent 5rem), rgba(255,252,247,0.88);
+  color: var(--gi-slate);
+  text-align: left;
+}
+
+.voice-card.is-selected {
+  border-color: rgba(216,187,118,0.96);
+  box-shadow: 0 0 0 1px rgba(216,187,118,0.50), 0 9px 20px rgba(22,32,51,0.12);
+}
+
+.voice-icon {
+  width: 128px;
+  height: 104px;
+  display: block;
+  justify-self: center;
+}
+
+.voice-copy {
+  display: grid;
+  gap: 0.08rem;
+  text-align: center;
+}
+
+.voice-copy strong {
+  color: var(--gi-crimson);
+  font-family: var(--gi-display-font);
+  font-size: 1.5rem;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.voice-copy em {
+  color: var(--gi-gold);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.02rem;
+}
+
+.voice-copy small {
+  color: var(--gi-slate);
+  font-size: 0.82rem;
+}
+
+.voice-choice-message,
+.oracle-helper {
+  min-height: 1rem;
+  color: var(--gi-dark-silver);
+  font-size: 0.88rem;
+}
+
+.oracle-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+}
+
+.oracle-actions button,
+.upload-submit {
+  min-width: 210px;
+  margin: 0;
+  padding: 0.82rem 1.15rem;
+  border-radius: 7px;
+  border: 1px solid rgba(216,187,118,0.84);
+  color: #fff;
+  font-family: var(--gi-display-font);
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#askButton {
+  background: linear-gradient(180deg, var(--gi-crimson), var(--gi-crimson-deep));
+}
+
+#speakButton,
+.upload-submit {
+  background: linear-gradient(180deg, var(--gi-navy), var(--gi-navy-deep));
+}
+
+.temple-statement {
+  width: min(940px, calc(100% - 2rem));
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 1rem;
+  margin: 1.15rem auto;
+  text-align: center;
+  clear: both;
+}
+
+.temple-statement-copy {
+  display: grid;
+  justify-items: center;
+  gap: 0.06rem;
+}
+
+.temple-statement-line {
+  display: block;
+  color: var(--gi-navy);
+  font-family: var(--gi-display-font);
+  font-size: clamp(1.02rem, 2vw, 1.34rem);
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  line-height: 1.22;
+}
+
+.scroll-form {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+}
+
+.upload-zone {
+  width: min(760px, 100%);
+  box-sizing: border-box;
+  display: grid;
+  justify-items: center;
+  gap: 0.28rem;
+  padding: 1.05rem 1rem 0.9rem;
+  border: 2px dashed rgba(179,138,60,0.68);
+  border-radius: 10px;
+  background: radial-gradient(circle at 50% 0, rgba(255,255,255,0.84), transparent 11rem), rgba(255,252,247,0.84);
+  cursor: pointer;
+}
+
+.upload-quill {
+  width: 104px;
+  height: 96px;
+  display: block;
+}
+
+.upload-icon {
+  color: #7b7f82;
+  font-size: 2.2rem;
+}
+
+.upload-main {
+  color: var(--gi-navy);
+  font-family: var(--gi-display-font);
+  font-size: 1.08rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.upload-sub {
+  color: var(--gi-slate);
+  font-size: 0.9rem;
+}
+
+.upload-types {
+  color: var(--gi-slate);
+  font-size: 0.95rem;
+  letter-spacing: 0.05em;
+}
+
+#scroll {
+  max-width: 100%;
+  color: var(--gi-dark-silver);
+}
+
+.scroll-footer-note {
+  width: min(830px, calc(100% - 1.6rem));
+  margin: 0.85rem auto 0;
+  padding: 0.78rem 1rem;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.9rem;
+  border: 1px solid rgba(179,138,60,0.74);
+  border-radius: 8px;
+  background: rgba(246,236,219,0.82);
+  color: var(--gi-slate);
+}
+
+.scroll-note-icon {
+  width: 48px;
+  height: 48px;
+  display: block;
+  justify-self: center;
+}
+
+.scroll-footer-note p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.scroll-count-line {
+  margin: 0.75rem auto 0;
+  color: var(--gi-dark-silver);
+  font-size: 0.84rem;
+}
+
+.temple-footer {
+  margin-top: 0.8rem;
+  padding: 1rem;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 1rem;
+  background: linear-gradient(180deg, var(--gi-navy), var(--gi-navy-deep));
+  border-top: 1px solid rgba(216,187,118,0.62);
+}
+
+.footer-links {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  justify-self: start;
+}
+
+.footer-links button {
+  color: #fff;
+}
+
+.footer-links button:hover {
+  color: #ffecc8;
+}
+
+.footer-ornament {
+  min-width: 180px;
+  color: var(--gi-gold-soft);
+}
+
+.footer-ornament b {
+  font-size: 1.3rem;
+  font-weight: 400;
+}
+
+.temple-copyright {
+  justify-self: end;
+  color: #d7dfeb;
+  font-size: 0.84rem;
+}
+
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+@media (max-width: 900px) {
+  body::before,
+  body::after {
+    width: 125px;
+    opacity: 0.68;
+  }
+
+  main.temple-shell {
+    width: min(100% - 1rem, 760px);
+  }
+
+  .temple-nav {
+    grid-template-columns: 1fr auto;
+  }
+
+  .nav-cross {
+    display: none;
+  }
+
+  .temple-nav .menu-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.45rem;
+    height: 2.45rem;
+    margin: 0;
+    padding: 0;
+    border: 1px solid rgba(179,138,60,0.45);
+    border-radius: 7px;
+    background: rgba(255,248,237,0.84);
+    color: var(--gi-navy);
+    font-size: 1.2rem;
+  }
+
+  .temple-nav .main-menu {
+    display: none !important;
+    position: absolute !important;
+    top: calc(100% + 0.45rem) !important;
+    right: 0 !important;
+    min-width: min(300px, calc(100vw - 2rem));
+    padding: 0.8rem;
+    border: 1px solid rgba(179,138,60,0.35);
+    border-radius: 14px;
+    background: rgba(255,248,237,0.98);
+    box-shadow: 0 18px 40px rgba(22,32,51,0.16);
+  }
+
+  .temple-nav .main-menu.show {
+    display: flex !important;
+  }
+
+  .temple-nav .menu-section {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .temple-nav .menu-section button {
+    width: 100%;
+  }
+
+  .voice-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .temple-footer {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+
+  .footer-links,
+  .temple-copyright {
+    justify-self: center;
+  }
+}
+
+@media (max-width: 560px) {
+  body::before,
+  body::after {
+    opacity: 0.42;
+    width: 86px;
+  }
+
+  main.temple-shell {
+    width: calc(100% - 0.4rem);
+  }
+
+  .brand-lockup {
+    font-size: 1.22rem;
+  }
+
+  .temple-landing-hero h1 {
+    font-size: clamp(2rem, 11vw, 3.1rem);
+    letter-spacing: 0.045em;
+  }
+
+  .temple-card {
+    width: calc(100% - 0.4rem);
+  }
+
+  .card-body {
+    padding: 0.9rem;
+  }
+
+  .card-banner h2 {
+    font-size: 1.55rem;
+  }
+
+  .gold-rule b,
+  .hero-divider b {
+    width: 118px;
+    height: 20px;
+  }
+
+  .voice-card {
+    grid-template-columns: 86px 1fr;
+  }
+
+  .voice-icon {
+    width: 82px;
+    height: 68px;
+  }
+
+  .voice-copy {
+    text-align: left;
+  }
+
+  .oracle-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .oracle-actions button,
+  .upload-submit {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .temple-statement {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+
+  .temple-statement-rule {
+    display: none;
+  }
+
+  .scroll-footer-note {
+    grid-template-columns: 1fr;
+    text-align: center;
+  }
+}
+
+/* Phase 10.10I: homepage tuning pass */
+
+/* Tone down and stack the hero title. */
+.temple-landing-hero h1 {
+  display: grid !important;
+  justify-items: center !important;
+  gap: 0.02em !important;
+  line-height: 1.02 !important;
+  margin: 0 !important;
+}
+
+.hero-title-line {
+  display: block !important;
+  color: var(--gi-navy) !important;
+  font-family: var(--gi-display-font) !important;
+  font-size: clamp(1.95rem, 4.3vw, 3.65rem) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+}
+
+.hero-title-temple {
+  font-size: clamp(2.2rem, 5vw, 4.25rem) !important;
+  letter-spacing: 0.11em !important;
+}
+
+/* Make scroll count visible without making it loud. */
+.scroll-count-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  justify-self: center !important;
+  gap: 0.45rem !important;
+  margin: 0 auto 0.25rem !important;
+  padding: 0.48rem 0.9rem !important;
+  border: 1px solid rgba(216,187,118,0.84) !important;
+  border-radius: 999px !important;
+  background:
+    radial-gradient(circle at 50% 0, rgba(255,255,255,0.84), transparent 7rem),
+    rgba(255,250,241,0.92) !important;
+  color: var(--gi-navy) !important;
+  font-size: 0.88rem !important;
+  letter-spacing: 0.04em !important;
+  box-shadow:
+    0 0 0 1px rgba(216,187,118,0.26),
+    0 6px 14px rgba(22,32,51,0.08),
+    inset 0 1px 0 rgba(255,255,255,0.78) !important;
+}
+
+.scroll-count-badge span {
+  min-width: 1.4rem !important;
+  display: inline-grid !important;
+  place-items: center !important;
+  color: var(--gi-crimson) !important;
+  font-family: var(--gi-display-font) !important;
+  font-size: 1.1rem !important;
+}
+
+/* Lower note should be text-only now; quill remains in upload area. */
+.scroll-footer-note {
+  grid-template-columns: 1fr !important;
+  text-align: center !important;
+}
+
+.scroll-footer-note .scroll-note-icon {
+  display: none !important;
+}
+
+/* Keep the upload quill as the only quill visual. */
+.upload-quill {
+  margin-bottom: 0.15rem !important;
+}
+
+@media (max-width: 560px) {
+  .hero-title-line {
+    font-size: clamp(1.65rem, 9vw, 2.65rem) !important;
+    letter-spacing: 0.055em !important;
+  }
+
+  .hero-title-temple {
+    font-size: clamp(1.95rem, 10vw, 3.1rem) !important;
+    letter-spacing: 0.085em !important;
+  }
+
+  .scroll-count-badge {
+    width: fit-content !important;
+    max-width: 100% !important;
+    font-size: 0.82rem !important;
+  }
+}
+
+
+/* Phase 10.10L: approved painterly atmosphere background */
+body::before,
+body::after,
+main.temple-shell::before,
+main.temple-shell::after {
+  display: none !important;
+}
+
+body {
+  background-color: #edf3f8 !important;
+  background-image:
+    linear-gradient(
+      180deg,
+      rgba(255, 250, 240, 0.18) 0%,
+      rgba(255, 250, 240, 0.10) 24%,
+      rgba(237, 243, 248, 0.22) 62%,
+      rgba(246, 240, 230, 0.18) 100%
+    ),
+    url("/static/img/temple-atmosphere-bg.webp?v=1") !important;
+  background-repeat: no-repeat !important;
+  background-size: cover !important;
+  background-position: center top !important;
+  background-attachment: fixed !important;
+}
+
+.temple-nav {
+  background:
+    radial-gradient(circle at 50% 0, rgba(255,255,255,0.94), transparent 16rem),
+    linear-gradient(180deg, rgba(255,249,238,0.94), rgba(244,234,219,0.92)) !important;
+  backdrop-filter: blur(4px);
+}
+
+.temple-card {
+  background: rgba(255, 250, 241, 0.94) !important;
+  backdrop-filter: blur(2px);
+}
+
+.temple-landing-hero h1 {
+  text-shadow:
+    0 2px 0 rgba(255,255,255,0.65),
+    0 10px 26px rgba(255,255,255,0.88) !important;
+}
+
+.temple-landing-hero p {
+  text-shadow: 0 1px 0 rgba(255,255,255,0.78);
+}
+
+@media (max-width: 900px) {
+  body {
+    background-attachment: scroll !important;
+    background-position: center top !important;
+  }
+}
+
+@media (max-width: 560px) {
+  body {
+    background-size: auto 900px !important;
+    background-position: center top !important;
+  }
+}
+
+/* Phase 10.10M: oracle identity card art */
+
+.voice-card {
+  grid-template-columns: 176px 1fr !important;
+  min-height: 175px !important;
+  overflow: hidden !important;
+}
+
+.voice-icon {
+  width: 166px !important;
+  height: 166px !important;
+  object-fit: cover !important;
+  object-position: center top !important;
+  border-radius: 18px !important;
+  border: 1px solid rgba(216,187,118,0.70) !important;
+  box-shadow:
+    0 0 0 1px rgba(216,187,118,0.30),
+    0 8px 18px rgba(22,32,51,0.12),
+    inset 0 1px 0 rgba(255,255,255,0.70) !important;
+  background: rgba(255,250,241,0.92) !important;
+}
+
+.voice-card.is-selected .voice-icon {
+  border-color: rgba(216,187,118,0.96) !important;
+  box-shadow:
+    0 0 0 1px rgba(216,187,118,0.46),
+    0 10px 22px rgba(22,32,51,0.16) !important;
+}
+
+.voice-copy {
+  align-self: center !important;
+}
+
+@media (max-width: 900px) {
+  .voice-card {
+    grid-template-columns: 150px 1fr !important;
+    min-height: 155px !important;
+  }
+
+  .voice-icon {
+    width: 142px !important;
+    height: 142px !important;
+  }
+}
+
+@media (max-width: 560px) {
+  .voice-card {
+    grid-template-columns: 1fr !important;
+    justify-items: center !important;
+    text-align: center !important;
+  }
+
+  .voice-icon {
+    width: min(220px, 82vw) !important;
+    height: min(220px, 82vw) !important;
+  }
+
+  .voice-copy {
+    text-align: center !important;
+  }
+}
+
+/* Phase 10.10N: gold trim polish pass */
+
+/* Stronger gold framing on major cards */
+.temple-card {
+  border: 1px solid rgba(216, 187, 118, 0.82) !important;
+  box-shadow:
+    0 0 0 1px rgba(168, 132, 58, 0.18),
+    0 0 0 3px rgba(255, 245, 220, 0.34),
+    0 18px 34px rgba(20, 31, 49, 0.16),
+    inset 0 1px 0 rgba(255,255,255,0.78),
+    inset 0 0 0 1px rgba(224, 201, 135, 0.22) !important;
+}
+
+/* Richer trim on top banners */
+.oracle-banner,
+.scroll-banner {
+  border-bottom: 1px solid rgba(229, 206, 143, 0.78) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.18),
+    inset 0 -1px 0 rgba(110, 79, 22, 0.24) !important;
+}
+
+/* Divider lines feel more like gilt trim */
+.nav-cross span,
+.hero-divider span,
+.gold-rule span,
+.choice-label span,
+.temple-statement-rule,
+.footer-ornament span {
+  height: 1.5px !important;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(159,119,51,0.38) 14%,
+      rgba(224,201,135,0.98) 50%,
+      rgba(159,119,51,0.38) 86%,
+      transparent 100%
+    ) !important;
+  box-shadow: 0 0 6px rgba(224, 201, 135, 0.22) !important;
+}
+
+/* Section ornament gets a little more definition */
+.footer-ornament b {
+  color: #d9bb75 !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.45),
+    0 0 10px rgba(217,187,117,0.18) !important;
+}
+
+/* Voice cards feel more premium */
+.voice-card {
+  border: 1px solid rgba(216, 187, 118, 0.62) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.72),
+    0 8px 22px rgba(20, 31, 49, 0.06) !important;
+}
+
+.voice-card.is-selected {
+  border-color: rgba(224, 201, 135, 0.96) !important;
+  box-shadow:
+    0 0 0 1px rgba(224, 201, 135, 0.30),
+    0 0 0 3px rgba(255, 245, 220, 0.22),
+    0 10px 24px rgba(20, 31, 49, 0.10),
+    inset 0 1px 0 rgba(255,255,255,0.78) !important;
+}
+
+/* Oracle images gain a subtle gilt surround */
+.voice-icon {
+  border: 1px solid rgba(216, 187, 118, 0.86) !important;
+  box-shadow:
+    0 0 0 1px rgba(168,132,58,0.14),
+    0 0 0 3px rgba(255,248,229,0.22),
+    0 10px 18px rgba(20,31,49,0.10) !important;
+}
+
+/* Input edges slightly warmer */
+textarea,
+input[type="text"],
+input[type="email"],
+input[type="password"],
+select {
+  border-color: rgba(208, 180, 116, 0.72) !important;
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,0.72),
+    0 0 0 1px rgba(255,245,220,0.12) !important;
+}
+
+/* Primary buttons get richer gilt edges */
+.oracle-actions button,
+.upload-submit,
+button[type="submit"] {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.16),
+    0 0 0 1px rgba(216,187,118,0.36),
+    0 6px 14px rgba(20,31,49,0.12) !important;
+}
+
+/* Footer band top edge */
+.temple-footer,
+footer {
+  box-shadow: inset 0 1px 0 rgba(224, 201, 135, 0.32) !important;
+}
+
+/* Phase 10.10O: fleur center ornament replacement */
+
+/* Replace the center footer ornament glyph with an actual fleur asset */
+.footer-ornament b {
+  display: inline-block !important;
+  width: 56px !important;
+  height: 32px !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+  background-image: url("/static/img/fleur-center-mark.svg?v=1") !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  background-position: center !important;
+  vertical-align: middle !important;
+  transform: translateY(1px);
+}
+
+/* Give it slightly more room so it reads as intentional */
+.footer-ornament {
+  gap: 0.9rem !important;
+}
+
+/* Phase 10.10P: approved fleur divider asset */
+
+.gold-rule b,
+.hero-divider b {
+  width: 210px !important;
+  height: 42px !important;
+  display: block !important;
+  background-image: url("/static/img/fleur-divider-card.webp?v=1") !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  background-position: center !important;
+}
+
+.footer-ornament b {
+  display: inline-block !important;
+  width: 156px !important;
+  height: 42px !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+  background-image: url("/static/img/fleur-divider-footer.webp?v=1") !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  background-position: center !important;
+}
+
+@media (max-width: 700px) {
+  .gold-rule b,
+  .hero-divider b {
+    width: 150px !important;
+    height: 32px !important;
+  }
+
+  .footer-ornament b {
+    width: 128px !important;
+    height: 34px !important;
+  }
+}
+
+/* Phase 10.10Q: clean fleur no dark box */
+
+.gold-rule b,
+.hero-divider b {
+  background-image: url("/static/img/fleur-divider-clean-card.webp?v=1") !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+.footer-ornament b {
+  background-image: url("/static/img/fleur-divider-clean-footer.webp?v=1") !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+}
+
+/* Phase 10.10R: crisp fleur divider asset */
+
+.gold-rule b,
+.hero-divider b {
+  width: 220px !important;
+  height: 42px !important;
+  background-image: url("/static/img/fleur-divider-crisp-card.webp?v=1") !important;
+  background-color: transparent !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  background-position: center !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+.footer-ornament b {
+  display: inline-block !important;
+  width: 168px !important;
+  height: 42px !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+  background-image: url("/static/img/fleur-divider-crisp-footer.webp?v=1") !important;
+  background-color: transparent !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  background-position: center !important;
+  box-shadow: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+}
+
+@media (max-width: 700px) {
+  .gold-rule b,
+  .hero-divider b {
+    width: 155px !important;
+    height: 32px !important;
+  }
+
+  .footer-ornament b {
+    width: 132px !important;
+    height: 34px !important;
+  }
+}
+
+/* Phase 10.10S: final no-text fleur divider */
+
+.gold-rule b,
+.hero-divider b {
+  width: 220px !important;
+  height: 42px !important;
+  background-image: url("/static/img/fleur-divider-final-card.webp?v=1") !important;
+  background-color: transparent !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  background-position: center !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+.footer-ornament b {
+  display: inline-block !important;
+  width: 168px !important;
+  height: 42px !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+  background-image: url("/static/img/fleur-divider-final-footer.webp?v=1") !important;
+  background-color: transparent !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  background-position: center !important;
+  box-shadow: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+}
+
+@media (max-width: 700px) {
+  .gold-rule b,
+  .hero-divider b {
+    width: 155px !important;
+    height: 32px !important;
+  }
+
+  .footer-ornament b {
+    width: 132px !important;
+    height: 34px !important;
+  }
+}
+
+/* Phase 10.10T: fleur vertical alignment tune */
+
+.gold-rule b,
+.hero-divider b {
+  transform: translateY(-4px) !important;
+}
+
+.footer-ornament b {
+  transform: translateY(-3px) !important;
+}
+
+@media (max-width: 700px) {
+  .gold-rule b,
+  .hero-divider b {
+    transform: translateY(-3px) !important;
+  }
+
+  .footer-ornament b {
+    transform: translateY(-2px) !important;
+  }
+}
