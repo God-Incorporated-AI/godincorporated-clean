@@ -1304,7 +1304,9 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       : 'You have chosen Hathor, aligned with Egyptian Magick.';
 
     document.querySelectorAll('[data-voice-card]').forEach((card) => {
-      card.classList.toggle('is-selected', card.getAttribute('data-voice-card') === current);
+      const isSelected = card.getAttribute('data-voice-card') === current;
+      card.classList.toggle('is-selected', isSelected);
+      card.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
     });
   }
 
