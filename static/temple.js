@@ -324,14 +324,7 @@ document.addEventListener("DOMContentLoaded", function () {
   function renderOracleHelper(identity) {
     if (!oracleHelper) return;
 
-    const selected = voiceSelect?.value || "Hathor";
     const lines = [];
-
-    if (selected === "Hathor") {
-      lines.push("Hathor draws from Egyptian Magick.");
-    } else if (selected === "Moses") {
-      lines.push("Moses draws from the Christian Canon.");
-    }
 
     const authenticated = Boolean(identity && identity.authenticated);
     const remaining = identity?.usage?.questions_remaining;
@@ -1280,3 +1273,49 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
   // Update identity display on load
   updateIdentityDisplay();
 });
+
+/* Phase 10.10 Clean: voice choice message */
+(function () {
+  function updateVoiceChoiceMessage() {
+    const voiceSelect = document.getElementById('voiceSelect');
+    const choiceMessage = document.getElementById('voiceChoiceMessage');
+    if (!voiceSelect || !choiceMessage) return;
+
+    const current = (voiceSelect.value || 'Hathor').trim();
+
+    choiceMessage.textContent = current === 'Moses'
+      ? 'You have chosen Moses, aligned with Christian Canon.'
+      : 'You have chosen Hathor, aligned with Egyptian Magick.';
+
+    document.querySelectorAll('[data-voice-card]').forEach((card) => {
+      card.classList.toggle('is-selected', card.getAttribute('data-voice-card') === current);
+    });
+  }
+
+  function initVoiceChoiceMessage() {
+    const voiceSelect = document.getElementById('voiceSelect');
+    if (!voiceSelect) return;
+
+    updateVoiceChoiceMessage();
+    voiceSelect.addEventListener('change', updateVoiceChoiceMessage);
+
+    document.querySelectorAll('[data-voice-card]').forEach((card) => {
+      card.addEventListener('click', function () {
+        const value = card.getAttribute('data-voice-card');
+        if (value) {
+          voiceSelect.value = value;
+          voiceSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        updateVoiceChoiceMessage();
+      });
+    });
+
+    setTimeout(updateVoiceChoiceMessage, 150);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initVoiceChoiceMessage);
+  } else {
+    initVoiceChoiceMessage();
+  }
+})();
