@@ -2466,3 +2466,224 @@ body.temple-backdrop-page .temple-back-footer {
   }
 }
 
+/* Phase 10.11.1: support modal, back-page menu, CTA, and voice selection hotfix */
+
+/* Back-page hamburger must float above the second card/section. */
+body.temple-backdrop-page .temple-page-shell,
+body.temple-backdrop-page .branding,
+body.temple-backdrop-page .support-hero,
+body.temple-backdrop-page .about-hero,
+body.temple-backdrop-page .account-hero {
+  overflow: visible !important;
+}
+
+body.temple-backdrop-page .branding {
+  z-index: 250 !important;
+}
+
+body.temple-backdrop-page .header-actions {
+  z-index: 12000 !important;
+}
+
+body.temple-backdrop-page .main-menu {
+  z-index: 12001 !important;
+  box-shadow: 0 18px 36px rgba(42, 20, 12, 0.28) !important;
+}
+
+body.temple-backdrop-page .branding .main-menu.show,
+body.temple-backdrop-page .branding .main-menu.open,
+body.temple-backdrop-page .branding .main-menu.active,
+body.temple-backdrop-page .branding .header-actions.open .main-menu {
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+/* Center the hero/support CTA rows and make the language feel intentional. */
+body.temple-backdrop-page .support-cta-row {
+  justify-content: center !important;
+  align-items: center !important;
+  text-align: center !important;
+}
+
+body.temple-backdrop-page .support-cta-row .button-link {
+  min-width: min(220px, 100%) !important;
+  text-align: center !important;
+}
+
+/* Homepage support modal temple skin. */
+#supportModal.modal {
+  z-index: 6000 !important;
+  background:
+    radial-gradient(circle at 50% 18%, rgba(255, 244, 216, 0.20), transparent 34%),
+    rgba(28, 18, 14, 0.62) !important;
+  backdrop-filter: blur(3px);
+}
+
+#supportModal .support-modal-content {
+  position: relative !important;
+  width: min(960px, calc(100vw - 24px)) !important;
+  max-width: 960px !important;
+  max-height: calc(100vh - 32px) !important;
+  margin: clamp(12px, 4vh, 34px) auto !important;
+  overflow-y: auto !important;
+  box-sizing: border-box !important;
+  color: #3e2d25 !important;
+  border: 1px solid rgba(216, 187, 118, 0.74) !important;
+  border-radius: 26px !important;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 250, 236, 0.98), rgba(255, 245, 224, 0.88) 36%, rgba(242, 222, 187, 0.92) 100%),
+    rgba(255, 248, 232, 0.96) !important;
+  box-shadow:
+    0 24px 70px rgba(24, 13, 8, 0.38),
+    0 0 0 3px rgba(255, 245, 220, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82) !important;
+}
+
+#supportModal .support-modal-content .close {
+  position: absolute !important;
+  top: 12px !important;
+  right: 14px !important;
+  width: 36px !important;
+  height: 36px !important;
+  border-radius: 999px !important;
+  line-height: 1 !important;
+  color: #6f1f18 !important;
+  background: rgba(255, 248, 230, 0.86) !important;
+  border: 1px solid rgba(146, 104, 42, 0.32) !important;
+}
+
+#supportModal .support-modal-content h2 {
+  color: #5f201b !important;
+  letter-spacing: 0.04em !important;
+  text-align: center !important;
+  margin: 0.35rem 2.5rem 0.6rem !important;
+}
+
+#supportModal #supportStatusLine {
+  max-width: 720px !important;
+  margin: 0 auto 1rem !important;
+  color: #60483a !important;
+}
+
+#supportModal .profile-summary {
+  border: 1px solid rgba(146, 104, 42, 0.28) !important;
+  border-radius: 18px !important;
+  padding: 14px 16px !important;
+  margin: 12px auto 18px !important;
+  max-width: 760px !important;
+  background: rgba(255, 250, 238, 0.72) !important;
+  color: #4a382d !important;
+}
+
+#supportModal .support-grid {
+  grid-template-columns: repeat(auto-fit, minmax(235px, 1fr)) !important;
+  gap: 14px !important;
+}
+
+#supportModal .support-card {
+  border: 1px solid rgba(216, 187, 118, 0.58) !important;
+  border-radius: 20px !important;
+  background: linear-gradient(180deg, rgba(255, 252, 244, 0.96), rgba(247, 229, 199, 0.86)) !important;
+  box-shadow: 0 12px 26px rgba(61, 31, 18, 0.12) !important;
+}
+
+#supportModal .support-card h3 {
+  color: #5f201b !important;
+}
+
+#supportModal .support-actions button,
+#supportModal .support-checkout-btn,
+#supportModal #templeContributionBtn {
+  border-radius: 999px !important;
+  border: 1px solid rgba(255, 226, 165, 0.48) !important;
+  background: linear-gradient(180deg, #8f2b22, #651a17) !important;
+  color: #fff8e8 !important;
+  box-shadow: 0 8px 18px rgba(77, 20, 14, 0.16) !important;
+}
+
+#supportModal .support-checkout-btn:disabled {
+  opacity: 0.56 !important;
+  cursor: not-allowed !important;
+}
+
+/* Voice cards: no red hover wash. Selection is champagne/gold, names stay readable. */
+.voice-card {
+  position: relative !important;
+  color: #372820 !important;
+}
+
+.voice-card:hover,
+.voice-card:focus-visible {
+  background: linear-gradient(180deg, rgba(255, 252, 244, 0.98), rgba(255, 239, 202, 0.92)) !important;
+  border-color: rgba(224, 201, 135, 0.94) !important;
+  color: #372820 !important;
+  box-shadow:
+    0 0 0 1px rgba(224, 201, 135, 0.24),
+    0 10px 24px rgba(20, 31, 49, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78) !important;
+  transform: translateY(-1px);
+}
+
+.voice-card:hover .voice-copy strong,
+.voice-card:focus-visible .voice-copy strong,
+.voice-card.is-selected .voice-copy strong,
+.voice-card[aria-pressed="true"] .voice-copy strong {
+  color: #6f1f18 !important;
+  text-shadow: 0 1px 0 rgba(255, 248, 230, 0.72) !important;
+}
+
+.voice-card:hover .voice-copy em,
+.voice-card:hover .voice-copy small,
+.voice-card:focus-visible .voice-copy em,
+.voice-card:focus-visible .voice-copy small,
+.voice-card.is-selected .voice-copy em,
+.voice-card.is-selected .voice-copy small,
+.voice-card[aria-pressed="true"] .voice-copy em,
+.voice-card[aria-pressed="true"] .voice-copy small {
+  color: #4c3a2d !important;
+}
+
+.voice-card.is-selected,
+.voice-card[aria-pressed="true"] {
+  background:
+    radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.82), transparent 34%),
+    linear-gradient(180deg, rgba(255, 247, 219, 0.98), rgba(242, 218, 169, 0.92)) !important;
+  border-color: rgba(195, 151, 58, 0.98) !important;
+  box-shadow:
+    0 0 0 2px rgba(195, 151, 58, 0.30),
+    0 0 0 5px rgba(255, 245, 220, 0.34),
+    0 12px 28px rgba(20, 31, 49, 0.13),
+    inset 0 1px 0 rgba(255, 255, 255, 0.84) !important;
+}
+
+.voice-card.is-selected::after,
+.voice-card[aria-pressed="true"]::after {
+  content: "Selected";
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(195, 151, 58, 0.42);
+  background: rgba(255, 250, 238, 0.92);
+  color: #5f201b;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  box-shadow: 0 5px 12px rgba(61, 31, 18, 0.12);
+}
+
+@media (max-width: 560px) {
+  .voice-card.is-selected::after,
+  .voice-card[aria-pressed="true"]::after {
+    top: 10px;
+    right: 10px;
+    font-size: 0.66rem;
+  }
+
+  #supportModal .support-modal-content {
+    border-radius: 20px !important;
+  }
+}
+
