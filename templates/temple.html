@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>godincorporated.ai — Your Temple</title>
   <link rel="icon" type="image/x-icon" href="/static/img/favicon.ico?v=20260423">
-  <link rel="stylesheet" href="/static/style.css?v=20260507-fleuralign1" />
+  <link rel="stylesheet" href="/static/style.css?v=20260507-backpages1" />
 </head>
 <body>
   <main class="temple-shell">
@@ -59,14 +59,7 @@
       </div>
 
       <form id="oracleForm" class="oracle-form card-body">
-        <label class="sr-only" for="seekerInput">What are you seeking clarity on?</label>
-        <textarea id="seekerInput" class="oracle-input" placeholder="What are you seeking clarity on?" rows="2" required></textarea>
-
-        <div class="oracle-output-wrap">
-          <pre id="oracleAnswer" class="voice-response">The Oracle speaks here.</pre>
-        </div>
-
-        <div class="choice-label"><span></span><strong>Choose a Voice</strong><span></span></div>
+<div class="choice-label"><span></span><strong>Choose a Voice</strong><span></span></div>
 
         <label class="sr-only" for="voiceSelect">Oracle voice</label>
         <select id="voiceSelect" name="deity" class="sr-only">
@@ -95,6 +88,14 @@
         </div>
 
         <div id="voiceChoiceMessage" class="voice-choice-message" aria-live="polite"></div>
+        
+        <label class="sr-only" for="seekerInput">What are you seeking clarity on?</label>
+        <textarea id="seekerInput" class="oracle-input" placeholder="What are you seeking clarity on?" rows="2" required></textarea>
+
+        <div class="oracle-output-wrap">
+          <pre id="oracleAnswer" class="voice-response">The Oracle speaks here.</pre>
+        </div>
+
         <div id="oracleHelper" class="oracle-helper"></div>
 
         <div class="oracle-actions">

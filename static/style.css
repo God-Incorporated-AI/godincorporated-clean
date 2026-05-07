@@ -2315,3 +2315,154 @@ footer {
     transform: translateY(-2px) !important;
   }
 }
+
+/* Phase 10.11: back-page temple skin alignment */
+body.temple-backdrop-page {
+  min-height: 100vh;
+  color: #3e2d25;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 244, 216, 0.88), rgba(255, 244, 216, 0.35) 34%, rgba(62, 32, 23, 0.18) 100%),
+    linear-gradient(180deg, rgba(42, 19, 14, 0.18), rgba(246, 236, 220, 0.9)),
+    url("/static/img/temple-atmosphere-bg.webp?v=1") center top / cover fixed no-repeat,
+    #f6ecdc;
+}
+
+body.temple-backdrop-page .temple-page-shell,
+body.temple-backdrop-page .temple-admin-shell {
+  position: relative;
+  z-index: 1;
+  width: min(1120px, calc(100% - 28px));
+  margin: 0 auto;
+  padding: clamp(18px, 4vw, 42px) 0 48px;
+}
+
+body.temple-backdrop-page .temple-admin-shell {
+  width: min(1280px, calc(100% - 28px));
+}
+
+body.temple-backdrop-page .branding,
+body.temple-backdrop-page .admin-header {
+  position: relative;
+  margin: 0 auto 22px;
+  padding: clamp(18px, 3vw, 28px);
+  border: 1px solid rgba(146, 104, 42, 0.38);
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(255, 249, 235, 0.86), rgba(244, 223, 190, 0.72));
+  box-shadow: 0 18px 48px rgba(52, 25, 16, 0.20);
+  backdrop-filter: blur(8px);
+}
+
+body.temple-backdrop-page .brand-lockup {
+  display: inline-block;
+  color: #6f1f18;
+  text-decoration: none;
+  letter-spacing: 0.04em;
+  text-shadow: 0 1px 0 rgba(255, 245, 220, 0.65);
+}
+
+body.temple-backdrop-page .temple-back-cross {
+  max-width: 420px;
+  margin: 10px auto 0;
+}
+
+body.temple-backdrop-page .support-note,
+body.temple-backdrop-page .support-card,
+body.temple-backdrop-page .account-card,
+body.temple-backdrop-page .admin-panel,
+body.temple-backdrop-page .summary-card,
+body.temple-backdrop-page .metric-card,
+body.temple-backdrop-page .result-card,
+body.temple-backdrop-page .detail-card,
+body.temple-backdrop-page .action-card {
+  border: 1px solid rgba(146, 104, 42, 0.32);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 250, 238, 0.92), rgba(247, 229, 199, 0.82));
+  box-shadow: 0 14px 34px rgba(61, 31, 18, 0.14);
+  backdrop-filter: blur(6px);
+}
+
+body.temple-backdrop-page .support-note,
+body.temple-backdrop-page .support-card,
+body.temple-backdrop-page .account-card {
+  padding: clamp(16px, 3vw, 24px);
+}
+
+body.temple-backdrop-page h1,
+body.temple-backdrop-page h2,
+body.temple-backdrop-page h3 {
+  color: #5f201b;
+}
+
+body.temple-backdrop-page .support-cta-row,
+body.temple-backdrop-page .support-actions {
+  gap: 10px;
+}
+
+body.temple-backdrop-page .button-link,
+body.temple-backdrop-page .support-actions button,
+body.temple-backdrop-page .admin-console button,
+body.temple-backdrop-page .menu-section button {
+  border: 1px solid rgba(255, 226, 165, 0.45);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #8f2b22, #651a17);
+  color: #fff8e8;
+  box-shadow: 0 8px 18px rgba(77, 20, 14, 0.18);
+}
+
+body.temple-backdrop-page .button-link.secondary {
+  background: rgba(255, 248, 230, 0.56);
+  color: #5f201b;
+  border-color: rgba(146, 104, 42, 0.38);
+}
+
+body.temple-backdrop-page .main-menu {
+  background: rgba(255, 248, 230, 0.96);
+  border-color: rgba(146, 104, 42, 0.38);
+}
+
+body.temple-backdrop-page .account-kv {
+  border-bottom-color: rgba(146, 104, 42, 0.22);
+}
+
+body.temple-backdrop-page .admin-panel {
+  padding: clamp(14px, 2vw, 20px);
+}
+
+body.temple-backdrop-page .admin-console input,
+body.temple-backdrop-page .admin-console select,
+body.temple-backdrop-page .admin-console textarea {
+  border: 1px solid rgba(146, 104, 42, 0.32);
+  border-radius: 10px;
+  background: rgba(255, 252, 244, 0.9);
+  color: #3e2d25;
+}
+
+body.temple-backdrop-page .admin-console pre {
+  background: rgba(255, 248, 230, 0.72);
+  border: 1px solid rgba(146, 104, 42, 0.18);
+}
+
+body.temple-backdrop-page .temple-back-footer {
+  margin-top: 32px;
+}
+
+@media (max-width: 720px) {
+  body.temple-backdrop-page .temple-page-shell,
+  body.temple-backdrop-page .temple-admin-shell {
+    width: min(100% - 18px, 1120px);
+    padding-top: 12px;
+  }
+
+  body.temple-backdrop-page .branding,
+  body.temple-backdrop-page .admin-header {
+    border-radius: 18px;
+  }
+
+  body.temple-backdrop-page .support-note,
+  body.temple-backdrop-page .support-card,
+  body.temple-backdrop-page .account-card,
+  body.temple-backdrop-page .admin-panel {
+    border-radius: 16px;
+  }
+}
+

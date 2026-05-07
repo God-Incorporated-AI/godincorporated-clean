@@ -343,7 +343,23 @@ document.addEventListener("DOMContentLoaded", function () {
     oracleHelper.textContent = lines.join(" ");
   }
 
-  // Ask Oracle (text input)
+  
+// Phase 10.11: Enter submits the Oracle question; Shift+Enter keeps a new line.
+if (seekerInput && oracleForm) {
+  seekerInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+
+      if (typeof oracleForm.requestSubmit === "function") {
+        oracleForm.requestSubmit();
+      } else {
+        oracleForm.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+      }
+    }
+  });
+}
+
+// Ask Oracle (text input)
   oracleForm.addEventListener("submit", async function (e) {
     e.preventDefault();
     const question = seekerInput.value.trim();
