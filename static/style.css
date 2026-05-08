@@ -2687,3 +2687,100 @@ body.temple-backdrop-page .support-cta-row .button-link {
   }
 }
 
+/* Phase 10.11.2: ornament reduction, voice message cleanup, and clean scroll upload */
+
+/* Keep the selected badge on Hathor/Moses; remove the redundant message below them. */
+.voice-choice-message {
+  display: none !important;
+}
+
+/* Homepage: remove the upper fleur under "Welcome to Your Temple" and make it a stronger gold line. */
+.temple-landing-hero .hero-divider.hero-divider-line-only {
+  width: min(420px, 74vw);
+  max-width: 420px;
+  margin: 16px auto 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+
+.temple-landing-hero .hero-divider.hero-divider-line-only b {
+  display: none !important;
+}
+
+.temple-landing-hero .hero-divider.hero-divider-line-only span {
+  flex: 1 1 auto;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(210, 165, 67, 0.92), rgba(255, 235, 174, 0.95), rgba(210, 165, 67, 0.92), transparent);
+  box-shadow: 0 0 12px rgba(210, 165, 67, 0.32);
+}
+
+/* Scroll upload: hide native mechanical file field and use one clean chooser/upload button. */
+#scroll {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  min-width: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  opacity: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+
+.upload-zone[role="button"] {
+  cursor: pointer;
+}
+
+.upload-zone[role="button"]:focus-visible {
+  outline: 3px solid rgba(210, 165, 67, 0.62);
+  outline-offset: 4px;
+}
+
+.scroll-file-status {
+  max-width: min(620px, 92%);
+  margin: 10px auto 0;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(210, 165, 67, 0.34);
+  background: rgba(255, 250, 236, 0.74);
+  color: #5f201b;
+  font-size: 0.92rem;
+  font-weight: 650;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.scroll-file-status:empty {
+  display: none;
+}
+
+.scroll-form .upload-submit {
+  min-width: min(240px, 92%);
+}
+
+.scroll-form.has-selected-file .upload-submit {
+  box-shadow:
+    0 0 0 2px rgba(210, 165, 67, 0.22),
+    0 10px 24px rgba(77, 20, 14, 0.18);
+}
+
+/* Back pages: keep the top Return-to-Temple cross, hide decorative section crosses. */
+body.temple-backdrop-page .branding > .temple-back-cross {
+  display: flex !important;
+}
+
+body.temple-backdrop-page main section .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .support-note .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .support-card .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .account-card .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .about-grid .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .about-card .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .section-cross,
+body.temple-backdrop-page .card-cross,
+body.temple-backdrop-page .title-cross {
+  display: none !important;
+}
+
