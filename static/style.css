@@ -2687,3 +2687,310 @@ body.temple-backdrop-page .support-cta-row .button-link {
   }
 }
 
+/* Phase 10.11.2: ornament reduction, voice message cleanup, and clean scroll upload */
+
+/* Keep the selected badge on Hathor/Moses; remove the redundant message below them. */
+.voice-choice-message {
+  display: none !important;
+}
+
+/* Homepage: remove the upper fleur under "Welcome to Your Temple" and make it a stronger gold line. */
+.temple-landing-hero .hero-divider.hero-divider-line-only {
+  width: min(420px, 74vw);
+  max-width: 420px;
+  margin: 16px auto 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+
+.temple-landing-hero .hero-divider.hero-divider-line-only b {
+  display: none !important;
+}
+
+.temple-landing-hero .hero-divider.hero-divider-line-only span {
+  flex: 1 1 auto;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(210, 165, 67, 0.92), rgba(255, 235, 174, 0.95), rgba(210, 165, 67, 0.92), transparent);
+  box-shadow: 0 0 12px rgba(210, 165, 67, 0.32);
+}
+
+/* Scroll upload: hide native mechanical file field and use one clean chooser/upload button. */
+#scroll {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  min-width: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  opacity: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+
+.upload-zone[role="button"] {
+  cursor: pointer;
+}
+
+.upload-zone[role="button"]:focus-visible {
+  outline: 3px solid rgba(210, 165, 67, 0.62);
+  outline-offset: 4px;
+}
+
+.scroll-file-status {
+  max-width: min(620px, 92%);
+  margin: 10px auto 0;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(210, 165, 67, 0.34);
+  background: rgba(255, 250, 236, 0.74);
+  color: #5f201b;
+  font-size: 0.92rem;
+  font-weight: 650;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.scroll-file-status:empty {
+  display: none;
+}
+
+.scroll-form .upload-submit {
+  min-width: min(240px, 92%);
+}
+
+.scroll-form.has-selected-file .upload-submit {
+  box-shadow:
+    0 0 0 2px rgba(210, 165, 67, 0.22),
+    0 10px 24px rgba(77, 20, 14, 0.18);
+}
+
+/* Back pages: keep the top Return-to-Temple cross, hide decorative section crosses. */
+body.temple-backdrop-page .branding > .temple-back-cross {
+  display: flex !important;
+}
+
+body.temple-backdrop-page main section .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .support-note .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .support-card .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .account-card .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .about-grid .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .about-card .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .section-cross,
+body.temple-backdrop-page .card-cross,
+body.temple-backdrop-page .title-cross {
+  display: none !important;
+}
+
+/* Phase 10.11.3: correct back-page cross hierarchy and homepage hero line */
+
+/* Homepage: the upper ornament becomes a clean, stronger gold line. */
+.hero-divider.hero-divider-line-only {
+  width: min(460px, 76vw) !important;
+  max-width: 460px !important;
+  margin: 16px auto 14px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0 !important;
+}
+
+.hero-divider.hero-divider-line-only b,
+.hero-divider.hero-divider-line-only strong {
+  display: none !important;
+}
+
+.hero-divider.hero-divider-line-only span {
+  display: block !important;
+  flex: 1 1 auto !important;
+  height: 2px !important;
+  border-radius: 999px !important;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(176, 124, 31, 0.72),
+    rgba(255, 232, 159, 0.98),
+    rgba(176, 124, 31, 0.72),
+    transparent
+  ) !important;
+  box-shadow:
+    0 0 10px rgba(210, 165, 67, 0.34),
+    0 1px 0 rgba(255, 250, 230, 0.62) !important;
+}
+
+/* Back pages: hide all decorative nav crosses by default. */
+body.temple-backdrop-page .nav-cross {
+  display: none !important;
+}
+
+/* Back pages: restore ONLY the protected top header cross divider. */
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross {
+  display: flex !important;
+  width: min(420px, 72vw) !important;
+  max-width: 420px !important;
+  margin: 10px auto 2px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 10px !important;
+}
+
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross span {
+  display: block !important;
+  flex: 1 1 auto !important;
+  height: 2px !important;
+  border-radius: 999px !important;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(176, 124, 31, 0.72),
+    rgba(255, 232, 159, 0.98),
+    rgba(176, 124, 31, 0.72),
+    transparent
+  ) !important;
+  box-shadow:
+    0 0 10px rgba(210, 165, 67, 0.34),
+    0 1px 0 rgba(255, 250, 230, 0.62) !important;
+}
+
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross strong {
+  display: inline-flex !important;
+  width: 42px !important;
+  height: 42px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 auto !important;
+  color: #7a2019 !important;
+  font-size: 1.45rem !important;
+  line-height: 1 !important;
+  border: 1px solid rgba(210, 165, 67, 0.52) !important;
+  border-radius: 999px !important;
+  background: radial-gradient(circle, rgba(255, 249, 225, 0.98), rgba(236, 204, 137, 0.86)) !important;
+  box-shadow:
+    0 0 0 4px rgba(255, 245, 220, 0.32),
+    0 6px 14px rgba(61, 31, 18, 0.16) !important;
+}
+
+/* Back pages: suppress lower/body crosses even if they use a different class name. */
+body.temple-backdrop-page main section .nav-cross,
+body.temple-backdrop-page main article .nav-cross,
+body.temple-backdrop-page .support-hero .nav-cross,
+body.temple-backdrop-page .about-hero .nav-cross,
+body.temple-backdrop-page .account-hero .nav-cross,
+body.temple-backdrop-page .support-note .nav-cross,
+body.temple-backdrop-page .support-card .nav-cross,
+body.temple-backdrop-page .account-card .nav-cross,
+body.temple-backdrop-page .about-grid .nav-cross,
+body.temple-backdrop-page .about-card .nav-cross,
+body.temple-backdrop-page .section-cross,
+body.temple-backdrop-page .card-cross,
+body.temple-backdrop-page .title-cross,
+body.temple-backdrop-page .heading-cross,
+body.temple-backdrop-page .ornament-cross,
+body.temple-backdrop-page .cross-divider,
+body.temple-backdrop-page .temple-section-cross {
+  display: none !important;
+}
+
+/* Phase 10.11.4: enlarge protected header cross and suppress heading pseudo-crosses */
+
+/* Keep the top Return-to-Temple cross only, but make the encircled mark feel intentional. */
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross {
+  display: flex !important;
+  width: min(500px, 78vw) !important;
+  max-width: 500px !important;
+  margin: 12px auto 6px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 16px !important;
+}
+
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross span {
+  display: block !important;
+  flex: 1 1 auto !important;
+  height: 2px !important;
+  min-width: 42px !important;
+  border-radius: 999px !important;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(176, 124, 31, 0.78),
+    rgba(255, 232, 159, 1),
+    rgba(176, 124, 31, 0.78),
+    transparent
+  ) !important;
+  box-shadow:
+    0 0 11px rgba(210, 165, 67, 0.38),
+    0 1px 0 rgba(255, 250, 230, 0.66) !important;
+}
+
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross strong {
+  display: inline-flex !important;
+  width: 48px !important;
+  height: 48px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 48px !important;
+  color: #7a2019 !important;
+  font-size: 1.62rem !important;
+  font-weight: 800 !important;
+  line-height: 1 !important;
+  border: 1.5px solid rgba(210, 165, 67, 0.62) !important;
+  border-radius: 999px !important;
+  background:
+    radial-gradient(circle at 50% 38%, rgba(255, 253, 238, 1), rgba(242, 213, 153, 0.92) 70%, rgba(205, 158, 62, 0.76)) !important;
+  box-shadow:
+    0 0 0 4px rgba(255, 245, 220, 0.36),
+    0 7px 16px rgba(61, 31, 18, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78) !important;
+  text-shadow: 0 1px 0 rgba(255, 248, 230, 0.75) !important;
+}
+
+/*
+  The remaining lower crosses are not showing up in template grep,
+  so they are likely CSS pseudo-elements on headings/titles/cards.
+  Keep the real protected top cross above, but suppress generated crosses below it.
+*/
+body.temple-backdrop-page h1::before,
+body.temple-backdrop-page h1::after,
+body.temple-backdrop-page h2::before,
+body.temple-backdrop-page h2::after,
+body.temple-backdrop-page h3::before,
+body.temple-backdrop-page h3::after,
+body.temple-backdrop-page .crossed-title::before,
+body.temple-backdrop-page .crossed-title::after,
+body.temple-backdrop-page .temple-subtitle::before,
+body.temple-backdrop-page .temple-subtitle::after,
+body.temple-backdrop-page .support-note::before,
+body.temple-backdrop-page .support-note::after,
+body.temple-backdrop-page .support-card::before,
+body.temple-backdrop-page .support-card::after,
+body.temple-backdrop-page .account-grid::before,
+body.temple-backdrop-page .account-grid::after,
+body.temple-backdrop-page .admin-panel::before,
+body.temple-backdrop-page .admin-panel::after,
+body.temple-backdrop-page .summary-card::before,
+body.temple-backdrop-page .summary-card::after {
+  content: none !important;
+  display: none !important;
+  background: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Mobile: still larger than the old mark, but not oversized. */
+@media (max-width: 560px) {
+  body.temple-backdrop-page .branding > .nav-cross.temple-back-cross {
+    width: min(430px, 78vw) !important;
+    gap: 12px !important;
+  }
+
+  body.temple-backdrop-page .branding > .nav-cross.temple-back-cross strong {
+    width: 42px !important;
+    height: 42px !important;
+    flex-basis: 42px !important;
+    font-size: 1.42rem !important;
+  }
+}
+

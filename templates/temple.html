@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>godincorporated.ai — Your Temple</title>
   <link rel="icon" type="image/x-icon" href="/static/img/favicon.ico?v=20260423">
-  <link rel="stylesheet" href="/static/style.css?v=20260507-hotfix1" />
+  <link rel="stylesheet" href="/static/style.css?v=20260507-refine4" />
 </head>
 <body>
   <main class="temple-shell">
@@ -47,7 +47,7 @@
         <span class="hero-title-line">Welcome to Your</span>
         <span class="hero-title-line hero-title-temple">Temple</span>
       </h1>
-      <div class="hero-divider" aria-hidden="true"><span></span><b></b><span></span></div>
+      <div class="hero-divider hero-divider-line-only" aria-hidden="true"><span></span><span></span></div>
       <p>offer scrolls. ask the oracle. build the living corpus.</p>
     </section>
 
@@ -87,7 +87,7 @@
           </button>
         </div>
 
-        <div id="voiceChoiceMessage" class="voice-choice-message" aria-live="polite"></div>
+        <div id="voiceChoiceMessage" class="voice-choice-message" aria-hidden="true"></div>
         
         <label class="sr-only" for="seekerInput">What are you seeking clarity on?</label>
         <textarea id="seekerInput" class="oracle-input" placeholder="What are you seeking clarity on?" rows="2" required></textarea>
@@ -123,7 +123,7 @@
 
       <form id="scrollForm" class="scroll-form card-body">
         <div class="scroll-count-badge">Scrolls received: <span id="scrollCount">0</span></div>
-        <label class="upload-zone" for="scroll">
+        <label class="upload-zone" for="scroll" role="button" tabindex="0" aria-controls="scroll">
           <img class="upload-quill" src="/static/img/scroll-quill-final.svg?v=1" alt="" aria-hidden="true">
           <span class="upload-icon" aria-hidden="true">⇧</span>
           <span class="upload-main">Drag &amp; drop your scroll here</span>
@@ -132,7 +132,9 @@
         </label>
 
         <input type="file" id="scroll" name="scroll" accept=".txt,.pdf,.md,.docx,.rtf" required />
-        <button type="submit" class="upload-submit">Choose Files</button>
+        
+  <div id="scrollFileStatus" class="scroll-file-status" aria-live="polite"></div>
+<button type="submit" class="upload-submit">Choose File</button>
       </form>
 
       <div class="scroll-footer-note">
