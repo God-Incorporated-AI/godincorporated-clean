@@ -250,7 +250,83 @@ document.addEventListener("DOMContentLoaded", function () {
   // Trigger initial helper text
   voiceSelect.dispatchEvent(new Event("change"));
 
-  // Upload scroll
+  
+// Phase 10.11.2: One clean scroll file picker + Enter upload support.
+const scrollFileStatus = document.getElementById("scrollFileStatus");
+
+function getScrollUploadButton() {
+  return scrollForm ? scrollForm.querySelector(".upload-submit, button[type='submit'], button") : null;
+}
+
+function getSelectedScrollFileName() {
+  if (!scrollInput || !scrollInput.files || !scrollInput.files.length) return "";
+  return scrollInput.files[0].name || "scroll selected";
+}
+
+function requestScrollFormSubmit() {
+  if (!scrollForm) return;
+  if (typeof scrollForm.requestSubmit === "function") {
+    scrollForm.requestSubmit();
+  } else {
+    scrollForm.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+  }
+}
+
+function updateScrollUploadUi() {
+  if (!scrollForm || !scrollInput) return;
+
+  const fileName = getSelectedScrollFileName();
+  const submitBtn = getScrollUploadButton();
+
+  scrollForm.classList.toggle("has-selected-file", Boolean(fileName));
+
+  if (scrollFileStatus) {
+    scrollFileStatus.textContent = fileName ? "Chosen: " + fileName : "";
+  }
+
+  if (submitBtn && !submitBtn.disabled) {
+    submitBtn.textContent = fileName ? "Upload Scroll" : "Choose File";
+  }
+}
+
+if (scrollInput && scrollForm) {
+  scrollInput.addEventListener("change", updateScrollUploadUi);
+
+  const scrollUploadButton = getScrollUploadButton();
+  if (scrollUploadButton) {
+    scrollUploadButton.addEventListener("click", function (e) {
+      if (!getSelectedScrollFileName()) {
+        e.preventDefault();
+        scrollInput.click();
+      }
+    });
+  }
+
+  scrollForm.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" || e.shiftKey) return;
+
+    const target = e.target;
+    const targetTag = target && target.tagName ? target.tagName.toLowerCase() : "";
+
+    if (targetTag === "textarea") return;
+
+    if (target && target.closest && target.closest(".upload-submit")) {
+      return;
+    }
+
+    e.preventDefault();
+
+    if (getSelectedScrollFileName()) {
+      requestScrollFormSubmit();
+    } else {
+      scrollInput.click();
+    }
+  });
+
+  updateScrollUploadUi();
+}
+
+// Upload scroll
   scrollForm.addEventListener("submit", async function (e) {
     e.preventDefault();
 
@@ -318,20 +394,14 @@ document.addEventListener("DOMContentLoaded", function () {
         submitBtn.disabled = false;
         submitBtn.textContent = originalText;
       }
-    }
+    if (typeof updateScrollUploadUi === "function") { updateScrollUploadUi(); }
+}
   });
 
   function renderOracleHelper(identity) {
     if (!oracleHelper) return;
 
-    const selected = voiceSelect?.value || "Hathor";
     const lines = [];
-
-    if (selected === "Hathor") {
-      lines.push("Hathor draws from Egyptian Magick.");
-    } else if (selected === "Moses") {
-      lines.push("Moses draws from the Christian Canon.");
-    }
 
     const authenticated = Boolean(identity && identity.authenticated);
     const remaining = identity?.usage?.questions_remaining;
@@ -350,7 +420,23 @@ document.addEventListener("DOMContentLoaded", function () {
     oracleHelper.textContent = lines.join(" ");
   }
 
-  // Ask Oracle (text input)
+  
+// Phase 10.11: Enter submits the Oracle question; Shift+Enter keeps a new line.
+if (seekerInput && oracleForm) {
+  seekerInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+
+      if (typeof oracleForm.requestSubmit === "function") {
+        oracleForm.requestSubmit();
+      } else {
+        oracleForm.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+      }
+    }
+  });
+}
+
+// Ask Oracle (text input)
   oracleForm.addEventListener("submit", async function (e) {
     e.preventDefault();
     const question = seekerInput.value.trim();
@@ -1280,3 +1366,51 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
   // Update identity display on load
   updateIdentityDisplay();
 });
+
+/* Phase 10.10 Clean: voice choice message */
+(function () {
+  function updateVoiceChoiceMessage() {
+    const voiceSelect = document.getElementById('voiceSelect');
+    const choiceMessage = document.getElementById('voiceChoiceMessage');
+    if (!voiceSelect || !choiceMessage) return;
+
+    const current = (voiceSelect.value || 'Hathor').trim();
+
+    choiceMessage.textContent = current === 'Moses'
+      ? 'You have chosen Moses, aligned with Christian Canon.'
+      : 'You have chosen Hathor, aligned with Egyptian Magick.';
+
+    document.querySelectorAll('[data-voice-card]').forEach((card) => {
+      const isSelected = card.getAttribute('data-voice-card') === current;
+      card.classList.toggle('is-selected', isSelected);
+      card.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+    });
+  }
+
+  function initVoiceChoiceMessage() {
+    const voiceSelect = document.getElementById('voiceSelect');
+    if (!voiceSelect) return;
+
+    updateVoiceChoiceMessage();
+    voiceSelect.addEventListener('change', updateVoiceChoiceMessage);
+
+    document.querySelectorAll('[data-voice-card]').forEach((card) => {
+      card.addEventListener('click', function () {
+        const value = card.getAttribute('data-voice-card');
+        if (value) {
+          voiceSelect.value = value;
+          voiceSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        updateVoiceChoiceMessage();
+      });
+    });
+
+    setTimeout(updateVoiceChoiceMessage, 150);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initVoiceChoiceMessage);
+  } else {
+    initVoiceChoiceMessage();
+  }
+})();

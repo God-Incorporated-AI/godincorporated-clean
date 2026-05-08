@@ -1070,3 +1070,1927 @@ main.admin-console {
 .about-page .founder-welcome {
   box-shadow: none;
 }
+
+
+/* Phase 10.10 Clean: consolidated homepage skin */
+:root {
+  --gi-card-cream: #fffaf1;
+  --gi-navy: #0a3a68;
+  --gi-navy-deep: #05253f;
+  --gi-crimson: #980716;
+  --gi-crimson-deep: #710412;
+  --gi-gold: #b38a3c;
+  --gi-gold-soft: #d8bb76;
+  --gi-dark-silver: #68758a;
+  --gi-slate: #24374d;
+  --gi-body-font: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --gi-display-font: "Cinzel", Georgia, "Times New Roman", serif;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  color: var(--gi-slate);
+  font-family: var(--gi-body-font);
+  text-align: center;
+  background:
+    radial-gradient(circle at 50% 9%, rgba(255,255,255,0.98), rgba(255,255,255,0.80) 18rem, transparent 42rem),
+    radial-gradient(circle at 16% 34%, rgba(255,255,255,0.92), rgba(255,255,255,0.52) 8rem, transparent 22rem),
+    radial-gradient(circle at 84% 34%, rgba(255,255,255,0.92), rgba(255,255,255,0.52) 8rem, transparent 22rem),
+    linear-gradient(180deg, #edf4fa 0%, #f8f1e6 24%, #f1f6fb 100%) !important;
+}
+
+body::before,
+body::after {
+  content: "";
+  position: fixed;
+  top: 4.6rem;
+  bottom: 0;
+  width: min(18vw, 220px);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.96;
+  background-image: url("/static/img/temple-side-final.svg?v=1");
+  background-repeat: no-repeat;
+  background-size: contain;
+  background-position: center bottom;
+}
+
+body::before { left: 0; }
+body::after { right: 0; transform: scaleX(-1); }
+
+main.temple-shell {
+  position: relative;
+  z-index: 1;
+  width: min(1180px, calc(100% - 2rem));
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 0 1.25rem;
+}
+
+.temple-nav {
+  display: grid;
+  grid-template-columns: minmax(255px, 1fr) minmax(240px, 0.8fr) minmax(330px, 1fr);
+  align-items: center;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgba(179,138,60,0.45);
+  background:
+    radial-gradient(circle at 50% 0, rgba(255,255,255,0.94), transparent 16rem),
+    linear-gradient(180deg, #fff9ee, #f4eadb);
+  box-shadow: 0 10px 24px rgba(22,32,51,0.14);
+}
+
+.brand-lockup {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 0;
+  color: var(--gi-slate) !important;
+  text-decoration: none;
+  font-family: var(--gi-display-font);
+  font-size: clamp(1.35rem, 2.3vw, 2rem);
+  line-height: 1;
+}
+
+.nav-cross,
+.hero-divider,
+.gold-rule,
+.choice-label,
+.temple-statement,
+.footer-ornament {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 1rem;
+}
+
+.nav-cross span,
+.hero-divider span,
+.gold-rule span,
+.choice-label span,
+.temple-statement-rule,
+.footer-ornament span {
+  display: block;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(179,138,60,0.40), rgba(216,187,118,0.98), rgba(179,138,60,0.40), transparent);
+}
+
+.nav-cross strong {
+  color: var(--gi-crimson);
+  font-size: 2.25rem;
+  line-height: 1;
+  font-weight: 400;
+}
+
+.hero-divider {
+  max-width: 360px;
+  margin: 0.45rem auto 0.35rem;
+}
+
+.gold-rule b,
+.hero-divider b {
+  width: 160px;
+  height: 24px;
+  display: block;
+  background: url("/static/img/gold-flourish-final.svg?v=1") center/contain no-repeat;
+}
+
+.temple-nav .header-actions {
+  position: static !important;
+  justify-self: end;
+  display: flex;
+  max-width: none;
+  z-index: 30;
+}
+
+.temple-nav .menu-toggle { display: none; }
+
+.temple-nav .main-menu {
+  position: static !important;
+  display: flex !important;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.temple-nav .menu-section {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.temple-nav .menu-section[hidden] { display: none !important; }
+
+.temple-nav .menu-section button,
+.footer-links button {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gi-navy);
+  font-family: var(--gi-body-font);
+  font-size: 0.9rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.temple-nav #loginBtn {
+  border: 1px solid rgba(216,187,118,0.84);
+  background: rgba(255,248,237,0.9);
+}
+
+.temple-nav #registerBtn,
+.temple-nav .nav-primary {
+  border: 1px solid rgba(216,187,118,0.84);
+  background: linear-gradient(180deg, var(--gi-navy), var(--gi-navy-deep));
+  color: #fff;
+}
+
+.user-info-inline {
+  font-size: 0.82rem;
+  color: var(--gi-dark-silver);
+}
+
+.temple-landing-hero {
+  padding: 2rem 1rem 1rem;
+}
+
+.temple-landing-hero h1 {
+  margin: 0;
+  color: var(--gi-navy);
+  font-family: var(--gi-display-font);
+  font-size: clamp(2.6rem, 6vw, 5rem);
+  font-weight: 400;
+  letter-spacing: 0.075em;
+  text-transform: uppercase;
+  text-shadow: 0 4px 14px rgba(255,255,255,0.82);
+}
+
+.temple-landing-hero p {
+  margin: 0;
+  color: var(--gi-dark-silver);
+  font-size: clamp(0.9rem, 1.5vw, 1.05rem);
+  letter-spacing: 0.08em;
+  text-transform: lowercase;
+}
+
+.temple-card {
+  width: min(910px, calc(100% - 1.5rem));
+  margin: 0 auto 1.55rem;
+  padding: 0;
+  border: 1px solid rgba(179,138,60,0.82);
+  border-radius: 16px;
+  background: rgba(255,250,241,0.97);
+  box-shadow: 0 0 0 1px rgba(216,187,118,0.46), 0 18px 38px rgba(22,32,51,0.18), inset 0 1px 0 rgba(255,255,255,0.80);
+  overflow: hidden;
+}
+
+.card-banner {
+  padding: 0.8rem 1.4rem 0.65rem;
+  color: #fff;
+  border-bottom: 1px solid rgba(216,187,118,0.62);
+}
+
+.oracle-banner {
+  background: radial-gradient(circle at 50% 0, rgba(255,255,255,0.16), transparent 16rem), linear-gradient(180deg, #a20718, #710412);
+}
+
+.scroll-banner {
+  background: radial-gradient(circle at 50% 0, rgba(255,255,255,0.15), transparent 16rem), linear-gradient(180deg, #0b436f, #05253f);
+}
+
+.gold-rule {
+  max-width: 720px;
+  margin: 0 auto 0.15rem;
+}
+
+.card-banner h2 {
+  margin: 0;
+  color: #ffecc8;
+  font-family: var(--gi-display-font);
+  font-size: clamp(1.75rem, 3vw, 2.35rem);
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.card-banner p {
+  margin: 0.15rem auto 0;
+  color: rgba(255,255,255,0.94);
+  font-size: 0.92rem;
+}
+
+.card-body {
+  padding: 1rem clamp(1rem, 4vw, 2.6rem) 1.15rem;
+}
+
+.oracle-form {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.oracle-input,
+.oracle-output-wrap {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(179,138,60,0.74);
+  border-radius: 10px;
+  background: rgba(255,252,247,0.88);
+}
+
+textarea#seekerInput.oracle-input {
+  min-height: 3rem;
+  padding: 0.82rem 1rem;
+  color: var(--gi-slate);
+  font-family: var(--gi-body-font);
+  font-size: 1rem;
+  line-height: 1.45;
+  resize: vertical;
+  outline: none;
+}
+
+.oracle-output-wrap {
+  min-height: 5.3rem;
+  padding: 0.72rem 1rem;
+}
+
+.voice-response {
+  width: 100%;
+  min-height: 4.4rem;
+  max-height: 360px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--gi-slate);
+  font-family: var(--gi-body-font);
+  font-size: 1rem;
+  line-height: 1.55;
+  text-align: left;
+  white-space: pre-wrap;
+  overflow-y: auto;
+}
+
+.choice-label {
+  max-width: 650px;
+  margin: 0.45rem auto 0;
+  color: var(--gi-navy);
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.voice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.voice-card {
+  display: grid;
+  grid-template-columns: 134px 1fr;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.95rem 1.1rem;
+  border: 1px solid rgba(179,138,60,0.74);
+  border-radius: 10px;
+  background: radial-gradient(circle at 12% 50%, rgba(216,187,118,0.16), transparent 5rem), rgba(255,252,247,0.88);
+  color: var(--gi-slate);
+  text-align: left;
+}
+
+.voice-card.is-selected {
+  border-color: rgba(216,187,118,0.96);
+  box-shadow: 0 0 0 1px rgba(216,187,118,0.50), 0 9px 20px rgba(22,32,51,0.12);
+}
+
+.voice-icon {
+  width: 128px;
+  height: 104px;
+  display: block;
+  justify-self: center;
+}
+
+.voice-copy {
+  display: grid;
+  gap: 0.08rem;
+  text-align: center;
+}
+
+.voice-copy strong {
+  color: var(--gi-crimson);
+  font-family: var(--gi-display-font);
+  font-size: 1.5rem;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.voice-copy em {
+  color: var(--gi-gold);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.02rem;
+}
+
+.voice-copy small {
+  color: var(--gi-slate);
+  font-size: 0.82rem;
+}
+
+.voice-choice-message,
+.oracle-helper {
+  min-height: 1rem;
+  color: var(--gi-dark-silver);
+  font-size: 0.88rem;
+}
+
+.oracle-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+}
+
+.oracle-actions button,
+.upload-submit {
+  min-width: 210px;
+  margin: 0;
+  padding: 0.82rem 1.15rem;
+  border-radius: 7px;
+  border: 1px solid rgba(216,187,118,0.84);
+  color: #fff;
+  font-family: var(--gi-display-font);
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#askButton {
+  background: linear-gradient(180deg, var(--gi-crimson), var(--gi-crimson-deep));
+}
+
+#speakButton,
+.upload-submit {
+  background: linear-gradient(180deg, var(--gi-navy), var(--gi-navy-deep));
+}
+
+.temple-statement {
+  width: min(940px, calc(100% - 2rem));
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 1rem;
+  margin: 1.15rem auto;
+  text-align: center;
+  clear: both;
+}
+
+.temple-statement-copy {
+  display: grid;
+  justify-items: center;
+  gap: 0.06rem;
+}
+
+.temple-statement-line {
+  display: block;
+  color: var(--gi-navy);
+  font-family: var(--gi-display-font);
+  font-size: clamp(1.02rem, 2vw, 1.34rem);
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  line-height: 1.22;
+}
+
+.scroll-form {
+  display: grid;
+  justify-items: center;
+  gap: 0.75rem;
+}
+
+.upload-zone {
+  width: min(760px, 100%);
+  box-sizing: border-box;
+  display: grid;
+  justify-items: center;
+  gap: 0.28rem;
+  padding: 1.05rem 1rem 0.9rem;
+  border: 2px dashed rgba(179,138,60,0.68);
+  border-radius: 10px;
+  background: radial-gradient(circle at 50% 0, rgba(255,255,255,0.84), transparent 11rem), rgba(255,252,247,0.84);
+  cursor: pointer;
+}
+
+.upload-quill {
+  width: 104px;
+  height: 96px;
+  display: block;
+}
+
+.upload-icon {
+  color: #7b7f82;
+  font-size: 2.2rem;
+}
+
+.upload-main {
+  color: var(--gi-navy);
+  font-family: var(--gi-display-font);
+  font-size: 1.08rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.upload-sub {
+  color: var(--gi-slate);
+  font-size: 0.9rem;
+}
+
+.upload-types {
+  color: var(--gi-slate);
+  font-size: 0.95rem;
+  letter-spacing: 0.05em;
+}
+
+#scroll {
+  max-width: 100%;
+  color: var(--gi-dark-silver);
+}
+
+.scroll-footer-note {
+  width: min(830px, calc(100% - 1.6rem));
+  margin: 0.85rem auto 0;
+  padding: 0.78rem 1rem;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.9rem;
+  border: 1px solid rgba(179,138,60,0.74);
+  border-radius: 8px;
+  background: rgba(246,236,219,0.82);
+  color: var(--gi-slate);
+}
+
+.scroll-note-icon {
+  width: 48px;
+  height: 48px;
+  display: block;
+  justify-self: center;
+}
+
+.scroll-footer-note p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.scroll-count-line {
+  margin: 0.75rem auto 0;
+  color: var(--gi-dark-silver);
+  font-size: 0.84rem;
+}
+
+.temple-footer {
+  margin-top: 0.8rem;
+  padding: 1rem;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 1rem;
+  background: linear-gradient(180deg, var(--gi-navy), var(--gi-navy-deep));
+  border-top: 1px solid rgba(216,187,118,0.62);
+}
+
+.footer-links {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  justify-self: start;
+}
+
+.footer-links button {
+  color: #fff;
+}
+
+.footer-links button:hover {
+  color: #ffecc8;
+}
+
+.footer-ornament {
+  min-width: 180px;
+  color: var(--gi-gold-soft);
+}
+
+.footer-ornament b {
+  font-size: 1.3rem;
+  font-weight: 400;
+}
+
+.temple-copyright {
+  justify-self: end;
+  color: #d7dfeb;
+  font-size: 0.84rem;
+}
+
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+@media (max-width: 900px) {
+  body::before,
+  body::after {
+    width: 125px;
+    opacity: 0.68;
+  }
+
+  main.temple-shell {
+    width: min(100% - 1rem, 760px);
+  }
+
+  .temple-nav {
+    grid-template-columns: 1fr auto;
+  }
+
+  .nav-cross {
+    display: none;
+  }
+
+  .temple-nav .menu-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.45rem;
+    height: 2.45rem;
+    margin: 0;
+    padding: 0;
+    border: 1px solid rgba(179,138,60,0.45);
+    border-radius: 7px;
+    background: rgba(255,248,237,0.84);
+    color: var(--gi-navy);
+    font-size: 1.2rem;
+  }
+
+  .temple-nav .main-menu {
+    display: none !important;
+    position: absolute !important;
+    top: calc(100% + 0.45rem) !important;
+    right: 0 !important;
+    min-width: min(300px, calc(100vw - 2rem));
+    padding: 0.8rem;
+    border: 1px solid rgba(179,138,60,0.35);
+    border-radius: 14px;
+    background: rgba(255,248,237,0.98);
+    box-shadow: 0 18px 40px rgba(22,32,51,0.16);
+  }
+
+  .temple-nav .main-menu.show {
+    display: flex !important;
+  }
+
+  .temple-nav .menu-section {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .temple-nav .menu-section button {
+    width: 100%;
+  }
+
+  .voice-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .temple-footer {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    text-align: center;
+  }
+
+  .footer-links,
+  .temple-copyright {
+    justify-self: center;
+  }
+}
+
+@media (max-width: 560px) {
+  body::before,
+  body::after {
+    opacity: 0.42;
+    width: 86px;
+  }
+
+  main.temple-shell {
+    width: calc(100% - 0.4rem);
+  }
+
+  .brand-lockup {
+    font-size: 1.22rem;
+  }
+
+  .temple-landing-hero h1 {
+    font-size: clamp(2rem, 11vw, 3.1rem);
+    letter-spacing: 0.045em;
+  }
+
+  .temple-card {
+    width: calc(100% - 0.4rem);
+  }
+
+  .card-body {
+    padding: 0.9rem;
+  }
+
+  .card-banner h2 {
+    font-size: 1.55rem;
+  }
+
+  .gold-rule b,
+  .hero-divider b {
+    width: 118px;
+    height: 20px;
+  }
+
+  .voice-card {
+    grid-template-columns: 86px 1fr;
+  }
+
+  .voice-icon {
+    width: 82px;
+    height: 68px;
+  }
+
+  .voice-copy {
+    text-align: left;
+  }
+
+  .oracle-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .oracle-actions button,
+  .upload-submit {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .temple-statement {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+
+  .temple-statement-rule {
+    display: none;
+  }
+
+  .scroll-footer-note {
+    grid-template-columns: 1fr;
+    text-align: center;
+  }
+}
+
+/* Phase 10.10I: homepage tuning pass */
+
+/* Tone down and stack the hero title. */
+.temple-landing-hero h1 {
+  display: grid !important;
+  justify-items: center !important;
+  gap: 0.02em !important;
+  line-height: 1.02 !important;
+  margin: 0 !important;
+}
+
+.hero-title-line {
+  display: block !important;
+  color: var(--gi-navy) !important;
+  font-family: var(--gi-display-font) !important;
+  font-size: clamp(1.95rem, 4.3vw, 3.65rem) !important;
+  font-weight: 400 !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+}
+
+.hero-title-temple {
+  font-size: clamp(2.2rem, 5vw, 4.25rem) !important;
+  letter-spacing: 0.11em !important;
+}
+
+/* Make scroll count visible without making it loud. */
+.scroll-count-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  justify-self: center !important;
+  gap: 0.45rem !important;
+  margin: 0 auto 0.25rem !important;
+  padding: 0.48rem 0.9rem !important;
+  border: 1px solid rgba(216,187,118,0.84) !important;
+  border-radius: 999px !important;
+  background:
+    radial-gradient(circle at 50% 0, rgba(255,255,255,0.84), transparent 7rem),
+    rgba(255,250,241,0.92) !important;
+  color: var(--gi-navy) !important;
+  font-size: 0.88rem !important;
+  letter-spacing: 0.04em !important;
+  box-shadow:
+    0 0 0 1px rgba(216,187,118,0.26),
+    0 6px 14px rgba(22,32,51,0.08),
+    inset 0 1px 0 rgba(255,255,255,0.78) !important;
+}
+
+.scroll-count-badge span {
+  min-width: 1.4rem !important;
+  display: inline-grid !important;
+  place-items: center !important;
+  color: var(--gi-crimson) !important;
+  font-family: var(--gi-display-font) !important;
+  font-size: 1.1rem !important;
+}
+
+/* Lower note should be text-only now; quill remains in upload area. */
+.scroll-footer-note {
+  grid-template-columns: 1fr !important;
+  text-align: center !important;
+}
+
+.scroll-footer-note .scroll-note-icon {
+  display: none !important;
+}
+
+/* Keep the upload quill as the only quill visual. */
+.upload-quill {
+  margin-bottom: 0.15rem !important;
+}
+
+@media (max-width: 560px) {
+  .hero-title-line {
+    font-size: clamp(1.65rem, 9vw, 2.65rem) !important;
+    letter-spacing: 0.055em !important;
+  }
+
+  .hero-title-temple {
+    font-size: clamp(1.95rem, 10vw, 3.1rem) !important;
+    letter-spacing: 0.085em !important;
+  }
+
+  .scroll-count-badge {
+    width: fit-content !important;
+    max-width: 100% !important;
+    font-size: 0.82rem !important;
+  }
+}
+
+
+/* Phase 10.10L: approved painterly atmosphere background */
+body::before,
+body::after,
+main.temple-shell::before,
+main.temple-shell::after {
+  display: none !important;
+}
+
+body {
+  background-color: #edf3f8 !important;
+  background-image:
+    linear-gradient(
+      180deg,
+      rgba(255, 250, 240, 0.18) 0%,
+      rgba(255, 250, 240, 0.10) 24%,
+      rgba(237, 243, 248, 0.22) 62%,
+      rgba(246, 240, 230, 0.18) 100%
+    ),
+    url("/static/img/temple-atmosphere-bg.webp?v=1") !important;
+  background-repeat: no-repeat !important;
+  background-size: cover !important;
+  background-position: center top !important;
+  background-attachment: fixed !important;
+}
+
+.temple-nav {
+  background:
+    radial-gradient(circle at 50% 0, rgba(255,255,255,0.94), transparent 16rem),
+    linear-gradient(180deg, rgba(255,249,238,0.94), rgba(244,234,219,0.92)) !important;
+  backdrop-filter: blur(4px);
+}
+
+.temple-card {
+  background: rgba(255, 250, 241, 0.94) !important;
+  backdrop-filter: blur(2px);
+}
+
+.temple-landing-hero h1 {
+  text-shadow:
+    0 2px 0 rgba(255,255,255,0.65),
+    0 10px 26px rgba(255,255,255,0.88) !important;
+}
+
+.temple-landing-hero p {
+  text-shadow: 0 1px 0 rgba(255,255,255,0.78);
+}
+
+@media (max-width: 900px) {
+  body {
+    background-attachment: scroll !important;
+    background-position: center top !important;
+  }
+}
+
+@media (max-width: 560px) {
+  body {
+    background-size: auto 900px !important;
+    background-position: center top !important;
+  }
+}
+
+/* Phase 10.10M: oracle identity card art */
+
+.voice-card {
+  grid-template-columns: 176px 1fr !important;
+  min-height: 175px !important;
+  overflow: hidden !important;
+}
+
+.voice-icon {
+  width: 166px !important;
+  height: 166px !important;
+  object-fit: cover !important;
+  object-position: center top !important;
+  border-radius: 18px !important;
+  border: 1px solid rgba(216,187,118,0.70) !important;
+  box-shadow:
+    0 0 0 1px rgba(216,187,118,0.30),
+    0 8px 18px rgba(22,32,51,0.12),
+    inset 0 1px 0 rgba(255,255,255,0.70) !important;
+  background: rgba(255,250,241,0.92) !important;
+}
+
+.voice-card.is-selected .voice-icon {
+  border-color: rgba(216,187,118,0.96) !important;
+  box-shadow:
+    0 0 0 1px rgba(216,187,118,0.46),
+    0 10px 22px rgba(22,32,51,0.16) !important;
+}
+
+.voice-copy {
+  align-self: center !important;
+}
+
+@media (max-width: 900px) {
+  .voice-card {
+    grid-template-columns: 150px 1fr !important;
+    min-height: 155px !important;
+  }
+
+  .voice-icon {
+    width: 142px !important;
+    height: 142px !important;
+  }
+}
+
+@media (max-width: 560px) {
+  .voice-card {
+    grid-template-columns: 1fr !important;
+    justify-items: center !important;
+    text-align: center !important;
+  }
+
+  .voice-icon {
+    width: min(220px, 82vw) !important;
+    height: min(220px, 82vw) !important;
+  }
+
+  .voice-copy {
+    text-align: center !important;
+  }
+}
+
+/* Phase 10.10N: gold trim polish pass */
+
+/* Stronger gold framing on major cards */
+.temple-card {
+  border: 1px solid rgba(216, 187, 118, 0.82) !important;
+  box-shadow:
+    0 0 0 1px rgba(168, 132, 58, 0.18),
+    0 0 0 3px rgba(255, 245, 220, 0.34),
+    0 18px 34px rgba(20, 31, 49, 0.16),
+    inset 0 1px 0 rgba(255,255,255,0.78),
+    inset 0 0 0 1px rgba(224, 201, 135, 0.22) !important;
+}
+
+/* Richer trim on top banners */
+.oracle-banner,
+.scroll-banner {
+  border-bottom: 1px solid rgba(229, 206, 143, 0.78) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.18),
+    inset 0 -1px 0 rgba(110, 79, 22, 0.24) !important;
+}
+
+/* Divider lines feel more like gilt trim */
+.nav-cross span,
+.hero-divider span,
+.gold-rule span,
+.choice-label span,
+.temple-statement-rule,
+.footer-ornament span {
+  height: 1.5px !important;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      rgba(159,119,51,0.38) 14%,
+      rgba(224,201,135,0.98) 50%,
+      rgba(159,119,51,0.38) 86%,
+      transparent 100%
+    ) !important;
+  box-shadow: 0 0 6px rgba(224, 201, 135, 0.22) !important;
+}
+
+/* Section ornament gets a little more definition */
+.footer-ornament b {
+  color: #d9bb75 !important;
+  text-shadow:
+    0 1px 0 rgba(255,255,255,0.45),
+    0 0 10px rgba(217,187,117,0.18) !important;
+}
+
+/* Voice cards feel more premium */
+.voice-card {
+  border: 1px solid rgba(216, 187, 118, 0.62) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.72),
+    0 8px 22px rgba(20, 31, 49, 0.06) !important;
+}
+
+.voice-card.is-selected {
+  border-color: rgba(224, 201, 135, 0.96) !important;
+  box-shadow:
+    0 0 0 1px rgba(224, 201, 135, 0.30),
+    0 0 0 3px rgba(255, 245, 220, 0.22),
+    0 10px 24px rgba(20, 31, 49, 0.10),
+    inset 0 1px 0 rgba(255,255,255,0.78) !important;
+}
+
+/* Oracle images gain a subtle gilt surround */
+.voice-icon {
+  border: 1px solid rgba(216, 187, 118, 0.86) !important;
+  box-shadow:
+    0 0 0 1px rgba(168,132,58,0.14),
+    0 0 0 3px rgba(255,248,229,0.22),
+    0 10px 18px rgba(20,31,49,0.10) !important;
+}
+
+/* Input edges slightly warmer */
+textarea,
+input[type="text"],
+input[type="email"],
+input[type="password"],
+select {
+  border-color: rgba(208, 180, 116, 0.72) !important;
+  box-shadow:
+    inset 0 1px 1px rgba(255,255,255,0.72),
+    0 0 0 1px rgba(255,245,220,0.12) !important;
+}
+
+/* Primary buttons get richer gilt edges */
+.oracle-actions button,
+.upload-submit,
+button[type="submit"] {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.16),
+    0 0 0 1px rgba(216,187,118,0.36),
+    0 6px 14px rgba(20,31,49,0.12) !important;
+}
+
+/* Footer band top edge */
+.temple-footer,
+footer {
+  box-shadow: inset 0 1px 0 rgba(224, 201, 135, 0.32) !important;
+}
+
+/* Phase 10.10O: fleur center ornament replacement */
+
+/* Replace the center footer ornament glyph with an actual fleur asset */
+.footer-ornament b {
+  display: inline-block !important;
+  width: 56px !important;
+  height: 32px !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+  background-image: url("/static/img/fleur-center-mark.svg?v=1") !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  background-position: center !important;
+  vertical-align: middle !important;
+  transform: translateY(1px);
+}
+
+/* Give it slightly more room so it reads as intentional */
+.footer-ornament {
+  gap: 0.9rem !important;
+}
+
+/* Phase 10.10P: approved fleur divider asset */
+
+.gold-rule b,
+.hero-divider b {
+  width: 210px !important;
+  height: 42px !important;
+  display: block !important;
+  background-image: url("/static/img/fleur-divider-card.webp?v=1") !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  background-position: center !important;
+}
+
+.footer-ornament b {
+  display: inline-block !important;
+  width: 156px !important;
+  height: 42px !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+  background-image: url("/static/img/fleur-divider-footer.webp?v=1") !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  background-position: center !important;
+}
+
+@media (max-width: 700px) {
+  .gold-rule b,
+  .hero-divider b {
+    width: 150px !important;
+    height: 32px !important;
+  }
+
+  .footer-ornament b {
+    width: 128px !important;
+    height: 34px !important;
+  }
+}
+
+/* Phase 10.10Q: clean fleur no dark box */
+
+.gold-rule b,
+.hero-divider b {
+  background-image: url("/static/img/fleur-divider-clean-card.webp?v=1") !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+.footer-ornament b {
+  background-image: url("/static/img/fleur-divider-clean-footer.webp?v=1") !important;
+  background-color: transparent !important;
+  box-shadow: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+}
+
+/* Phase 10.10R: crisp fleur divider asset */
+
+.gold-rule b,
+.hero-divider b {
+  width: 220px !important;
+  height: 42px !important;
+  background-image: url("/static/img/fleur-divider-crisp-card.webp?v=1") !important;
+  background-color: transparent !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  background-position: center !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+.footer-ornament b {
+  display: inline-block !important;
+  width: 168px !important;
+  height: 42px !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+  background-image: url("/static/img/fleur-divider-crisp-footer.webp?v=1") !important;
+  background-color: transparent !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  background-position: center !important;
+  box-shadow: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+}
+
+@media (max-width: 700px) {
+  .gold-rule b,
+  .hero-divider b {
+    width: 155px !important;
+    height: 32px !important;
+  }
+
+  .footer-ornament b {
+    width: 132px !important;
+    height: 34px !important;
+  }
+}
+
+/* Phase 10.10S: final no-text fleur divider */
+
+.gold-rule b,
+.hero-divider b {
+  width: 220px !important;
+  height: 42px !important;
+  background-image: url("/static/img/fleur-divider-final-card.webp?v=1") !important;
+  background-color: transparent !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  background-position: center !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+.footer-ornament b {
+  display: inline-block !important;
+  width: 168px !important;
+  height: 42px !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+  background-image: url("/static/img/fleur-divider-final-footer.webp?v=1") !important;
+  background-color: transparent !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+  background-position: center !important;
+  box-shadow: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+}
+
+@media (max-width: 700px) {
+  .gold-rule b,
+  .hero-divider b {
+    width: 155px !important;
+    height: 32px !important;
+  }
+
+  .footer-ornament b {
+    width: 132px !important;
+    height: 34px !important;
+  }
+}
+
+/* Phase 10.10T: fleur vertical alignment tune */
+
+.gold-rule b,
+.hero-divider b {
+  transform: translateY(-4px) !important;
+}
+
+.footer-ornament b {
+  transform: translateY(-3px) !important;
+}
+
+@media (max-width: 700px) {
+  .gold-rule b,
+  .hero-divider b {
+    transform: translateY(-3px) !important;
+  }
+
+  .footer-ornament b {
+    transform: translateY(-2px) !important;
+  }
+}
+
+/* Phase 10.11: back-page temple skin alignment */
+body.temple-backdrop-page {
+  min-height: 100vh;
+  color: #3e2d25;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 244, 216, 0.88), rgba(255, 244, 216, 0.35) 34%, rgba(62, 32, 23, 0.18) 100%),
+    linear-gradient(180deg, rgba(42, 19, 14, 0.18), rgba(246, 236, 220, 0.9)),
+    url("/static/img/temple-atmosphere-bg.webp?v=1") center top / cover fixed no-repeat,
+    #f6ecdc;
+}
+
+body.temple-backdrop-page .temple-page-shell,
+body.temple-backdrop-page .temple-admin-shell {
+  position: relative;
+  z-index: 1;
+  width: min(1120px, calc(100% - 28px));
+  margin: 0 auto;
+  padding: clamp(18px, 4vw, 42px) 0 48px;
+}
+
+body.temple-backdrop-page .temple-admin-shell {
+  width: min(1280px, calc(100% - 28px));
+}
+
+body.temple-backdrop-page .branding,
+body.temple-backdrop-page .admin-header {
+  position: relative;
+  margin: 0 auto 22px;
+  padding: clamp(18px, 3vw, 28px);
+  border: 1px solid rgba(146, 104, 42, 0.38);
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(255, 249, 235, 0.86), rgba(244, 223, 190, 0.72));
+  box-shadow: 0 18px 48px rgba(52, 25, 16, 0.20);
+  backdrop-filter: blur(8px);
+}
+
+body.temple-backdrop-page .brand-lockup {
+  display: inline-block;
+  color: #6f1f18;
+  text-decoration: none;
+  letter-spacing: 0.04em;
+  text-shadow: 0 1px 0 rgba(255, 245, 220, 0.65);
+}
+
+body.temple-backdrop-page .temple-back-cross {
+  max-width: 420px;
+  margin: 10px auto 0;
+}
+
+body.temple-backdrop-page .support-note,
+body.temple-backdrop-page .support-card,
+body.temple-backdrop-page .account-card,
+body.temple-backdrop-page .admin-panel,
+body.temple-backdrop-page .summary-card,
+body.temple-backdrop-page .metric-card,
+body.temple-backdrop-page .result-card,
+body.temple-backdrop-page .detail-card,
+body.temple-backdrop-page .action-card {
+  border: 1px solid rgba(146, 104, 42, 0.32);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 250, 238, 0.92), rgba(247, 229, 199, 0.82));
+  box-shadow: 0 14px 34px rgba(61, 31, 18, 0.14);
+  backdrop-filter: blur(6px);
+}
+
+body.temple-backdrop-page .support-note,
+body.temple-backdrop-page .support-card,
+body.temple-backdrop-page .account-card {
+  padding: clamp(16px, 3vw, 24px);
+}
+
+body.temple-backdrop-page h1,
+body.temple-backdrop-page h2,
+body.temple-backdrop-page h3 {
+  color: #5f201b;
+}
+
+body.temple-backdrop-page .support-cta-row,
+body.temple-backdrop-page .support-actions {
+  gap: 10px;
+}
+
+body.temple-backdrop-page .button-link,
+body.temple-backdrop-page .support-actions button,
+body.temple-backdrop-page .admin-console button,
+body.temple-backdrop-page .menu-section button {
+  border: 1px solid rgba(255, 226, 165, 0.45);
+  border-radius: 999px;
+  background: linear-gradient(180deg, #8f2b22, #651a17);
+  color: #fff8e8;
+  box-shadow: 0 8px 18px rgba(77, 20, 14, 0.18);
+}
+
+body.temple-backdrop-page .button-link.secondary {
+  background: rgba(255, 248, 230, 0.56);
+  color: #5f201b;
+  border-color: rgba(146, 104, 42, 0.38);
+}
+
+body.temple-backdrop-page .main-menu {
+  background: rgba(255, 248, 230, 0.96);
+  border-color: rgba(146, 104, 42, 0.38);
+}
+
+body.temple-backdrop-page .account-kv {
+  border-bottom-color: rgba(146, 104, 42, 0.22);
+}
+
+body.temple-backdrop-page .admin-panel {
+  padding: clamp(14px, 2vw, 20px);
+}
+
+body.temple-backdrop-page .admin-console input,
+body.temple-backdrop-page .admin-console select,
+body.temple-backdrop-page .admin-console textarea {
+  border: 1px solid rgba(146, 104, 42, 0.32);
+  border-radius: 10px;
+  background: rgba(255, 252, 244, 0.9);
+  color: #3e2d25;
+}
+
+body.temple-backdrop-page .admin-console pre {
+  background: rgba(255, 248, 230, 0.72);
+  border: 1px solid rgba(146, 104, 42, 0.18);
+}
+
+body.temple-backdrop-page .temple-back-footer {
+  margin-top: 32px;
+}
+
+@media (max-width: 720px) {
+  body.temple-backdrop-page .temple-page-shell,
+  body.temple-backdrop-page .temple-admin-shell {
+    width: min(100% - 18px, 1120px);
+    padding-top: 12px;
+  }
+
+  body.temple-backdrop-page .branding,
+  body.temple-backdrop-page .admin-header {
+    border-radius: 18px;
+  }
+
+  body.temple-backdrop-page .support-note,
+  body.temple-backdrop-page .support-card,
+  body.temple-backdrop-page .account-card,
+  body.temple-backdrop-page .admin-panel {
+    border-radius: 16px;
+  }
+}
+
+/* Phase 10.11.1: support modal, back-page menu, CTA, and voice selection hotfix */
+
+/* Back-page hamburger must float above the second card/section. */
+body.temple-backdrop-page .temple-page-shell,
+body.temple-backdrop-page .branding,
+body.temple-backdrop-page .support-hero,
+body.temple-backdrop-page .about-hero,
+body.temple-backdrop-page .account-hero {
+  overflow: visible !important;
+}
+
+body.temple-backdrop-page .branding {
+  z-index: 250 !important;
+}
+
+body.temple-backdrop-page .header-actions {
+  z-index: 12000 !important;
+}
+
+body.temple-backdrop-page .main-menu {
+  z-index: 12001 !important;
+  box-shadow: 0 18px 36px rgba(42, 20, 12, 0.28) !important;
+}
+
+body.temple-backdrop-page .branding .main-menu.show,
+body.temple-backdrop-page .branding .main-menu.open,
+body.temple-backdrop-page .branding .main-menu.active,
+body.temple-backdrop-page .branding .header-actions.open .main-menu {
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+/* Center the hero/support CTA rows and make the language feel intentional. */
+body.temple-backdrop-page .support-cta-row {
+  justify-content: center !important;
+  align-items: center !important;
+  text-align: center !important;
+}
+
+body.temple-backdrop-page .support-cta-row .button-link {
+  min-width: min(220px, 100%) !important;
+  text-align: center !important;
+}
+
+/* Homepage support modal temple skin. */
+#supportModal.modal {
+  z-index: 6000 !important;
+  background:
+    radial-gradient(circle at 50% 18%, rgba(255, 244, 216, 0.20), transparent 34%),
+    rgba(28, 18, 14, 0.62) !important;
+  backdrop-filter: blur(3px);
+}
+
+#supportModal .support-modal-content {
+  position: relative !important;
+  width: min(960px, calc(100vw - 24px)) !important;
+  max-width: 960px !important;
+  max-height: calc(100vh - 32px) !important;
+  margin: clamp(12px, 4vh, 34px) auto !important;
+  overflow-y: auto !important;
+  box-sizing: border-box !important;
+  color: #3e2d25 !important;
+  border: 1px solid rgba(216, 187, 118, 0.74) !important;
+  border-radius: 26px !important;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 250, 236, 0.98), rgba(255, 245, 224, 0.88) 36%, rgba(242, 222, 187, 0.92) 100%),
+    rgba(255, 248, 232, 0.96) !important;
+  box-shadow:
+    0 24px 70px rgba(24, 13, 8, 0.38),
+    0 0 0 3px rgba(255, 245, 220, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82) !important;
+}
+
+#supportModal .support-modal-content .close {
+  position: absolute !important;
+  top: 12px !important;
+  right: 14px !important;
+  width: 36px !important;
+  height: 36px !important;
+  border-radius: 999px !important;
+  line-height: 1 !important;
+  color: #6f1f18 !important;
+  background: rgba(255, 248, 230, 0.86) !important;
+  border: 1px solid rgba(146, 104, 42, 0.32) !important;
+}
+
+#supportModal .support-modal-content h2 {
+  color: #5f201b !important;
+  letter-spacing: 0.04em !important;
+  text-align: center !important;
+  margin: 0.35rem 2.5rem 0.6rem !important;
+}
+
+#supportModal #supportStatusLine {
+  max-width: 720px !important;
+  margin: 0 auto 1rem !important;
+  color: #60483a !important;
+}
+
+#supportModal .profile-summary {
+  border: 1px solid rgba(146, 104, 42, 0.28) !important;
+  border-radius: 18px !important;
+  padding: 14px 16px !important;
+  margin: 12px auto 18px !important;
+  max-width: 760px !important;
+  background: rgba(255, 250, 238, 0.72) !important;
+  color: #4a382d !important;
+}
+
+#supportModal .support-grid {
+  grid-template-columns: repeat(auto-fit, minmax(235px, 1fr)) !important;
+  gap: 14px !important;
+}
+
+#supportModal .support-card {
+  border: 1px solid rgba(216, 187, 118, 0.58) !important;
+  border-radius: 20px !important;
+  background: linear-gradient(180deg, rgba(255, 252, 244, 0.96), rgba(247, 229, 199, 0.86)) !important;
+  box-shadow: 0 12px 26px rgba(61, 31, 18, 0.12) !important;
+}
+
+#supportModal .support-card h3 {
+  color: #5f201b !important;
+}
+
+#supportModal .support-actions button,
+#supportModal .support-checkout-btn,
+#supportModal #templeContributionBtn {
+  border-radius: 999px !important;
+  border: 1px solid rgba(255, 226, 165, 0.48) !important;
+  background: linear-gradient(180deg, #8f2b22, #651a17) !important;
+  color: #fff8e8 !important;
+  box-shadow: 0 8px 18px rgba(77, 20, 14, 0.16) !important;
+}
+
+#supportModal .support-checkout-btn:disabled {
+  opacity: 0.56 !important;
+  cursor: not-allowed !important;
+}
+
+/* Voice cards: no red hover wash. Selection is champagne/gold, names stay readable. */
+.voice-card {
+  position: relative !important;
+  color: #372820 !important;
+}
+
+.voice-card:hover,
+.voice-card:focus-visible {
+  background: linear-gradient(180deg, rgba(255, 252, 244, 0.98), rgba(255, 239, 202, 0.92)) !important;
+  border-color: rgba(224, 201, 135, 0.94) !important;
+  color: #372820 !important;
+  box-shadow:
+    0 0 0 1px rgba(224, 201, 135, 0.24),
+    0 10px 24px rgba(20, 31, 49, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78) !important;
+  transform: translateY(-1px);
+}
+
+.voice-card:hover .voice-copy strong,
+.voice-card:focus-visible .voice-copy strong,
+.voice-card.is-selected .voice-copy strong,
+.voice-card[aria-pressed="true"] .voice-copy strong {
+  color: #6f1f18 !important;
+  text-shadow: 0 1px 0 rgba(255, 248, 230, 0.72) !important;
+}
+
+.voice-card:hover .voice-copy em,
+.voice-card:hover .voice-copy small,
+.voice-card:focus-visible .voice-copy em,
+.voice-card:focus-visible .voice-copy small,
+.voice-card.is-selected .voice-copy em,
+.voice-card.is-selected .voice-copy small,
+.voice-card[aria-pressed="true"] .voice-copy em,
+.voice-card[aria-pressed="true"] .voice-copy small {
+  color: #4c3a2d !important;
+}
+
+.voice-card.is-selected,
+.voice-card[aria-pressed="true"] {
+  background:
+    radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.82), transparent 34%),
+    linear-gradient(180deg, rgba(255, 247, 219, 0.98), rgba(242, 218, 169, 0.92)) !important;
+  border-color: rgba(195, 151, 58, 0.98) !important;
+  box-shadow:
+    0 0 0 2px rgba(195, 151, 58, 0.30),
+    0 0 0 5px rgba(255, 245, 220, 0.34),
+    0 12px 28px rgba(20, 31, 49, 0.13),
+    inset 0 1px 0 rgba(255, 255, 255, 0.84) !important;
+}
+
+.voice-card.is-selected::after,
+.voice-card[aria-pressed="true"]::after {
+  content: "Selected";
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(195, 151, 58, 0.42);
+  background: rgba(255, 250, 238, 0.92);
+  color: #5f201b;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  box-shadow: 0 5px 12px rgba(61, 31, 18, 0.12);
+}
+
+@media (max-width: 560px) {
+  .voice-card.is-selected::after,
+  .voice-card[aria-pressed="true"]::after {
+    top: 10px;
+    right: 10px;
+    font-size: 0.66rem;
+  }
+
+  #supportModal .support-modal-content {
+    border-radius: 20px !important;
+  }
+}
+
+/* Phase 10.11.2: ornament reduction, voice message cleanup, and clean scroll upload */
+
+/* Keep the selected badge on Hathor/Moses; remove the redundant message below them. */
+.voice-choice-message {
+  display: none !important;
+}
+
+/* Homepage: remove the upper fleur under "Welcome to Your Temple" and make it a stronger gold line. */
+.temple-landing-hero .hero-divider.hero-divider-line-only {
+  width: min(420px, 74vw);
+  max-width: 420px;
+  margin: 16px auto 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+}
+
+.temple-landing-hero .hero-divider.hero-divider-line-only b {
+  display: none !important;
+}
+
+.temple-landing-hero .hero-divider.hero-divider-line-only span {
+  flex: 1 1 auto;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(210, 165, 67, 0.92), rgba(255, 235, 174, 0.95), rgba(210, 165, 67, 0.92), transparent);
+  box-shadow: 0 0 12px rgba(210, 165, 67, 0.32);
+}
+
+/* Scroll upload: hide native mechanical file field and use one clean chooser/upload button. */
+#scroll {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  min-width: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  opacity: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+
+.upload-zone[role="button"] {
+  cursor: pointer;
+}
+
+.upload-zone[role="button"]:focus-visible {
+  outline: 3px solid rgba(210, 165, 67, 0.62);
+  outline-offset: 4px;
+}
+
+.scroll-file-status {
+  max-width: min(620px, 92%);
+  margin: 10px auto 0;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(210, 165, 67, 0.34);
+  background: rgba(255, 250, 236, 0.74);
+  color: #5f201b;
+  font-size: 0.92rem;
+  font-weight: 650;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.scroll-file-status:empty {
+  display: none;
+}
+
+.scroll-form .upload-submit {
+  min-width: min(240px, 92%);
+}
+
+.scroll-form.has-selected-file .upload-submit {
+  box-shadow:
+    0 0 0 2px rgba(210, 165, 67, 0.22),
+    0 10px 24px rgba(77, 20, 14, 0.18);
+}
+
+/* Back pages: keep the top Return-to-Temple cross, hide decorative section crosses. */
+body.temple-backdrop-page .branding > .temple-back-cross {
+  display: flex !important;
+}
+
+body.temple-backdrop-page main section .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .support-note .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .support-card .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .account-card .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .about-grid .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .about-card .nav-cross:not(.temple-back-cross),
+body.temple-backdrop-page .section-cross,
+body.temple-backdrop-page .card-cross,
+body.temple-backdrop-page .title-cross {
+  display: none !important;
+}
+
+/* Phase 10.11.3: correct back-page cross hierarchy and homepage hero line */
+
+/* Homepage: the upper ornament becomes a clean, stronger gold line. */
+.hero-divider.hero-divider-line-only {
+  width: min(460px, 76vw) !important;
+  max-width: 460px !important;
+  margin: 16px auto 14px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0 !important;
+}
+
+.hero-divider.hero-divider-line-only b,
+.hero-divider.hero-divider-line-only strong {
+  display: none !important;
+}
+
+.hero-divider.hero-divider-line-only span {
+  display: block !important;
+  flex: 1 1 auto !important;
+  height: 2px !important;
+  border-radius: 999px !important;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(176, 124, 31, 0.72),
+    rgba(255, 232, 159, 0.98),
+    rgba(176, 124, 31, 0.72),
+    transparent
+  ) !important;
+  box-shadow:
+    0 0 10px rgba(210, 165, 67, 0.34),
+    0 1px 0 rgba(255, 250, 230, 0.62) !important;
+}
+
+/* Back pages: hide all decorative nav crosses by default. */
+body.temple-backdrop-page .nav-cross {
+  display: none !important;
+}
+
+/* Back pages: restore ONLY the protected top header cross divider. */
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross {
+  display: flex !important;
+  width: min(420px, 72vw) !important;
+  max-width: 420px !important;
+  margin: 10px auto 2px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 10px !important;
+}
+
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross span {
+  display: block !important;
+  flex: 1 1 auto !important;
+  height: 2px !important;
+  border-radius: 999px !important;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(176, 124, 31, 0.72),
+    rgba(255, 232, 159, 0.98),
+    rgba(176, 124, 31, 0.72),
+    transparent
+  ) !important;
+  box-shadow:
+    0 0 10px rgba(210, 165, 67, 0.34),
+    0 1px 0 rgba(255, 250, 230, 0.62) !important;
+}
+
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross strong {
+  display: inline-flex !important;
+  width: 42px !important;
+  height: 42px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 auto !important;
+  color: #7a2019 !important;
+  font-size: 1.45rem !important;
+  line-height: 1 !important;
+  border: 1px solid rgba(210, 165, 67, 0.52) !important;
+  border-radius: 999px !important;
+  background: radial-gradient(circle, rgba(255, 249, 225, 0.98), rgba(236, 204, 137, 0.86)) !important;
+  box-shadow:
+    0 0 0 4px rgba(255, 245, 220, 0.32),
+    0 6px 14px rgba(61, 31, 18, 0.16) !important;
+}
+
+/* Back pages: suppress lower/body crosses even if they use a different class name. */
+body.temple-backdrop-page main section .nav-cross,
+body.temple-backdrop-page main article .nav-cross,
+body.temple-backdrop-page .support-hero .nav-cross,
+body.temple-backdrop-page .about-hero .nav-cross,
+body.temple-backdrop-page .account-hero .nav-cross,
+body.temple-backdrop-page .support-note .nav-cross,
+body.temple-backdrop-page .support-card .nav-cross,
+body.temple-backdrop-page .account-card .nav-cross,
+body.temple-backdrop-page .about-grid .nav-cross,
+body.temple-backdrop-page .about-card .nav-cross,
+body.temple-backdrop-page .section-cross,
+body.temple-backdrop-page .card-cross,
+body.temple-backdrop-page .title-cross,
+body.temple-backdrop-page .heading-cross,
+body.temple-backdrop-page .ornament-cross,
+body.temple-backdrop-page .cross-divider,
+body.temple-backdrop-page .temple-section-cross {
+  display: none !important;
+}
+
+/* Phase 10.11.4: enlarge protected header cross and suppress heading pseudo-crosses */
+
+/* Keep the top Return-to-Temple cross only, but make the encircled mark feel intentional. */
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross {
+  display: flex !important;
+  width: min(500px, 78vw) !important;
+  max-width: 500px !important;
+  margin: 12px auto 6px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 16px !important;
+}
+
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross span {
+  display: block !important;
+  flex: 1 1 auto !important;
+  height: 2px !important;
+  min-width: 42px !important;
+  border-radius: 999px !important;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(176, 124, 31, 0.78),
+    rgba(255, 232, 159, 1),
+    rgba(176, 124, 31, 0.78),
+    transparent
+  ) !important;
+  box-shadow:
+    0 0 11px rgba(210, 165, 67, 0.38),
+    0 1px 0 rgba(255, 250, 230, 0.66) !important;
+}
+
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross strong {
+  display: inline-flex !important;
+  width: 48px !important;
+  height: 48px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 48px !important;
+  color: #7a2019 !important;
+  font-size: 1.62rem !important;
+  font-weight: 800 !important;
+  line-height: 1 !important;
+  border: 1.5px solid rgba(210, 165, 67, 0.62) !important;
+  border-radius: 999px !important;
+  background:
+    radial-gradient(circle at 50% 38%, rgba(255, 253, 238, 1), rgba(242, 213, 153, 0.92) 70%, rgba(205, 158, 62, 0.76)) !important;
+  box-shadow:
+    0 0 0 4px rgba(255, 245, 220, 0.36),
+    0 7px 16px rgba(61, 31, 18, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.78) !important;
+  text-shadow: 0 1px 0 rgba(255, 248, 230, 0.75) !important;
+}
+
+/*
+  The remaining lower crosses are not showing up in template grep,
+  so they are likely CSS pseudo-elements on headings/titles/cards.
+  Keep the real protected top cross above, but suppress generated crosses below it.
+*/
+body.temple-backdrop-page h1::before,
+body.temple-backdrop-page h1::after,
+body.temple-backdrop-page h2::before,
+body.temple-backdrop-page h2::after,
+body.temple-backdrop-page h3::before,
+body.temple-backdrop-page h3::after,
+body.temple-backdrop-page .crossed-title::before,
+body.temple-backdrop-page .crossed-title::after,
+body.temple-backdrop-page .temple-subtitle::before,
+body.temple-backdrop-page .temple-subtitle::after,
+body.temple-backdrop-page .support-note::before,
+body.temple-backdrop-page .support-note::after,
+body.temple-backdrop-page .support-card::before,
+body.temple-backdrop-page .support-card::after,
+body.temple-backdrop-page .account-grid::before,
+body.temple-backdrop-page .account-grid::after,
+body.temple-backdrop-page .admin-panel::before,
+body.temple-backdrop-page .admin-panel::after,
+body.temple-backdrop-page .summary-card::before,
+body.temple-backdrop-page .summary-card::after {
+  content: none !important;
+  display: none !important;
+  background: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Mobile: still larger than the old mark, but not oversized. */
+@media (max-width: 560px) {
+  body.temple-backdrop-page .branding > .nav-cross.temple-back-cross {
+    width: min(430px, 78vw) !important;
+    gap: 12px !important;
+  }
+
+  body.temple-backdrop-page .branding > .nav-cross.temple-back-cross strong {
+    width: 42px !important;
+    height: 42px !important;
+    flex-basis: 42px !important;
+    font-size: 1.42rem !important;
+  }
+}
+
