@@ -2994,3 +2994,76 @@ body.temple-backdrop-page .summary-card::after {
   }
 }
 
+
+
+/* Phase 11.0: PWA shell and iPhone safe-area readiness */
+:root {
+  --gi-safe-top: env(safe-area-inset-top, 0px);
+  --gi-safe-right: env(safe-area-inset-right, 0px);
+  --gi-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --gi-safe-left: env(safe-area-inset-left, 0px);
+}
+
+/* Prefer dynamic viewport height where supported while preserving older fallback behavior. */
+html,
+body {
+  min-height: 100vh;
+}
+
+@supports (height: 100dvh) {
+  html,
+  body {
+    min-height: 100dvh;
+  }
+}
+
+/* Compensate when iOS Home Screen / Safari safe areas are active. */
+@supports (padding-top: env(safe-area-inset-top)) {
+  body {
+    padding-top: var(--gi-safe-top);
+    padding-right: var(--gi-safe-right);
+    padding-bottom: var(--gi-safe-bottom);
+    padding-left: var(--gi-safe-left);
+    box-sizing: border-box;
+  }
+
+  .temple-nav,
+  .branding {
+    box-sizing: border-box;
+  }
+
+  .modal {
+    box-sizing: border-box;
+    padding-top: max(1rem, var(--gi-safe-top));
+    padding-right: max(1rem, var(--gi-safe-right));
+    padding-bottom: max(1rem, var(--gi-safe-bottom));
+    padding-left: max(1rem, var(--gi-safe-left));
+  }
+
+  .modal-content {
+    max-height: calc(100vh - 32px - var(--gi-safe-top) - var(--gi-safe-bottom)) !important;
+  }
+}
+
+@supports (height: 100dvh) {
+  .modal-content {
+    max-height: calc(100dvh - 32px - var(--gi-safe-top) - var(--gi-safe-bottom)) !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .oracle-actions button,
+  .upload-submit,
+  .menu-toggle,
+  .main-menu button,
+  .footer-links button,
+  .support-actions button,
+  .support-checkout-btn,
+  .button-link {
+    min-height: 44px;
+  }
+
+  textarea#seekerInput.oracle-input {
+    font-size: 16px;
+  }
+}
