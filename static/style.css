@@ -3067,3 +3067,164 @@ body {
     font-size: 16px;
   }
 }
+
+
+
+/* Phase 11.0.2: guided mobile voice and Home Screen nudge */
+.voice-status-panel {
+  width: min(760px, 100%);
+  box-sizing: border-box;
+  margin: 0 auto;
+  padding: 0.82rem 1rem;
+  border: 1px solid rgba(179,138,60,0.62);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 50% 0, rgba(255,255,255,0.88), transparent 12rem),
+    rgba(255,252,247,0.92);
+  color: var(--gi-slate);
+  text-align: center;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.82);
+}
+
+.voice-status-panel[hidden],
+.install-nudge[hidden] {
+  display: none !important;
+}
+
+.voice-status-panel strong {
+  display: block;
+  color: var(--gi-navy);
+  font-family: var(--gi-display-font);
+  font-size: 1rem;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.voice-status-panel span {
+  display: block;
+  margin-top: 0.22rem;
+  color: var(--gi-dark-silver);
+  font-size: 0.92rem;
+  line-height: 1.42;
+}
+
+.voice-status-panel.is-listening {
+  border-color: rgba(152,7,22,0.48);
+  box-shadow: 0 0 0 1px rgba(152,7,22,0.12), inset 0 1px 0 rgba(255,255,255,0.82);
+}
+
+.voice-status-panel.is-working {
+  border-color: rgba(10,58,104,0.42);
+}
+
+.voice-status-panel.is-speaking {
+  border-color: rgba(216,187,118,0.92);
+  box-shadow: 0 0 0 1px rgba(216,187,118,0.28), 0 10px 24px rgba(22,32,51,0.10);
+}
+
+.voice-status-panel.is-error {
+  border-color: rgba(152,7,22,0.72);
+  background: rgba(255,246,244,0.96);
+}
+
+.voice-status-panel.is-notice,
+.voice-status-panel.is-ready {
+  border-color: rgba(179,138,60,0.66);
+}
+
+.oracle-replay-button {
+  min-height: 44px;
+  margin: 0.8rem auto 0;
+  padding: 0.74rem 1rem;
+  border-radius: 7px;
+  border: 1px solid rgba(216,187,118,0.84);
+  background: linear-gradient(180deg, var(--gi-navy), var(--gi-navy-deep));
+  color: #fff;
+  font-family: var(--gi-display-font);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.install-nudge {
+  width: min(760px, 100%);
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.8rem;
+  align-items: center;
+  margin: 0.1rem auto 0;
+  padding: 0.82rem 0.95rem;
+  border: 1px solid rgba(179,138,60,0.55);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 0 50%, rgba(216,187,118,0.12), transparent 9rem),
+    rgba(255,250,241,0.94);
+  text-align: left;
+}
+
+.install-nudge-copy {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.install-nudge-copy strong {
+  color: var(--gi-navy);
+  font-family: var(--gi-display-font);
+  font-size: 0.98rem;
+  font-weight: 400;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.install-nudge-copy span {
+  color: var(--gi-dark-silver);
+  font-size: 0.9rem;
+  line-height: 1.42;
+}
+
+.install-nudge-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.install-nudge-actions button {
+  min-height: 40px;
+  margin: 0;
+  padding: 0.58rem 0.72rem;
+  border-radius: 7px;
+  border: 1px solid rgba(216,187,118,0.74);
+  background: rgba(255,252,247,0.92);
+  color: var(--gi-navy);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+#installNudgeHelpBtn {
+  background: linear-gradient(180deg, var(--gi-navy), var(--gi-navy-deep));
+  color: #fff;
+}
+
+@media (max-width: 720px) {
+  .voice-status-panel,
+  .install-nudge {
+    width: 100%;
+  }
+
+  .install-nudge {
+    grid-template-columns: 1fr;
+    text-align: center;
+  }
+
+  .install-nudge-actions {
+    justify-content: center;
+  }
+
+  .install-nudge-actions button {
+    flex: 1 1 140px;
+    min-height: 44px;
+  }
+}
