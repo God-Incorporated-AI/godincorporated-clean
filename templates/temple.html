@@ -13,7 +13,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/static/img/favicon-32.png?v=20260511-pwa1" />
   <link rel="icon" type="image/x-icon" href="/favicon.ico?v=20260511-pwa1" />
   <title>godincorporated.ai — Your Temple</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260511-pwa1" />
+  <link rel="stylesheet" href="/static/style.css?v=20260512-voice1" />
 </head>
 <body>
   <main class="temple-shell">
@@ -106,9 +106,25 @@
 
         <div id="oracleHelper" class="oracle-helper"></div>
 
+        <div id="voiceStatusPanel" class="voice-status-panel" aria-live="polite" hidden>
+          <strong id="voiceStatusTitle">Speak with the Oracle</strong>
+          <span id="voiceStatusMessage">Tap Speak when you are ready to ask aloud.</span>
+        </div>
+
         <div class="oracle-actions">
           <button type="submit" id="askButton">Ask the Oracle</button>
           <button type="button" id="speakButton">Speak</button>
+        </div>
+
+        <div id="installNudge" class="install-nudge" hidden>
+          <div class="install-nudge-copy">
+            <strong>Add the Temple to your Home Screen</strong>
+            <span id="installNudgeMessage">For a quieter, app-like experience, tap Share, then Add to Home Screen.</span>
+          </div>
+          <div class="install-nudge-actions">
+            <button type="button" id="installNudgeHelpBtn">Show me how</button>
+            <button type="button" id="installNudgeDismissBtn">Not now</button>
+          </div>
         </div>
       </form>
     </section>
@@ -310,6 +326,6 @@
     </div>
   </div>
 
-  <script src="/static/temple.js?v=20260506-clean1"></script>
+  <script src="/static/temple.js?v=20260512-voice1"></script>
 </body>
 </html>

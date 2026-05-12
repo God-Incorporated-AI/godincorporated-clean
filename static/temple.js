@@ -50,6 +50,13 @@ document.addEventListener("DOMContentLoaded", function () {
   const scrollCount = document.getElementById("scrollCount");
   const scrollInput = document.getElementById("scroll");
   const oracleHelper = document.getElementById("oracleHelper");
+  const voiceStatusPanel = document.getElementById("voiceStatusPanel");
+  const voiceStatusTitle = document.getElementById("voiceStatusTitle");
+  const voiceStatusMessage = document.getElementById("voiceStatusMessage");
+  const installNudge = document.getElementById("installNudge");
+  const installNudgeMessage = document.getElementById("installNudgeMessage");
+  const installNudgeHelpBtn = document.getElementById("installNudgeHelpBtn");
+  const installNudgeDismissBtn = document.getElementById("installNudgeDismissBtn");
 
   const feedbackModal = document.getElementById("feedbackModal");
   const feedbackTitle = document.getElementById("feedbackTitle");
@@ -60,6 +67,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
   const ANON_STORAGE_KEY = "godinc_anon_id";
   const ORACLE_VOICE_STORAGE_KEY = "godinc_oracle_voice";
+  const INSTALL_NUDGE_STORAGE_KEY = "godinc_install_nudge_dismissed";
 
   function generateAnonymousId() {
     if (window.crypto && typeof window.crypto.randomUUID === "function") {
@@ -452,6 +460,7 @@ if (seekerInput && oracleForm) {
       if (data.answer) {
         oracleAnswer.textContent = data.answer;
         await updateIdentityDisplay();
+        maybeShowInstallNudge("oracle_answer");
       } else if (data.error) {
         oracleAnswer.textContent = "⚠️ Error: " + data.error;
       } else {
@@ -582,6 +591,126 @@ if (seekerInput && oracleForm) {
     return replayVoiceButton;
   }
 
+
+  function setVoiceStatus(title, message, state = "neutral", shouldShow = true) {
+    if (!voiceStatusPanel || !voiceStatusTitle || !voiceStatusMessage) return;
+
+    voiceStatusPanel.hidden = !shouldShow;
+    voiceStatusPanel.classList.remove(
+      "is-listening",
+      "is-working",
+      "is-speaking",
+      "is-ready",
+      "is-error",
+      "is-notice"
+    );
+
+    if (state) {
+      voiceStatusPanel.classList.add("is-" + state);
+    }
+
+    voiceStatusTitle.textContent = title || "Voice mode";
+    voiceStatusMessage.textContent = message || "";
+  }
+
+  function getMicrophoneRecoveryMessage(err) {
+    const name = err && err.name ? err.name : "";
+
+    if (name === "NotAllowedError" || name === "SecurityError") {
+      return "Microphone access is blocked. In Safari, allow microphone access for this site, or type your question below.";
+    }
+
+    if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+      return "No microphone was found. You can still type your question below.";
+    }
+
+    if (name === "NotReadableError" || name === "TrackStartError") {
+      return "The microphone could not be opened. Another app may be using it. Close other audio apps and try again.";
+    }
+
+    return err && err.message
+      ? err.message
+      : "The microphone could not be opened. You can type your question below or try again.";
+  }
+
+  function getSupportedVoiceMimeType() {
+    if (typeof MediaRecorder === "undefined" || typeof MediaRecorder.isTypeSupported !== "function") {
+      return "";
+    }
+
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4",
+      "audio/aac"
+    ];
+
+    return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+  }
+
+  function getVoiceFilename(blob) {
+    const type = (blob && blob.type ? blob.type : "").toLowerCase();
+
+    if (type.includes("mp4")) return "voice_input.mp4";
+    if (type.includes("aac")) return "voice_input.aac";
+    if (type.includes("ogg")) return "voice_input.ogg";
+    if (type.includes("wav")) return "voice_input.wav";
+
+    return "voice_input.webm";
+  }
+
+  function isStandaloneDisplay() {
+    return (
+      window.matchMedia("(display-mode: standalone)").matches ||
+      window.navigator.standalone === true
+    );
+  }
+
+  function isLikelyMobileSafari() {
+    const ua = window.navigator.userAgent || "";
+    const isIOS = /iPhone|iPad|iPod/i.test(ua);
+    const isSafari = /Safari/i.test(ua) && !/CriOS|FxiOS|EdgiOS/i.test(ua);
+    return isIOS && isSafari;
+  }
+
+  function shouldShowInstallNudge() {
+    if (!installNudge) return false;
+    if (isStandaloneDisplay()) return false;
+    if (!isLikelyMobileSafari() && window.innerWidth > 820) return false;
+
+    return !localStorage.getItem(INSTALL_NUDGE_STORAGE_KEY);
+  }
+
+  function maybeShowInstallNudge(reason = "engagement") {
+    if (!shouldShowInstallNudge()) return;
+
+    installNudge.hidden = false;
+
+    if (installNudgeMessage) {
+      installNudgeMessage.textContent = reason === "voice_complete"
+        ? "For a quieter, app-like voice experience, tap Share, then Add to Home Screen."
+        : "For a quieter, app-like experience, tap Share, then Add to Home Screen.";
+    }
+  }
+
+  function dismissInstallNudge() {
+    localStorage.setItem(INSTALL_NUDGE_STORAGE_KEY, new Date().toISOString());
+
+    if (installNudge) {
+      installNudge.hidden = true;
+    }
+  }
+
+  if (installNudgeHelpBtn && installNudgeMessage) {
+    installNudgeHelpBtn.addEventListener("click", function () {
+      installNudgeMessage.textContent = "On iPhone Safari: tap the Share icon, scroll, choose Add to Home Screen, then tap Add.";
+    });
+  }
+
+  if (installNudgeDismissBtn) {
+    installNudgeDismissBtn.addEventListener("click", dismissInstallNudge);
+  }
+
   function stopVoiceTracks() {
     if (voiceStream) {
       voiceStream.getTracks().forEach((track) => track.stop());
@@ -593,6 +722,15 @@ if (seekerInput && oracleForm) {
     voiceIsRecording = false;
     speakButton.disabled = false;
     speakButton.textContent = "🎤 Speak";
+
+    const audioIsSpeaking = oracleAudio && !oracleAudio.paused && !oracleAudio.ended;
+    if (voiceStatusPanel && !voiceStatusPanel.hidden && !audioIsSpeaking) {
+      setVoiceStatus(
+        "Voice ready",
+        "Tap Speak when you are ready to ask aloud.",
+        "ready"
+      );
+    }
   }
 
   async function playOracleAudio(audioUrl) {
@@ -613,9 +751,14 @@ if (seekerInput && oracleForm) {
     audio.onplay = function () {
       replayButton.textContent = "🔊 Speaking...";
       replayButton.disabled = true;
+      setVoiceStatus("Oracle speaking", "Listen. When the voice ends, you may ask again.", "speaking");
     };
 
-    audio.onended = setReplayReady;
+    audio.onended = function () {
+      setReplayReady();
+      setVoiceStatus("Voice complete", "Tap Speak to continue the conversation.", "ready");
+      maybeShowInstallNudge("voice_complete");
+    };
 
     audio.onpause = function () {
       if (audio.ended) {
@@ -627,15 +770,21 @@ if (seekerInput && oracleForm) {
       await audio.play();
     } catch (err) {
       setReplayReady();
+      setVoiceStatus(
+        "Tap to hear the Oracle",
+        "Safari may need one more tap before it can play the Oracle voice. Use Play Oracle Voice.",
+        "notice"
+      );
     }
   }
 
   async function submitVoiceRecording(blob) {
     const selectedVoice = voiceSelect.value;
     const formData = new FormData();
-    formData.append("file", blob, "voice_input.webm");
+    formData.append("file", blob, getVoiceFilename(blob));
     formData.append("voice", selectedVoice);
 
+    setVoiceStatus("Transcribing your voice", "The Temple is preparing your spoken question.", "working");
     oracleAnswer.textContent = "🔄 Transcribing...";
 
     const transcribeResponse = await identityFetch("/voice/transcribe", {
@@ -660,12 +809,14 @@ if (seekerInput && oracleForm) {
     }
 
     seekerInput.value = spokenQuestion;
+    setVoiceStatus("Consulting the Oracle", "Your question has been heard. The Oracle is answering.", "working");
     oracleAnswer.textContent = "You said: " + spokenQuestion + "\n\n🔮 Consulting the Oracle...";
 
     const answerData = await submitOracleVoiceQuestion(spokenQuestion, selectedVoice);
 
     if (answerData.answer) {
       oracleAnswer.textContent = "You said: " + spokenQuestion + "\n\n" + answerData.answer;
+      setVoiceStatus("Oracle answered", "The written answer is ready. Preparing the spoken voice.", "working");
       await updateIdentityDisplay();
     } else if (answerData.error) {
       oracleAnswer.textContent = "⚠️ Error: " + answerData.error;
@@ -679,6 +830,7 @@ if (seekerInput && oracleForm) {
     replayButton.style.display = "inline-block";
     replayButton.textContent = "Preparing Oracle Voice...";
     replayButton.disabled = true;
+    setVoiceStatus("Preparing Oracle voice", "The Temple is preparing the spoken response.", "working");
 
     try {
       const ttsData = await prepareOracleVoice(answerData.answer, selectedVoice);
@@ -687,25 +839,50 @@ if (seekerInput && oracleForm) {
       } else {
         replayButton.textContent = "Voice unavailable";
         replayButton.disabled = true;
+        setVoiceStatus("Voice unavailable", "The written answer is ready, but the spoken voice could not be prepared.", "notice");
       }
     } catch (err) {
       replayButton.textContent = "Voice unavailable";
       replayButton.disabled = true;
+      setVoiceStatus("Voice unavailable", "The written answer is ready, but the spoken voice could not be prepared.", "notice");
     }
   }
 
   async function startVoiceRecording() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      alert("🎤 Microphone not supported in this browser.");
+      setVoiceStatus(
+        "Microphone unavailable",
+        "This browser does not support microphone recording. You can still type your question below.",
+        "error"
+      );
       return;
     }
+
+    if (typeof MediaRecorder === "undefined") {
+      setVoiceStatus(
+        "Voice recording unavailable",
+        "This browser can open the microphone, but cannot record voice here. You can still type your question below.",
+        "error"
+      );
+      return;
+    }
+
+    setVoiceStatus(
+      "Microphone permission",
+      "Safari may ask for microphone access. The Temple listens only while the button says Stop.",
+      "notice"
+    );
 
     const replayButton = ensureReplayVoiceButton();
     replayButton.style.display = "none";
 
     voiceChunks = [];
     voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    voiceRecorder = new MediaRecorder(voiceStream);
+
+    const voiceMimeType = getSupportedVoiceMimeType();
+    voiceRecorder = voiceMimeType
+      ? new MediaRecorder(voiceStream, { mimeType: voiceMimeType })
+      : new MediaRecorder(voiceStream);
 
     voiceRecorder.ondataavailable = function (event) {
       if (event.data && event.data.size > 0) {
@@ -716,7 +893,10 @@ if (seekerInput && oracleForm) {
     voiceRecorder.onstop = async function () {
       stopVoiceTracks();
 
-      const blob = new Blob(voiceChunks, { type: "audio/webm" });
+      const recorderType = voiceRecorder && voiceRecorder.mimeType ? voiceRecorder.mimeType : "";
+      const chunkType = voiceChunks[0] && voiceChunks[0].type ? voiceChunks[0].type : "";
+      const blobType = recorderType || chunkType || "audio/webm";
+      const blob = new Blob(voiceChunks, { type: blobType });
       voiceChunks = [];
 
       try {
@@ -746,6 +926,7 @@ if (seekerInput && oracleForm) {
     voiceIsRecording = true;
     speakButton.disabled = false;
     speakButton.textContent = "⏹ Stop";
+    setVoiceStatus("Listening", "Speak naturally. Tap Stop when you are finished.", "listening");
     oracleAnswer.textContent = "🎙 Listening... Tap Stop when you are finished.";
   }
 
@@ -763,7 +944,9 @@ if (seekerInput && oracleForm) {
     } catch (err) {
       stopVoiceTracks();
       resetVoiceButton();
-      oracleAnswer.textContent = "⚠️ Microphone error: " + (err.message || "Could not start recording.");
+      const recoveryMessage = getMicrophoneRecoveryMessage(err);
+      setVoiceStatus("Microphone needs attention", recoveryMessage, "error");
+      oracleAnswer.textContent = "The microphone could not be opened. You can type your question below, or adjust microphone access and try again.";
     }
   });
 
