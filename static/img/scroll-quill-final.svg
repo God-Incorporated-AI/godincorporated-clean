@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 130 120" role="img" aria-label="Quill and inkstand">
+  <defs>
+    <linearGradient id="gold" x1="0" x2="1">
+      <stop offset="0%" stop-color="#9f7a35"/>
+      <stop offset="50%" stop-color="#d8bb76"/>
+      <stop offset="100%" stop-color="#9f7a35"/>
+    </linearGradient>
+  </defs>
+  <path d="M91 11c-30 6-51 29-61 52-5 12-8 24-20 36 20-3 35-12 48-24 17-15 32-39 33-64z" fill="#ead3a6" stroke="url(#gold)" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M30 85c20-18 38-41 55-66" fill="none" stroke="#8e6a2e" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M40 97h56l-7 13H47z" fill="#74502d" stroke="url(#gold)" stroke-width="2"/>
+  <path d="M54 82h28l6 15H48z" fill="#1b2f44" stroke="url(#gold)" stroke-width="2"/>
+  <path d="M52 102h38" stroke="#d8bb76" stroke-width="2" stroke-linecap="round"/>
+</svg>
