@@ -48,3 +48,15 @@ temple_backups/
 # Local browser/session test artifacts
 cookies*.txt
 anon_cookies.txt
+
+# Xcode local user/workspace state
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+DerivedData/
+
+# Xcode local user/workspace state
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+DerivedData/
