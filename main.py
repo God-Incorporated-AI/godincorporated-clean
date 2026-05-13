@@ -5685,6 +5685,64 @@ def upsert_local_stripe_subscription(
 
 
 
+def cancel_failed_stripe_subscription(stripe_subscription_id: Optional[str]) -> dict:
+    """
+    Cancel a Stripe recurring subscription after renewal failure.
+
+    Product policy:
+    - failed renewal demotes access immediately
+    - no long retry cycle
+    - no surprise out-of-cycle charge after the seeker has been moved to the floor
+
+    This helper is intentionally non-fatal. If Stripe cancellation fails,
+    the access demotion and failed transaction record should still stand.
+    """
+    if not stripe_subscription_id:
+        return {
+            "cancelled": False,
+            "subscription_row": None,
+            "error": "missing_stripe_subscription_id",
+        }
+
+    logger.info(
+        "Stripe failed renewal cancellation begin subscription=%s",
+        stripe_subscription_id,
+    )
+
+    try:
+        canceled_subscription = stripe.Subscription.delete(stripe_subscription_id)
+        canceled_subscription = stripe_obj_to_plain(canceled_subscription)
+
+        sub_row = upsert_local_stripe_subscription(
+            subscription_obj=canceled_subscription
+        )
+
+        logger.info(
+            "Stripe failed renewal cancellation complete subscription=%s local_subscription_id=%s user_id=%s",
+            stripe_subscription_id,
+            sub_row.get("id") if sub_row else None,
+            sub_row.get("user_id") if sub_row else None,
+        )
+
+        return {
+            "cancelled": True,
+            "subscription_row": sub_row,
+            "error": None,
+        }
+    except Exception as exc:
+        logger.exception(
+            "Stripe failed renewal cancellation failed subscription=%s error=%s",
+            stripe_subscription_id,
+            exc,
+        )
+        return {
+            "cancelled": False,
+            "subscription_row": None,
+            "error": str(exc),
+        }
+
+
+
 def upsert_billing_transaction_from_invoice(
     event_id: str,
     invoice_obj: dict,
@@ -6081,7 +6139,13 @@ def process_stripe_event(event: dict) -> dict:
                     transaction_kind="monthly_renewal" if context.get("support_mode") == "monthly_recurring" else "annual_renewal",
                     status="failed"
                 )
-                helper_name = f"apply_subscription_renewal_failure_to_floor:{context.get('support_mode')}"
+
+                cancellation_result = cancel_failed_stripe_subscription(stripe_subscription_id)
+
+                if cancellation_result.get("cancelled"):
+                    helper_name = f"apply_subscription_renewal_failure_to_floor_and_cancel_stripe:{context.get('support_mode')}"
+                else:
+                    helper_name = f"apply_subscription_renewal_failure_to_floor_cancel_pending:{context.get('support_mode')}"
 
         elif event_type == "invoice.upcoming":
             context = resolve_user_and_subscription_context(
