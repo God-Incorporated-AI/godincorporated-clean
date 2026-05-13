@@ -9,6 +9,11 @@
 --   It does not alter existing Stripe checkout behavior.
 --   stripe_price_map remains the active Stripe lookup table for web/PWA.
 --
+-- Operational note:
+--   This file is not auto-applied by Render deploys.
+--   Apply manually per environment DB after verifying that environment's
+--   stripe_price_map and plan_catalog are correct.
+--
 -- Initial seed:
 --   Copy existing active Stripe rows from stripe_price_map.
 --   Apple/Google rows will be added only after their platform product records exist.
