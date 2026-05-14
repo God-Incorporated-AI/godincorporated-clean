@@ -3696,3 +3696,138 @@ button,
     letter-spacing: 0.02em;
   }
 }
+
+
+/* Phase 11.2E: isolated footer signature cleanup */
+.temple-footer.gi-site-footer {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  justify-items: center !important;
+  gap: 0.7rem !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+  margin-top: 0.8rem !important;
+  padding: 1rem 0.75rem !important;
+  overflow: hidden !important;
+  text-align: center !important;
+  background: linear-gradient(180deg, var(--gi-navy), var(--gi-navy-deep)) !important;
+  border-top: 1px solid rgba(216,187,118,0.62) !important;
+}
+
+.temple-footer.gi-site-footer .gi-footer-nav,
+.temple-footer.gi-site-footer .footer-links {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  align-items: center !important;
+  justify-content: center !important;
+  justify-items: center !important;
+  gap: clamp(0.18rem, 1.7vw, 0.55rem) !important;
+  width: min(100%, 420px) !important;
+  max-width: 100% !important;
+  margin: 0 auto !important;
+  padding: 0 0.25rem !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+}
+
+.temple-footer.gi-site-footer .footer-links button {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0.52rem clamp(0.25rem, 1.7vw, 0.72rem) !important;
+  box-sizing: border-box !important;
+  color: #ffffff !important;
+  font-size: clamp(0.68rem, 2.4vw, 0.86rem) !important;
+  line-height: 1.12 !important;
+  letter-spacing: clamp(0.015em, 0.5vw, 0.045em) !important;
+  text-align: center !important;
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+}
+
+.temple-footer.gi-site-footer .footer-links button:hover,
+.temple-footer.gi-site-footer .footer-links button:focus-visible {
+  color: #ffecc8 !important;
+}
+
+.gi-footer-signature {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  justify-self: center !important;
+  flex-wrap: wrap !important;
+  gap: 0.55rem !important;
+  width: fit-content !important;
+  max-width: 100% !important;
+  margin: 0 auto !important;
+  color: #d7dfeb !important;
+  font-size: 0.86rem !important;
+  line-height: 1.25 !important;
+  text-align: center !important;
+  white-space: normal !important;
+}
+
+.gi-footer-mark-tile {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 34px !important;
+  height: 34px !important;
+  flex: 0 0 34px !important;
+  border-radius: 999px !important;
+  border: 1px solid rgba(216,187,118,0.78) !important;
+  background: radial-gradient(circle at 50% 42%, #fff7e5, #d9b96b 72%, #0a3a68 73%) !important;
+  box-shadow: 0 0 0 2px rgba(255,245,220,0.16), 0 4px 10px rgba(0,0,0,0.20) !important;
+}
+
+.gi-footer-signature-mark {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  width: 24px !important;
+  height: 24px !important;
+  max-width: 24px !important;
+  max-height: 24px !important;
+  object-fit: contain !important;
+}
+
+.gi-footer-signature-text {
+  display: inline-block !important;
+  color: #d7dfeb !important;
+  max-width: 100% !important;
+}
+
+@media (max-width: 420px) {
+  .temple-footer.gi-site-footer {
+    gap: 0.75rem !important;
+    padding: 0.95rem 0.45rem !important;
+  }
+
+  .temple-footer.gi-site-footer .gi-footer-nav,
+  .temple-footer.gi-site-footer .footer-links {
+    width: 100% !important;
+    gap: 0.16rem !important;
+    padding: 0 !important;
+  }
+
+  .temple-footer.gi-site-footer .footer-links button {
+    padding: 0.48rem 0.18rem !important;
+    font-size: 0.66rem !important;
+    letter-spacing: 0.01em !important;
+  }
+
+  .gi-footer-mark-tile {
+    width: 30px !important;
+    height: 30px !important;
+    flex-basis: 30px !important;
+  }
+
+  .gi-footer-signature-mark {
+    width: 21px !important;
+    height: 21px !important;
+  }
+}
