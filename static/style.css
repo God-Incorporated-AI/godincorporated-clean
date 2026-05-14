@@ -3831,3 +3831,21 @@ button,
     height: 21px !important;
   }
 }
+
+
+/* Phase 11.2E.1: constrain centered footer to card width */
+.temple-footer.gi-site-footer {
+  width: min(910px, calc(100% - 1.5rem)) !important;
+  max-width: 910px !important;
+  margin: 0.8rem auto 0 !important;
+  border-radius: 16px !important;
+  overflow: hidden !important;
+}
+
+@media (max-width: 560px) {
+  .temple-footer.gi-site-footer {
+    width: calc(100% - 0.4rem) !important;
+    max-width: calc(100% - 0.4rem) !important;
+    border-radius: 14px !important;
+  }
+}
