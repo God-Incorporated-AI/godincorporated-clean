@@ -1,3 +1,20 @@
+/* Phase 11.2C.2: self-hosted brand typography */
+@font-face {
+  font-family: "Baloo Chettan 2";
+  src: url("/static/fonts/BalooChettan2.ttf") format("truetype");
+  font-weight: 400 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Nunito Sans";
+  src: url("/static/fonts/NunitoSans.ttf") format("truetype");
+  font-weight: 300 1000;
+  font-style: normal;
+  font-display: swap;
+}
+
 body {
   font-family: 'Georgia', serif;
   background-color: #f4f1e9;
@@ -3226,5 +3243,456 @@ body {
   .install-nudge-actions button {
     flex: 1 1 140px;
     min-height: 44px;
+  }
+}
+
+
+/* Phase 11.2C: God Incorporated circular brand mark and deep-blue/gold nav polish */
+:root {
+  --godinc-blue: #0a3a68;
+  --godinc-blue-deep: #062744;
+  --godinc-blue-ink: #082f52;
+  --godinc-gold: #c49a3a;
+  --godinc-gold-soft: #d6b36a;
+  --godinc-parchment: #f8f1e6;
+}
+
+.brand-lockup,
+.branding .brand-home-link.brand-lockup {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(0.45rem, 1.25vw, 0.8rem);
+  color: var(--godinc-blue) !important;
+  text-decoration: none !important;
+  letter-spacing: 0.075em;
+  text-transform: lowercase;
+  line-height: 1;
+}
+
+.godinc-brand-mark {
+  width: clamp(38px, 6vw, 62px);
+  height: clamp(38px, 6vw, 62px);
+  flex: 0 0 auto;
+  display: inline-block;
+  filter: drop-shadow(0 2px 2px rgba(6, 39, 68, 0.14));
+}
+
+.godinc-wordmark {
+  color: var(--godinc-blue);
+  font-family: "Avenir Next", "Sora", "Space Grotesk", Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: clamp(1.35rem, 4.2vw, 3.1rem);
+  font-weight: 400;
+  letter-spacing: 0.075em;
+  text-transform: lowercase;
+  white-space: nowrap;
+}
+
+.brand-lockup:hover .godinc-wordmark,
+.brand-lockup:focus-visible .godinc-wordmark {
+  color: var(--godinc-blue-deep);
+  text-shadow: 0 0 12px rgba(196, 154, 58, 0.22);
+}
+
+.nav-cross.brand-mark-divider,
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross.brand-mark-divider {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: clamp(0.7rem, 3vw, 1.8rem) !important;
+  margin: clamp(0.55rem, 2vw, 1.2rem) auto !important;
+  width: min(760px, 92vw) !important;
+  color: var(--godinc-gold) !important;
+}
+
+.nav-cross.brand-mark-divider span,
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross.brand-mark-divider span {
+  display: block !important;
+  flex: 1 1 auto !important;
+  height: 1px !important;
+  max-width: 260px !important;
+  background: linear-gradient(90deg, transparent, var(--godinc-gold), transparent) !important;
+  opacity: 0.92 !important;
+}
+
+.nav-cross.brand-mark-divider strong,
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross.brand-mark-divider strong {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: clamp(58px, 8vw, 86px) !important;
+  height: clamp(58px, 8vw, 86px) !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: radial-gradient(circle at center, rgba(248, 241, 230, 0.86), rgba(248, 241, 230, 0.32)) !important;
+  color: transparent !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  box-shadow: 0 8px 18px rgba(6, 39, 68, 0.12) !important;
+}
+
+.godinc-divider-mark {
+  width: 100% !important;
+  height: 100% !important;
+  display: block !important;
+}
+
+.temple-footer .footer-links {
+  width: min(980px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(196, 154, 58, 0.55);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(6, 39, 68, 0.98), rgba(10, 58, 104, 0.94)),
+    var(--godinc-blue-deep);
+  box-shadow:
+    inset 0 0 0 1px rgba(248, 241, 230, 0.08),
+    0 16px 34px rgba(6, 39, 68, 0.22);
+}
+
+.temple-footer .footer-links button {
+  color: var(--godinc-gold-soft) !important;
+  border-color: rgba(196, 154, 58, 0.42) !important;
+  background: rgba(248, 241, 230, 0.05) !important;
+  letter-spacing: 0.08em;
+}
+
+.temple-footer .footer-links button:hover,
+.temple-footer .footer-links button:focus-visible {
+  color: var(--godinc-parchment) !important;
+  border-color: rgba(214, 179, 106, 0.78) !important;
+  background: rgba(196, 154, 58, 0.16) !important;
+}
+
+@media (max-width: 700px) {
+  .godinc-wordmark {
+    font-size: clamp(1.1rem, 7vw, 1.8rem);
+    letter-spacing: 0.045em;
+  }
+
+  .godinc-brand-mark {
+    width: clamp(34px, 13vw, 48px);
+    height: clamp(34px, 13vw, 48px);
+  }
+
+  .nav-cross.brand-mark-divider strong,
+  body.temple-backdrop-page .branding > .nav-cross.temple-back-cross.brand-mark-divider strong {
+    width: 58px !important;
+    height: 58px !important;
+  }
+}
+
+
+/* Phase 11.2C.1: brand lockup scale + font-ready correction */
+body,
+button,
+input,
+textarea,
+select {
+  font-family: "Nunito Sans", "Avenir Next", Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.branding .brand-home-link.brand-lockup,
+.brand-lockup {
+  max-width: min(560px, 48vw);
+  flex: 1 1 auto;
+  gap: clamp(0.32rem, 0.85vw, 0.55rem);
+}
+
+.godinc-brand-mark {
+  width: clamp(26px, 3.1vw, 40px);
+  height: clamp(26px, 3.1vw, 40px);
+}
+
+.godinc-wordmark {
+  font-family: "Baloo Chettan 2", "Avenir Next", "Century Gothic", "Trebuchet MS", Inter, system-ui, sans-serif;
+  font-size: clamp(1.08rem, 2.25vw, 1.78rem);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  line-height: 1;
+}
+
+.temple-nav .godinc-brand-mark {
+  width: clamp(28px, 3.25vw, 42px);
+  height: clamp(28px, 3.25vw, 42px);
+}
+
+.temple-nav .godinc-wordmark {
+  font-size: clamp(1.15rem, 2.55vw, 1.95rem);
+}
+
+/* Header mark should read as a compact icon, not a giant divider. */
+.branding > .nav-cross.brand-mark-divider {
+  flex: 0 0 auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  margin: 0 0.6rem !important;
+  gap: 0 !important;
+}
+
+.branding > .nav-cross.brand-mark-divider span {
+  display: none !important;
+}
+
+.branding > .nav-cross.brand-mark-divider strong {
+  width: clamp(30px, 3.35vw, 44px) !important;
+  height: clamp(30px, 3.35vw, 44px) !important;
+  min-width: clamp(30px, 3.35vw, 44px) !important;
+  box-shadow: 0 4px 10px rgba(6, 39, 68, 0.10) !important;
+}
+
+/* Back pages can keep the mark as ceremonial divider, but smaller. */
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross.brand-mark-divider {
+  width: min(480px, 82vw) !important;
+  margin: 0.45rem auto 0.7rem !important;
+  gap: clamp(0.45rem, 1.6vw, 0.85rem) !important;
+}
+
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross.brand-mark-divider span {
+  display: block !important;
+  max-width: 160px !important;
+}
+
+body.temple-backdrop-page .branding > .nav-cross.temple-back-cross.brand-mark-divider strong {
+  width: clamp(40px, 5.2vw, 56px) !important;
+  height: clamp(40px, 5.2vw, 56px) !important;
+  min-width: clamp(40px, 5.2vw, 56px) !important;
+}
+
+/* Lower nav strip: preserve the dark-blue/gold treatment but reduce its bulk. */
+.temple-footer .footer-links {
+  width: min(880px, calc(100vw - 48px));
+  padding: 0.55rem 0.75rem;
+  border-radius: 14px;
+}
+
+.temple-footer .footer-links button {
+  padding: 0.45rem 0.72rem;
+  font-size: clamp(0.74rem, 1.25vw, 0.9rem);
+  letter-spacing: 0.075em;
+}
+
+/* Homepage: keep brand from overrunning welcome/user/menu area. */
+.temple-nav {
+  gap: clamp(0.45rem, 1vw, 0.9rem);
+}
+
+.temple-nav .brand-lockup {
+  min-width: 0;
+}
+
+@media (max-width: 1100px) {
+  .branding .brand-home-link.brand-lockup,
+  .brand-lockup {
+    max-width: min(520px, 54vw);
+  }
+
+  .godinc-wordmark,
+  .temple-nav .godinc-wordmark {
+    font-size: clamp(1.08rem, 3vw, 1.65rem);
+  }
+
+  .godinc-brand-mark,
+  .temple-nav .godinc-brand-mark {
+    width: clamp(26px, 4vw, 38px);
+    height: clamp(26px, 4vw, 38px);
+  }
+}
+
+@media (max-width: 760px) {
+  .branding .brand-home-link.brand-lockup,
+  .brand-lockup {
+    max-width: 100%;
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+
+  .godinc-wordmark,
+  .temple-nav .godinc-wordmark {
+    font-size: clamp(1.18rem, 8vw, 1.85rem);
+  }
+
+  .godinc-brand-mark,
+  .temple-nav .godinc-brand-mark {
+    width: clamp(30px, 12vw, 44px);
+    height: clamp(30px, 12vw, 44px);
+  }
+
+  .branding > .nav-cross.brand-mark-divider {
+    margin: 0.25rem auto !important;
+  }
+
+  .temple-footer .footer-links {
+    width: min(94vw, 540px);
+    padding: 0.55rem;
+  }
+}
+
+
+/* Phase 11.2C.3: wordmark-only return link, standalone center mark */
+.brand-lockup .godinc-brand-mark {
+  display: none !important;
+}
+
+.branding .brand-home-link.brand-lockup,
+.brand-lockup {
+  gap: 0 !important;
+  max-width: min(500px, 46vw);
+}
+
+.godinc-wordmark {
+  display: inline-block;
+  font-family: "Baloo Chettan 2", "Avenir Next", "Century Gothic", system-ui, sans-serif;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--godinc-blue);
+}
+
+.temple-nav .godinc-wordmark {
+  font-size: clamp(1.25rem, 2.7vw, 2.05rem);
+}
+
+body.temple-backdrop-page .brand-lockup .godinc-wordmark {
+  font-size: clamp(1.18rem, 2.4vw, 1.85rem);
+}
+
+/* Keep the standalone circular mark as the ceremonial center mark. */
+.nav-cross.brand-mark-divider .godinc-divider-mark,
+.temple-back-cross.brand-mark-divider .godinc-divider-mark {
+  display: block !important;
+}
+
+@media (max-width: 760px) {
+  .branding .brand-home-link.brand-lockup,
+  .brand-lockup {
+    max-width: 100%;
+  }
+
+  .temple-nav .godinc-wordmark,
+  body.temple-backdrop-page .brand-lockup .godinc-wordmark {
+    font-size: clamp(1.24rem, 8vw, 1.9rem);
+  }
+}
+
+
+/* Phase 11.2C.4: Nunito Sans site typography harmonization */
+html,
+body {
+  font-family: "Nunito Sans", "Avenir Next", Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 400;
+}
+
+body,
+p,
+li,
+label,
+small,
+button,
+input,
+textarea,
+select,
+.modal,
+.modal-content,
+.support-note,
+.support-card,
+.account-card,
+.account-kv,
+.profile-summary,
+.scroll-footer-note,
+.temple-footer,
+.main-menu,
+.menu-section button,
+.button-link {
+  font-family: "Nunito Sans", "Avenir Next", Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* Preserve the logo wordmark as the only Baloo-branded text treatment. */
+.godinc-wordmark {
+  font-family: "Baloo Chettan 2", "Nunito Sans", system-ui, sans-serif !important;
+  font-weight: 400;
+}
+
+/* Bring headings closer to the rounded logo language without making them cartoonish. */
+h1,
+h2,
+h3,
+h4,
+.temple-title,
+.crossed-title,
+.modal-content h2,
+.support-card h3,
+.support-note h2,
+.account-card h2 {
+  font-family: "Nunito Sans", "Avenir Next", Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+}
+
+/* Keep the main Temple title ceremonial and spacious. */
+.branding .temple-title,
+.temple-title.crossed-title {
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+/* Better match button/menu rhythm to the new secondary font. */
+button,
+.button-link,
+.menu-section button,
+.support-actions button,
+.support-actions a {
+  font-weight: 700;
+  letter-spacing: 0.035em;
+}
+
+/* Body copy should soften slightly now that the brand is rounded. */
+.support-note p,
+.support-card p,
+.about-card p,
+.account-card p,
+.modal-content p,
+.temple-subtitle,
+.scroll-footer-note {
+  line-height: 1.62;
+  font-weight: 400;
+}
+
+/* Small metadata/readout areas need clarity more than ceremony. */
+.account-kv span,
+.account-kv strong,
+.support-price,
+.profile-summary,
+#supportStatusLine,
+#voiceStatusText,
+#installNudgeText {
+  font-family: "Nunito Sans", "Avenir Next", Inter, system-ui, sans-serif;
+}
+
+/* Avoid over-spacing compact mobile text. */
+@media (max-width: 760px) {
+  h1,
+  h2,
+  h3,
+  h4,
+  .temple-title,
+  .crossed-title,
+  .modal-content h2,
+  .support-card h3,
+  .support-note h2 {
+    letter-spacing: 0.02em;
+  }
+
+  button,
+  .button-link,
+  .menu-section button,
+  .support-actions button,
+  .support-actions a {
+    letter-spacing: 0.02em;
   }
 }
