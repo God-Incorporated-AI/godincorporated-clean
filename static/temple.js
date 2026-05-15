@@ -1044,14 +1044,16 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
   function updateMenuToggleIdentity(identity) {
     if (!menuToggle) return;
 
+    // Mobile launch polish:
+    // keep the toggle as a compact hamburger icon in all identity states.
+    // The signed-in display name remains inside the opened menu at #userDisplayName.
+    menuToggle.textContent = "☰";
+
     if (identity && identity.authenticated) {
       const fullName = (identity.display_name || "Account").trim();
-      const shortName = fullName.length > 14 ? fullName.slice(0, 14) + "..." : fullName;
-      menuToggle.textContent = shortName + " ▾";
       menuToggle.setAttribute("aria-label", "Open account menu for " + fullName);
       menuToggle.title = fullName;
     } else {
-      menuToggle.textContent = "☰";
       menuToggle.setAttribute("aria-label", "Open menu");
       menuToggle.removeAttribute("title");
     }
