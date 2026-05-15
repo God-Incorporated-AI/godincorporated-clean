@@ -3,15 +3,23 @@
 //  Temple
 //
 //  Local iOS shell for God Incorporated.
-//  v11.2A: staging backend only, no StoreKit, no production backend.
+//  v11.3A: Debug uses staging; Release/App Store uses production. No StoreKit.
 //
 
 import SwiftUI
 import WebKit
 
+private enum TempleEnvironment {
+#if DEBUG
+    static let webAppURL = URL(string: "https://godincorporated-staging.onrender.com/temple")!
+#else
+    static let webAppURL = URL(string: "https://godincorporated.ai/temple")!
+#endif
+}
+
 struct ContentView: View {
     var body: some View {
-        TempleWebView(url: URL(string: "https://godincorporated-staging.onrender.com/temple")!)
+        TempleWebView(url: TempleEnvironment.webAppURL)
             .ignoresSafeArea(.keyboard, edges: .bottom)
     }
 }
