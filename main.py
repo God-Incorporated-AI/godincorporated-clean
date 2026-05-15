@@ -5458,7 +5458,16 @@ def resolve_user_and_subscription_context(
     return context
 
 
-def get_active_recurring_subscription_for_user(user_id: str) -> Optional[dict]:
+def get_active_paid_rail_for_user(user_id: str) -> Optional[dict]:
+    """
+    v11.4B provider-neutral active paid rail guard.
+
+    Product rule:
+    - one seeker may have only one active paid rail at a time
+    - active Stripe may change plan through Stripe
+    - active Apple/Google must block a new Stripe checkout
+    - expired, failed, cancelled, refunded, superseded rows do not block
+    """
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
@@ -5466,10 +5475,12 @@ def get_active_recurring_subscription_for_user(user_id: str) -> Optional[dict]:
                 """
                 SELECT
                     id,
+                    provider,
                     plan_code,
                     support_mode,
                     provider_status,
                     internal_status,
+                    provider_subscription_id,
                     stripe_subscription_id,
                     current_period_start,
                     current_period_end,
@@ -5477,10 +5488,11 @@ def get_active_recurring_subscription_for_user(user_id: str) -> Optional[dict]:
                     updated_at
                 FROM subscriptions
                 WHERE user_id = %s
-                  AND provider = 'stripe'
                   AND support_mode IN ('monthly_recurring', 'annual_recurring')
-                  AND provider_status IN ('active', 'trialing', 'past_due', 'unpaid')
+                  AND COALESCE(provider_status, '') IN ('active', 'trialing')
+                  AND COALESCE(internal_status, '') = 'active'
                   AND ended_at IS NULL
+                  AND (current_period_end IS NULL OR current_period_end >= NOW())
                 ORDER BY updated_at DESC NULLS LAST, current_period_end DESC NULLS LAST
                 LIMIT 1
                 """,
@@ -5489,6 +5501,16 @@ def get_active_recurring_subscription_for_user(user_id: str) -> Optional[dict]:
             return cur.fetchone()
     finally:
         conn.close()
+
+
+def get_active_recurring_subscription_for_user(user_id: str) -> Optional[dict]:
+    """
+    Stripe-specific helper retained for same-rail Stripe plan changes.
+    """
+    active_rail = get_active_paid_rail_for_user(user_id)
+    if active_rail and active_rail.get("provider") == "stripe":
+        return active_rail
+    return None
 
 
 def upsert_local_stripe_subscription(
@@ -6223,7 +6245,20 @@ def billing_checkout_session(request: Request, payload: BillingCheckoutSessionIn
         raise HTTPException(status_code=401, detail="Authentication required.")
 
     if payload.support_mode in {"monthly_recurring", "annual_recurring"}:
-        active_recurring = get_active_recurring_subscription_for_user(user["user_id"])
+        active_paid_rail = get_active_paid_rail_for_user(user["user_id"])
+
+        if active_paid_rail and active_paid_rail.get("provider") != "stripe":
+            provider_label = (active_paid_rail.get("provider") or "another provider").title()
+            period_end = serialize_dt(active_paid_rail.get("current_period_end"))
+            detail = (
+                f"Your current support is already active through {provider_label}. "
+                "To avoid duplicate billing, new web billing can begin after the current paid period ends."
+            )
+            if period_end:
+                detail += f" Current paid period ends at {period_end}."
+            raise HTTPException(status_code=409, detail=detail)
+
+        active_recurring = active_paid_rail if active_paid_rail and active_paid_rail.get("provider") == "stripe" else None
         if active_recurring:
             try:
                 result = change_existing_subscription_plan(
@@ -6273,6 +6308,21 @@ def billing_checkout_session(request: Request, payload: BillingCheckoutSessionIn
                 print(f"[BILLING CHANGE PLAN ERROR] {type(e).__name__}: {e}", flush=True)
                 logger.error(f"Billing change-plan error: {e}")
                 raise HTTPException(status_code=500, detail="Billing change-plan failed.")
+
+    entitlement = get_user_entitlement_snapshot(user["user_id"])
+    if (
+        entitlement.get("entitlement_status") == "active"
+        and entitlement.get("is_entitled")
+        and entitlement.get("effective_plan_code") not in {"anon", "pilgrim"}
+    ):
+        period_end = serialize_dt(entitlement.get("subscription_expires_at"))
+        detail = (
+            "Your current support is already active. "
+            "To avoid duplicate billing, new billing can begin after the current paid period ends."
+        )
+        if period_end:
+            detail += f" Current paid period ends at {period_end}."
+        raise HTTPException(status_code=409, detail=detail)
 
     base_url = (os.getenv("APP_BASE_URL") or str(request.base_url)).rstrip("/")
     success_url = f"{base_url}/temple?checkout=success"
