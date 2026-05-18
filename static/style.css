@@ -24,7 +24,7 @@
 }
 
 body {
-  font-family: 'Georgia', serif;
+  font-family: var(--gi-body-font);
   background-color: #f4f1e9;
   color: #4a3f35;
   margin: 0;
@@ -1174,7 +1174,7 @@ main.temple-shell {
   gap: 0;
   color: var(--gi-slate) !important;
   text-decoration: none;
-  font-family: var(--gi-display-font);
+  font-family: var(--gi-brand-font);
   font-size: clamp(1.35rem, 2.3vw, 2rem);
   line-height: 1;
 }
@@ -3290,7 +3290,7 @@ body {
 
 .godinc-wordmark {
   color: var(--godinc-blue);
-  font-family: "Avenir Next", "Sora", "Space Grotesk", Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--gi-brand-font);
   font-size: clamp(1.35rem, 4.2vw, 3.1rem);
   font-weight: 400;
   letter-spacing: 0.075em;
@@ -3402,7 +3402,7 @@ button,
 input,
 textarea,
 select {
-  font-family: "Nunito Sans", "Avenir Next", Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--gi-body-font);
 }
 
 .branding .brand-home-link.brand-lockup,
@@ -3418,7 +3418,7 @@ select {
 }
 
 .godinc-wordmark {
-  font-family: "Baloo Chettan 2", "Avenir Next", "Century Gothic", "Trebuchet MS", Inter, system-ui, sans-serif;
+  font-family: var(--gi-brand-font);
   font-size: clamp(1.08rem, 2.25vw, 1.78rem);
   font-weight: 400;
   letter-spacing: 0;
@@ -3557,7 +3557,7 @@ body.temple-backdrop-page .branding > .nav-cross.temple-back-cross.brand-mark-di
 
 .godinc-wordmark {
   display: inline-block;
-  font-family: "Baloo Chettan 2", "Avenir Next", "Century Gothic", system-ui, sans-serif;
+  font-family: var(--gi-brand-font);
   font-weight: 400;
   letter-spacing: 0;
   text-transform: none;
@@ -3594,7 +3594,7 @@ body.temple-backdrop-page .brand-lockup .godinc-wordmark {
 /* Phase 11.2C.4: Nunito Sans site typography harmonization */
 html,
 body {
-  font-family: "Nunito Sans", "Avenir Next", Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--gi-body-font);
   font-weight: 400;
 }
 
@@ -3619,12 +3619,12 @@ select,
 .main-menu,
 .menu-section button,
 .button-link {
-  font-family: "Nunito Sans", "Avenir Next", Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--gi-body-font);
 }
 
 /* Preserve the logo wordmark as the only Baloo-branded text treatment. */
 .godinc-wordmark {
-  font-family: "Baloo Chettan 2", "Nunito Sans", system-ui, sans-serif !important;
+  font-family: var(--gi-brand-font) !important;
   font-weight: 400;
 }
 
@@ -3639,7 +3639,7 @@ h4,
 .support-card h3,
 .support-note h2,
 .account-card h2 {
-  font-family: "Nunito Sans", "Avenir Next", Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--gi-display-font);
   font-weight: 700;
   letter-spacing: 0.035em;
 }
@@ -3681,7 +3681,7 @@ button,
 #supportStatusLine,
 #voiceStatusText,
 #installNudgeText {
-  font-family: "Nunito Sans", "Avenir Next", Inter, system-ui, sans-serif;
+  font-family: var(--gi-body-font);
 }
 
 /* Avoid over-spacing compact mobile text. */
