@@ -1463,7 +1463,7 @@ textarea#seekerInput.oracle-input {
 
 .voice-copy em {
   color: var(--gi-gold);
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: var(--gi-body-font);
   font-size: 1.02rem;
 }
 
