@@ -15,6 +15,14 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Noto Sans Egyptian Hieroglyphs";
+  src: url("/static/fonts/NotoSansEgyptianHieroglyphs-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 body {
   font-family: 'Georgia', serif;
   background-color: #f4f1e9;
@@ -1100,8 +1108,10 @@ main.admin-console {
   --gi-gold-soft: #d8bb76;
   --gi-dark-silver: #68758a;
   --gi-slate: #24374d;
-  --gi-body-font: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --gi-display-font: "Cinzel", Georgia, "Times New Roman", serif;
+  --gi-brand-font: "Baloo Chettan 2", "Nunito Sans", system-ui, sans-serif;
+  --gi-display-font: "Noto Sans Egyptian Hieroglyphs", "Nunito Sans", Georgia, "Times New Roman", serif;
+  --gi-body-font: "Nunito Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --gi-symbol-font: "Noto Sans Egyptian Hieroglyphs", "Noto Sans", "Nunito Sans", sans-serif;
 }
 
 body {
@@ -3848,4 +3858,85 @@ button,
     max-width: calc(100% - 0.4rem) !important;
     border-radius: 14px !important;
   }
+}
+
+/* v11.4D App Store typography contract
+   Single source of truth for the final three-font system:
+   - Baloo Chettan 2: brand wordmark / return links / dialog titles
+   - Noto Sans Egyptian Hieroglyphs: large ceremonial display headings
+   - Nunito Sans: body, UI, cards, buttons, forms, and readable copy
+*/
+html,
+body,
+p,
+li,
+label,
+small,
+button,
+input,
+textarea,
+select,
+.modal,
+.modal-content,
+.support-note,
+.support-card,
+.account-card,
+.account-kv,
+.profile-summary,
+.scroll-footer-note,
+.temple-footer,
+.main-menu,
+.menu-section button,
+.button-link,
+.support-actions button,
+.support-actions a,
+#supportStatusLine,
+#voiceStatusText,
+#installNudgeText {
+  font-family: var(--gi-body-font) !important;
+}
+
+.godinc-wordmark,
+.brand-home-link,
+.brand-lockup,
+.branding .brand-home-link.brand-lockup,
+.temple-nav .godinc-wordmark,
+body.temple-backdrop-page .brand-lockup .godinc-wordmark {
+  font-family: var(--gi-brand-font) !important;
+}
+
+.temple-landing-hero h1,
+.temple-landing-hero .hero-title-line,
+.temple-landing-hero .hero-title-temple,
+.support-hero h1,
+.about-hero h1,
+.account-hero h1,
+.temple-title,
+.crossed-title,
+.temple-statement-line {
+  font-family: var(--gi-display-font) !important;
+  font-weight: 400;
+}
+
+.modal-content h2,
+#feedbackTitle,
+.support-modal h2,
+#supportModal h2 {
+  font-family: var(--gi-brand-font) !important;
+  font-weight: 400;
+}
+
+.support-card h3,
+.support-note h2,
+.account-card h2,
+.about-card h2 {
+  font-family: var(--gi-display-font) !important;
+  font-weight: 400;
+}
+
+code,
+pre,
+.admin-monospace,
+.monospace {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
 }
