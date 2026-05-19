@@ -1187,7 +1187,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
 
     const originalText = button.textContent;
     button.disabled = true;
-    button.textContent = "Opening Stripe...";
+    button.textContent = "Opening checkout...";
 
     try {
       const response = await identityFetch("/billing/checkout-session", {
@@ -1202,7 +1202,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       const data = await safeReadJson(response);
 
       if (!response.ok) {
-        throw new Error(data.error || data.detail || "Could not create Stripe checkout session.");
+        throw new Error(data.error || data.detail || "Could not create a checkout session.");
       }
 
       if (Object.prototype.hasOwnProperty.call(data, "changed_subscription")) {
@@ -1219,7 +1219,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       }
 
       if (!data.checkout_url) {
-        throw new Error("Stripe checkout URL was not returned.");
+        throw new Error("Checkout URL was not returned.");
       }
 
       window.location.href = data.checkout_url;
