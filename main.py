@@ -4426,6 +4426,12 @@ def admin_page(request: Request):
 def temple_page(request: Request):
     return templates.TemplateResponse("temple.html", {"request": request})
 
+
+@app.get("/privacy")
+def privacy_page(request: Request):
+    return templates.TemplateResponse("privacy.html", {"request": request})
+
+
 @app.get("/support", response_class=HTMLResponse)
 @app.get("/tiers", response_class=HTMLResponse)
 def support_page(request: Request):
@@ -6206,6 +6212,43 @@ def process_stripe_event(event: dict) -> dict:
         except Exception as mark_err:
             logger.error("Stripe webhook mark_payment_event_error also failed: %s", mark_err)
         raise
+
+
+
+@app.get("/billing/apple/server-notifications")
+def apple_server_notifications_healthcheck():
+    logger.info("APPLE_SERVER_NOTIFICATION_HEALTHCHECK")
+    return {"ok": True, "service": "apple_server_notifications"}
+
+
+@app.post("/billing/apple/server-notifications")
+async def apple_server_notifications(request: Request):
+    raw_body = await request.body()
+    payload = {}
+
+    if raw_body:
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except Exception:
+            logger.warning(
+                "APPLE_SERVER_NOTIFICATION_RECEIVED invalid_json body_len=%s",
+                len(raw_body),
+            )
+            return {"ok": True}
+
+    signed_payload_present = isinstance(payload, dict) and bool(payload.get("signedPayload"))
+    notification_type = payload.get("notificationType") if isinstance(payload, dict) else None
+    subtype = payload.get("subtype") if isinstance(payload, dict) else None
+
+    logger.info(
+        "APPLE_SERVER_NOTIFICATION_RECEIVED signedPayload_present=%s notification_type=%s subtype=%s body_len=%s",
+        signed_payload_present,
+        notification_type,
+        subtype,
+        len(raw_body),
+    )
+
+    return {"ok": True}
 
 
 @app.post("/billing/stripe/webhook")

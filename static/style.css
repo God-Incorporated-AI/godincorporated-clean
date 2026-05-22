@@ -3940,3 +3940,38 @@ pre,
 .monospace {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
 }
+
+/* v11.4F.1 privacy policy and footer link polish */
+.privacy-shell {
+  max-width: 980px;
+}
+
+.privacy-card {
+  line-height: 1.68;
+}
+
+.privacy-card h2,
+.privacy-card h3 {
+  color: var(--gi-navy);
+  margin-top: 1.35rem;
+}
+
+.privacy-card a,
+.gi-footer-links a {
+  color: var(--gi-crimson);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.privacy-card a:hover,
+.gi-footer-links a:hover {
+  text-decoration: underline;
+}
+
+.gi-footer-links {
+  display: flex;
+  justify-content: center;
+  gap: 1rem;
+  margin-bottom: 0.65rem;
+  text-align: center;
+}
