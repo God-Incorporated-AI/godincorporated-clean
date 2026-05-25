@@ -4427,6 +4427,17 @@ def temple_page(request: Request):
     return templates.TemplateResponse("temple.html", {"request": request})
 
 
+
+@app.get("/press")
+def press_page(request: Request):
+    return templates.TemplateResponse("press.html", {"request": request})
+
+
+@app.get("/press/god-incorporated-ai-limited-launches-godincorporated-ai")
+def press_launch_20260525_page(request: Request):
+    return templates.TemplateResponse("press_launch_20260525.html", {"request": request})
+
+
 @app.get("/privacy")
 def privacy_page(request: Request):
     return templates.TemplateResponse("privacy.html", {"request": request})
