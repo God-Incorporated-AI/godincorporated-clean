@@ -972,7 +972,66 @@ if (seekerInput && oracleForm) {
   const supportCheckoutButtons = document.querySelectorAll(".support-checkout-btn");
 
   const TEMPLE_CONTRIBUTION_URL = "https://buy.stripe.com/00wfZ98ur8EldDr7kjaEE00";
+  const APPLE_SEEKER_MONTHLY_PRODUCT_ID = "ai.godincorporated.seeker.monthly";
+  let pendingAppleStoreKitButton = null;
+  let pendingAppleStoreKitOriginalText = "";
   let currentIdentity = null;
+
+  function isNativeIOSApp() {
+    return Boolean(
+      (window.GodIncNativeIOS && window.GodIncNativeIOS.storeKit) ||
+      /GodIncorporatedIOSApp/i.test(window.navigator.userAgent || "")
+    );
+  }
+
+  function isAppleIAPVisibleSupportButton(button) {
+    return Boolean(
+      button &&
+      button.dataset.planCode === "seeker" &&
+      button.dataset.supportMode === "monthly_recurring"
+    );
+  }
+
+  function resetPendingAppleStoreKitButton() {
+    if (pendingAppleStoreKitButton) {
+      pendingAppleStoreKitButton.disabled = false;
+      pendingAppleStoreKitButton.textContent = pendingAppleStoreKitOriginalText || "Subscribe with Apple - $1.99/month";
+    }
+    pendingAppleStoreKitButton = null;
+    pendingAppleStoreKitOriginalText = "";
+  }
+
+  window.addEventListener("godIncStoreKitPurchase", async function(event) {
+    const detail = event.detail || {};
+    resetPendingAppleStoreKitButton();
+
+    if (detail.status === "success") {
+      closeModal(supportModal);
+      showFeedbackModal(
+        "Apple purchase received. Your support access will refresh after Apple confirms the subscription.",
+        [],
+        "Support Received"
+      );
+      await updateIdentityDisplay();
+      return;
+    }
+
+    if (detail.status === "cancelled") {
+      showFeedbackModal("Apple purchase was cancelled.", [], "Temple Notice");
+      return;
+    }
+
+    if (detail.status === "pending") {
+      showFeedbackModal("Apple purchase is pending approval.", [], "Temple Notice");
+      return;
+    }
+
+    showFeedbackModal(detail.message || "Apple in-app purchase could not be completed.", [], "Temple Notice");
+  });
+
+  window.addEventListener("godIncNativeReady", function() {
+    applyNativeIOSSupportGate(Boolean(currentIdentity && currentIdentity.authenticated));
+  });
 
   // Phase 4.2.1: Modal elements
 const loginModal = document.getElementById("loginModal");
@@ -1115,6 +1174,51 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     return mode || "support";
   }
 
+  function applyNativeIOSSupportGate(authenticated = false) {
+    if (!isNativeIOSApp()) return;
+
+    if (selectedSupportIntent) {
+      selectedSupportIntent.planCode = "seeker";
+      selectedSupportIntent.supportMode = "monthly_recurring";
+    }
+
+    supportCheckoutButtons.forEach((button) => {
+      const visibleAppleButton = isAppleIAPVisibleSupportButton(button);
+      const card = button.closest(".support-card");
+
+      if (visibleAppleButton) {
+        button.hidden = false;
+        button.style.display = "";
+        button.disabled = !authenticated;
+        button.textContent = "Subscribe with Apple - $1.99/month";
+        button.dataset.storekitProductId = APPLE_SEEKER_MONTHLY_PRODUCT_ID;
+
+        if (card) {
+          card.hidden = false;
+          card.style.display = "";
+        }
+      } else {
+        button.hidden = true;
+        button.style.display = "none";
+
+        if (card && button.dataset.planCode !== "seeker") {
+          card.hidden = true;
+          card.style.display = "none";
+        }
+      }
+    });
+
+    if (templeContributionBtn) {
+      const contributionCard = templeContributionBtn.closest(".support-card");
+      templeContributionBtn.hidden = true;
+      templeContributionBtn.style.display = "none";
+      if (contributionCard) {
+        contributionCard.hidden = true;
+        contributionCard.style.display = "none";
+      }
+    }
+  }
+
   function applySupportIntentSelection(focusSelection = false) {
     let selectedButton = null;
 
@@ -1167,6 +1271,8 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       button.disabled = !authenticated;
     });
 
+    applyNativeIOSSupportGate(authenticated);
+
     const selectedButton = applySupportIntentSelection(false);
     if (selectedButton && selectedSupportIntent.planCode && selectedSupportIntent.supportMode) {
       const intentLabel = planLabelFromCode(selectedSupportIntent.planCode) + " " + supportModeLabel(selectedSupportIntent.supportMode);
@@ -1176,6 +1282,36 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
         supportStatusLine.textContent += " Selected path: " + intentLabel + ". Log in or create an account, then use the highlighted button below.";
       }
     }
+  }
+
+  function launchAppleStoreKitCheckout(planCode, supportMode, button) {
+    if (!currentIdentity || !currentIdentity.authenticated) {
+      closeModal(supportModal);
+      openModal(loginModal);
+      return;
+    }
+
+    if (!isAppleIAPVisibleSupportButton(button)) {
+      showFeedbackModal("Only Seeker Monthly is available in the iOS app for this review build.", [], "Temple Notice");
+      return;
+    }
+
+    const handler = window.webkit?.messageHandlers?.templeStoreKit;
+    if (!handler) {
+      showFeedbackModal("Apple in-app purchase is available only inside the iOS app.", [], "Temple Notice");
+      return;
+    }
+
+    pendingAppleStoreKitButton = button;
+    pendingAppleStoreKitOriginalText = button.textContent;
+    button.disabled = true;
+    button.textContent = "Opening Apple purchase...";
+
+    handler.postMessage({
+      product_id: APPLE_SEEKER_MONTHLY_PRODUCT_ID,
+      plan_code: planCode,
+      support_mode: supportMode
+    });
   }
 
   async function launchStripeCheckout(planCode, supportMode, button) {
@@ -1286,6 +1422,15 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
 
   supportCheckoutButtons.forEach((button) => {
     button.addEventListener("click", function() {
+      if (isNativeIOSApp()) {
+        launchAppleStoreKitCheckout(
+          button.dataset.planCode,
+          button.dataset.supportMode,
+          button
+        );
+        return;
+      }
+
       launchStripeCheckout(
         button.dataset.planCode,
         button.dataset.supportMode,
@@ -1296,6 +1441,15 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
 
   if (templeContributionBtn) {
     templeContributionBtn.addEventListener("click", function() {
+      if (isNativeIOSApp()) {
+        showFeedbackModal(
+          "Temple Contribution is not available in the iOS app yet. Apple in-app support currently begins with Seeker Monthly.",
+          [],
+          "Temple Notice"
+        );
+        return;
+      }
+
       if (TEMPLE_CONTRIBUTION_URL) {
         window.location.href = TEMPLE_CONTRIBUTION_URL;
       } else {

@@ -154,5 +154,56 @@
 
   </main>
   <script src="/static/site-shell.js?v=20260514-menu1"></script>
+
+<script>
+(function() {
+  function isNativeIOSApp() {
+    return Boolean(
+      (window.GodIncNativeIOS && window.GodIncNativeIOS.storeKit) ||
+      /GodIncorporatedIOSApp/i.test(window.navigator.userAgent || "")
+    );
+  }
+
+  function applyIOSSupportReviewGate() {
+    if (!isNativeIOSApp()) return;
+
+    document.querySelectorAll(".support-card").forEach(function(card) {
+      var seekerMonthly = card.querySelector('a[href*="plan_code=seeker"][href*="support_mode=monthly_recurring"]');
+      var supportLinks = card.querySelectorAll('a[href*="support_mode="]');
+
+      if (seekerMonthly) {
+        supportLinks.forEach(function(link) {
+          if (link !== seekerMonthly) {
+            link.hidden = true;
+            link.style.display = "none";
+          }
+        });
+        seekerMonthly.textContent = "Choose Seeker Monthly with Apple";
+        return;
+      }
+
+      if (supportLinks.length > 0) {
+        card.hidden = true;
+        card.style.display = "none";
+      }
+    });
+
+    document.querySelectorAll(".support-note").forEach(function(note) {
+      if (/Temple contribution|How activation works right now/i.test(note.textContent || "")) {
+        note.hidden = true;
+        note.style.display = "none";
+      }
+    });
+  }
+
+  window.addEventListener("godIncNativeReady", applyIOSSupportReviewGate);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", applyIOSSupportReviewGate);
+  } else {
+    applyIOSSupportReviewGate();
+  }
+})();
+</script>
+
 </body>
 </html>
