@@ -995,7 +995,7 @@ if (seekerInput && oracleForm) {
   function resetPendingAppleStoreKitButton() {
     if (pendingAppleStoreKitButton) {
       pendingAppleStoreKitButton.disabled = false;
-      pendingAppleStoreKitButton.textContent = pendingAppleStoreKitOriginalText || "Subscribe with Apple - $1.99/month";
+      pendingAppleStoreKitButton.textContent = pendingAppleStoreKitOriginalText || "Subscribe with Apple - $0.99/month";
     }
     pendingAppleStoreKitButton = null;
     pendingAppleStoreKitOriginalText = "";
@@ -1190,7 +1190,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
         button.hidden = false;
         button.style.display = "";
         button.disabled = !authenticated;
-        button.textContent = "Subscribe with Apple - $1.99/month";
+        button.textContent = "Subscribe with Apple - $0.99/month";
         button.dataset.storekitProductId = APPLE_SEEKER_MONTHLY_PRODUCT_ID;
 
         if (card) {

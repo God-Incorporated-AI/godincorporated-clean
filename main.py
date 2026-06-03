@@ -4438,6 +4438,11 @@ def press_launch_20260525_page(request: Request):
     return templates.TemplateResponse("press_launch_20260525.html", {"request": request})
 
 
+@app.get("/terms")
+def terms_page(request: Request):
+    return templates.TemplateResponse("terms.html", {"request": request})
+
+
 @app.get("/privacy")
 def privacy_page(request: Request):
     return templates.TemplateResponse("privacy.html", {"request": request})
