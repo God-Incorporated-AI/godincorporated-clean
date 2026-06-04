@@ -2,22 +2,28 @@
 //  ContentView.swift
 //  Temple
 //
-//  v11.4K: Native Temple Gate visual polish, StoreKit support, Terms/EULA links.
+//  v11.4L: Native Temple Gate, native iOS voice capture,
+//  StoreKit support, Terms/EULA links.
 //
 
 import SwiftUI
 import WebKit
 import StoreKit
+import AVFoundation
 
 private enum TempleEnvironment {
 #if DEBUG
-    static let baseTempleURL = URL(string: "https://godincorporated-staging.onrender.com/temple")!
+    static let baseAppURL = URL(string: "https://godincorporated-staging.onrender.com/")!
 #else
-    static let baseTempleURL = URL(string: "https://godincorporated.ai/temple")!
+    static let baseAppURL = URL(string: "https://godincorporated.ai/")!
 #endif
 
-    static let privacyURL = URL(string: "https://godincorporated.ai/privacy")!
-    static let termsURL = URL(string: "https://godincorporated.ai/terms")!
+    static let baseTempleURL = URL(string: "temple", relativeTo: baseAppURL)!
+    static let privacyURL = URL(string: "privacy", relativeTo: baseAppURL)!
+    static let termsURL = URL(string: "terms", relativeTo: baseAppURL)!
+    static let voiceTranscribeURL = URL(string: "voice/transcribe", relativeTo: baseAppURL)!
+    static let voiceAskURL = URL(string: "voice/ask", relativeTo: baseAppURL)!
+    static let voiceTTSURL = URL(string: "voice/tts", relativeTo: baseAppURL)!
     static let seekerMonthlyProductID = "ai.godincorporated.seeker.monthly"
 
     static func templeURL(voice: String?, entry: String? = nil, entryNonce: Int = 0) -> URL {
@@ -71,11 +77,17 @@ struct ContentView: View {
     @AppStorage("preferredInputMode") private var preferredInputMode: String = "voice"
     @State private var selectedTab = 0
     @State private var templeEntryNonce = 0
+    @State private var activeOracleVoice = "Hathor"
 
     var body: some View {
+        let effectiveOracleVoice = activeOracleVoice.isEmpty
+            ? (lastOracleVoice.isEmpty ? "Hathor" : lastOracleVoice)
+            : activeOracleVoice
+
         TabView(selection: $selectedTab) {
             TempleGateView(
                 lastOracleVoice: $lastOracleVoice,
+                activeOracleVoice: $activeOracleVoice,
                 selectedTab: $selectedTab,
                 preferredInputMode: $preferredInputMode,
                 templeEntryNonce: $templeEntryNonce
@@ -85,6 +97,22 @@ struct ContentView: View {
             }
             .tag(0)
 
+            NativeVoiceSessionView(
+                oracleVoice: effectiveOracleVoice,
+                onOpenTempleText: {
+                    preferredInputMode = "text"
+                    templeEntryNonce += 1
+                    selectedTab = 2
+                },
+                onReturnHome: {
+                    selectedTab = 0
+                }
+            )
+            .tabItem {
+                Label("Voice", systemImage: "mic")
+            }
+            .tag(1)
+
             TempleWebView(
                 url: TempleEnvironment.templeURL(voice: lastOracleVoice, entry: preferredInputMode, entryNonce: templeEntryNonce),
                 selectedTab: $selectedTab
@@ -92,19 +120,19 @@ struct ContentView: View {
             .tabItem {
                 Label("Temple", systemImage: "bubble.left.and.bubble.right")
             }
-            .tag(1)
+            .tag(2)
 
             NativeSupportView()
                 .tabItem {
                     Label("Support", systemImage: "heart")
                 }
-                .tag(2)
+                .tag(3)
 
             NativeInfoView()
                 .tabItem {
                     Label("Info", systemImage: "info.circle")
                 }
-                .tag(3)
+                .tag(4)
         }
         .tint(TemplePalette.warmGold)
     }
@@ -112,6 +140,7 @@ struct ContentView: View {
 
 struct TempleGateView: View {
     @Binding var lastOracleVoice: String
+    @Binding var activeOracleVoice: String
     @Binding var selectedTab: Int
     @Binding var preferredInputMode: String
     @Binding var templeEntryNonce: Int
@@ -143,7 +172,7 @@ struct TempleGateView: View {
                                         .font(.title2.weight(.semibold))
                                         .foregroundStyle(TemplePalette.ink)
 
-                                    Text("Choose your first Oracle voice.")
+                                    Text("Voice is the default path. Text entry remains available at any time.")
                                         .foregroundStyle(TemplePalette.ink.opacity(0.72))
                                         .multilineTextAlignment(.center)
 
@@ -152,27 +181,18 @@ struct TempleGateView: View {
                                             title: "Begin with Hathor by Voice",
                                             subtitle: "Reflective, expansive, and heart-centered"
                                         ) {
-                                            lastOracleVoice = "Hathor"
-                                            preferredInputMode = "voice"
-                                            templeEntryNonce += 1
-                                            selectedTab = 1
+                                            beginNativeVoice(with: "Hathor")
                                         }
 
                                         VoiceChoiceButton(
                                             title: "Begin with Moses by Voice",
                                             subtitle: "Canonical, depth-oriented, and discerning"
                                         ) {
-                                            lastOracleVoice = "Moses"
-                                            preferredInputMode = "voice"
-                                            templeEntryNonce += 1
-                                            selectedTab = 1
+                                            beginNativeVoice(with: "Moses")
                                         }
 
                                         Button {
-                                            lastOracleVoice = "Hathor"
-                                            preferredInputMode = "text"
-                                            templeEntryNonce += 1
-                                            selectedTab = 1
+                                            beginText(with: "Hathor")
                                         } label: {
                                             Text("Use Text Instead")
                                                 .frame(maxWidth: .infinity)
@@ -194,9 +214,7 @@ struct TempleGateView: View {
                                         .multilineTextAlignment(.center)
 
                                     Button {
-                                        preferredInputMode = "voice"
-                                        templeEntryNonce += 1
-                                        selectedTab = 1
+                                        beginNativeVoice(with: lastOracleVoice)
                                     } label: {
                                         Text("Speak your next question")
                                             .frame(maxWidth: .infinity)
@@ -204,9 +222,7 @@ struct TempleGateView: View {
                                     .buttonStyle(TemplePrimaryButtonStyle())
 
                                     Button {
-                                        preferredInputMode = "text"
-                                        templeEntryNonce += 1
-                                        selectedTab = 1
+                                        beginText(with: lastOracleVoice)
                                     } label: {
                                         Text("Continue with Text")
                                             .frame(maxWidth: .infinity)
@@ -215,6 +231,7 @@ struct TempleGateView: View {
 
                                     Button("Change Oracle Voice") {
                                         lastOracleVoice = ""
+                                        activeOracleVoice = "Hathor"
                                     }
                                     .buttonStyle(TempleSecondaryButtonStyle())
                                 }
@@ -224,7 +241,7 @@ struct TempleGateView: View {
                         TempleCard {
                             VStack(spacing: 12) {
                                 Button {
-                                    selectedTab = 2
+                                    selectedTab = 3
                                 } label: {
                                     Label("Support with Apple", systemImage: "heart.fill")
                                         .frame(maxWidth: .infinity)
@@ -232,7 +249,7 @@ struct TempleGateView: View {
                                 .buttonStyle(TempleSecondaryButtonStyle())
 
                                 Button {
-                                    selectedTab = 3
+                                    selectedTab = 4
                                 } label: {
                                     Label("Privacy and Terms", systemImage: "doc.text.fill")
                                         .frame(maxWidth: .infinity)
@@ -253,6 +270,645 @@ struct TempleGateView: View {
             .navigationTitle("Temple Gate")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    private func beginNativeVoice(with voice: String) {
+        lastOracleVoice = voice
+        activeOracleVoice = voice
+        preferredInputMode = "voice"
+        selectedTab = 1
+    }
+
+    private func beginText(with voice: String) {
+        lastOracleVoice = voice
+        activeOracleVoice = voice
+        preferredInputMode = "text"
+        templeEntryNonce += 1
+        selectedTab = 2
+    }
+}
+
+struct NativeVoiceSessionView: View {
+    let oracleVoice: String
+    let onOpenTempleText: () -> Void
+    let onReturnHome: () -> Void
+
+    @State private var recorder: AVAudioRecorder?
+    @State private var recordingURL: URL?
+    @State private var isRecording = false
+    @State private var isWorking = false
+    @State private var statusTitle = "Voice ready"
+    @State private var statusMessage = "Have your question ready, then tap Start Speaking. iOS will ask for microphone access the first time."
+    @State private var transcript = ""
+    @State private var answer = ""
+    @State private var recoveryMessage = ""
+    @State private var showRecoveryActions = false
+    @State private var oracleAudioData: Data?
+    @State private var audioPlayer: AVAudioPlayer?
+    @State private var isPlayingAudio = false
+
+    var body: some View {
+        NavigationStack {
+            TempleScreen {
+                ScrollView {
+                    VStack(spacing: 22) {
+                        TempleBrandMark()
+                            .padding(.top, 28)
+
+                        VStack(spacing: 8) {
+                            Text("Speak with \(oracleVoice)")
+                                .font(.system(size: 32, weight: .bold, design: .serif))
+                                .foregroundStyle(TemplePalette.paleGold)
+                                .multilineTextAlignment(.center)
+
+                            Text("Native iOS voice capture")
+                                .font(.headline)
+                                .foregroundStyle(.white.opacity(0.82))
+                        }
+
+                        TempleCard {
+                            VStack(spacing: 16) {
+                                Text(statusTitle)
+                                    .font(.title3.weight(.bold))
+                                    .foregroundStyle(TemplePalette.ink)
+                                    .multilineTextAlignment(.center)
+
+                                Text(statusMessage)
+                                    .foregroundStyle(TemplePalette.ink.opacity(0.72))
+                                    .multilineTextAlignment(.center)
+
+                                if !transcript.isEmpty || !answer.isEmpty || !recoveryMessage.isEmpty {
+                                    ScrollView {
+                                        VStack(alignment: .leading, spacing: 12) {
+                                            if !transcript.isEmpty {
+                                                VStack(alignment: .leading, spacing: 6) {
+                                                    Text("You said")
+                                                        .font(.caption.weight(.bold))
+                                                        .foregroundStyle(TemplePalette.crimson)
+                                                    Text(compactVoiceMessage(transcript, limit: 700))
+                                                        .foregroundStyle(TemplePalette.ink)
+                                                }
+                                            }
+
+                                            if !answer.isEmpty {
+                                                VStack(alignment: .leading, spacing: 6) {
+                                                    Text("\(oracleVoice) answered")
+                                                        .font(.caption.weight(.bold))
+                                                        .foregroundStyle(TemplePalette.crimson)
+                                                    Text(compactVoiceMessage(answer, limit: 1400))
+                                                        .foregroundStyle(TemplePalette.ink)
+                                                }
+                                            }
+
+                                            if !recoveryMessage.isEmpty {
+                                                VStack(alignment: .leading, spacing: 6) {
+                                                    Text("What happened")
+                                                        .font(.caption.weight(.bold))
+                                                        .foregroundStyle(TemplePalette.crimson)
+                                                    Text(compactVoiceMessage(recoveryMessage, limit: 700))
+                                                        .foregroundStyle(TemplePalette.ink.opacity(0.74))
+                                                }
+                                            }
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    .frame(maxHeight: 260)
+                                    .padding(12)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 16)
+                                            .fill(Color.white.opacity(0.34))
+                                    )
+                                }
+
+                                if oracleAudioData != nil {
+                                    Button {
+                                        playStoredOracleVoice()
+                                    } label: {
+                                        Text(isPlayingAudio ? "Oracle Voice Playing..." : "Replay Oracle Voice")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(TempleSecondaryButtonStyle())
+                                    .disabled(isWorking || isRecording || isPlayingAudio)
+                                }
+
+                                if showRecoveryActions {
+                                    Button {
+                                        Task {
+                                            await startRecording()
+                                        }
+                                    } label: {
+                                        Text("Try Voice Again")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(TemplePrimaryButtonStyle())
+                                    .disabled(isWorking || isRecording)
+
+                                    Button {
+                                        resetVoiceSession()
+                                    } label: {
+                                        Text("Reset Voice Session")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(TempleSecondaryButtonStyle())
+                                    .disabled(isWorking || isRecording)
+
+                                    Button {
+                                        onOpenTempleText()
+                                    } label: {
+                                        Text("Switch to Text Entry")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(TempleSecondaryButtonStyle())
+                                    .disabled(isWorking || isRecording)
+
+                                    Button {
+                                        onReturnHome()
+                                    } label: {
+                                        Text("Return to Temple Gate")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(TempleSecondaryButtonStyle())
+                                    .disabled(isWorking || isRecording)
+                                } else if isRecording {
+                                    Button {
+                                        Task {
+                                            await stopAndSubmitRecording()
+                                        }
+                                    } label: {
+                                        Text("Stop and Consult the Oracle")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(TemplePrimaryButtonStyle())
+                                    .disabled(isWorking)
+                                } else {
+                                    Button {
+                                        Task {
+                                            await startRecording()
+                                        }
+                                    } label: {
+                                        if isWorking {
+                                            ProgressView()
+                                                .frame(maxWidth: .infinity)
+                                        } else {
+                                            Text(answer.isEmpty ? "Start Speaking" : "Ask Another Question")
+                                                .frame(maxWidth: .infinity)
+                                        }
+                                    }
+                                    .buttonStyle(TemplePrimaryButtonStyle())
+                                    .disabled(isWorking)
+
+                                    Button {
+                                        onOpenTempleText()
+                                    } label: {
+                                        Text("Switch to Text Entry")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(TempleSecondaryButtonStyle())
+                                    .disabled(isWorking || isRecording)
+                                }
+                            }
+                        }
+
+                        Text("The app listens only after you tap Start Speaking, and stops when you tap Stop.")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.72))
+                            .multilineTextAlignment(.center)
+                            .padding(.bottom, 20)
+                    }
+                    .padding(.horizontal, 18)
+                }
+            }
+            .navigationTitle("Voice")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private func resetVoiceSession() {
+        recorder?.stop()
+        audioPlayer?.stop()
+        audioPlayer = nil
+        oracleAudioData = nil
+        recorder = nil
+        recordingURL = nil
+        isRecording = false
+        isWorking = false
+        isPlayingAudio = false
+        transcript = ""
+        answer = ""
+        recoveryMessage = ""
+        showRecoveryActions = false
+        statusTitle = "Voice ready"
+        statusMessage = "Have your question ready, then tap Start Speaking. iOS will ask for microphone access the first time."
+    }
+
+    private func requestMicrophonePermission() async -> Bool {
+        await withCheckedContinuation { continuation in
+            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                continuation.resume(returning: granted)
+            }
+        }
+    }
+
+    private func startRecording() async {
+        await MainActor.run {
+            isWorking = true
+            audioPlayer?.stop()
+            audioPlayer = nil
+            oracleAudioData = nil
+            isPlayingAudio = false
+            recoveryMessage = ""
+            showRecoveryActions = false
+            transcript = ""
+            answer = ""
+            statusTitle = "Preparing microphone"
+            statusMessage = "iOS may ask for permission. The Temple listens only while recording is active."
+        }
+
+        let granted = await requestMicrophonePermission()
+        guard granted else {
+            await MainActor.run {
+                isWorking = false
+                showRecoveryActions = true
+                statusTitle = "Microphone access needed"
+                statusMessage = "Allow microphone access in iOS Settings, or switch to text entry."
+                recoveryMessage = "The app cannot hear your question until microphone access is allowed."
+            }
+            return
+        }
+
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.defaultToSpeaker, .allowBluetooth])
+            try session.setActive(true)
+
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("godinc_voice_\(UUID().uuidString).m4a")
+
+            let settings: [String: Any] = [
+                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                AVSampleRateKey: 44100,
+                AVNumberOfChannelsKey: 1,
+                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+            ]
+
+            let newRecorder = try AVAudioRecorder(url: url, settings: settings)
+            newRecorder.prepareToRecord()
+            newRecorder.record()
+
+            await MainActor.run {
+                recorder = newRecorder
+                recordingURL = url
+                isRecording = true
+                isWorking = false
+                statusTitle = "Listening"
+                statusMessage = "Speak naturally. Tap Stop and Consult the Oracle when you are finished."
+            }
+        } catch {
+            await MainActor.run {
+                isRecording = false
+                isWorking = false
+                showRecoveryActions = true
+                statusTitle = "Microphone could not start"
+                statusMessage = "The microphone could not be opened."
+                recoveryMessage = userFacingVoiceError(error)
+            }
+        }
+    }
+
+    private func stopAndSubmitRecording() async {
+        await MainActor.run {
+            isWorking = true
+            statusTitle = "Preparing your question"
+            statusMessage = "The recording is being sent to the Temple for transcription."
+        }
+
+        recorder?.stop()
+        let url = recordingURL
+
+        await MainActor.run {
+            isRecording = false
+            recorder = nil
+        }
+
+        guard let url else {
+            await MainActor.run {
+                isWorking = false
+                showRecoveryActions = true
+                statusTitle = "No recording found"
+                statusMessage = "Please try recording again."
+                recoveryMessage = "No audio file was created. Tap Try Voice Again, or switch to text entry."
+            }
+            return
+        }
+
+        do {
+            let spokenQuestion = try await transcribeRecording(at: url, voice: oracleVoice)
+            await MainActor.run {
+                transcript = spokenQuestion
+                statusTitle = "Consulting the Oracle"
+                statusMessage = "Your spoken question has been heard. \(oracleVoice) is answering."
+            }
+
+            let oracleAnswer = try await askOracle(question: spokenQuestion, voice: oracleVoice)
+            await MainActor.run {
+                answer = oracleAnswer
+                statusTitle = "Oracle answered"
+                statusMessage = "The written answer is ready. Preparing the spoken voice."
+            }
+
+            do {
+                let audioData = try await prepareOracleVoice(answer: oracleAnswer, voice: oracleVoice)
+                await MainActor.run {
+                    oracleAudioData = audioData
+                    isWorking = false
+                    showRecoveryActions = false
+                    recoveryMessage = ""
+                    statusTitle = "Oracle speaking"
+                    statusMessage = "The spoken response is playing. You may replay it when finished."
+                    playStoredOracleVoice()
+                }
+            } catch {
+                await MainActor.run {
+                    isWorking = false
+                    showRecoveryActions = false
+                    let friendly = classifyVoiceFailure(error)
+                    statusTitle = "Oracle answered"
+                    statusMessage = "The written answer is ready, but the spoken voice could not be prepared."
+                    recoveryMessage = friendly.recovery
+                }
+            }
+        } catch {
+            await MainActor.run {
+                isWorking = false
+                showRecoveryActions = true
+                let friendly = classifyVoiceFailure(error)
+                statusTitle = friendly.title
+                statusMessage = friendly.status
+                recoveryMessage = friendly.recovery
+            }
+        }
+    }
+
+    private func classifyVoiceFailure(_ error: Error) -> (title: String, status: String, recovery: String) {
+        let raw = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = raw.lowercased()
+
+        if lower.contains("no transcript")
+            || lower.contains("whisper")
+            || lower.contains("could not transcribe")
+            || lower.contains("transcription failed") {
+            return (
+                "No clear question heard",
+                "The Temple could not detect a clear spoken question.",
+                "Have your question ready, tap Try Voice Again, speak clearly, then tap Stop and Consult the Oracle. You can also switch to text entry."
+            )
+        }
+
+        if lower.contains("timed out")
+            || lower.contains("network")
+            || lower.contains("offline")
+            || lower.contains("lost connection") {
+            return (
+                "Connection needs attention",
+                "The voice request could not complete.",
+                "Check the connection and tap Try Voice Again, or switch to text entry."
+            )
+        }
+
+        if lower.contains("microphone") || lower.contains("permission") {
+            return (
+                "Microphone needs attention",
+                "The app could not use the microphone.",
+                "Allow microphone access in iOS Settings, then tap Try Voice Again. You can also switch to text entry."
+            )
+        }
+
+        return (
+            "Voice request needs attention",
+            raw.isEmpty ? "The voice request could not complete." : compactVoiceMessage(raw),
+            "Tap Try Voice Again, reset the voice session, or switch to text entry."
+        )
+    }
+
+    private func userFacingVoiceError(_ error: Error) -> String {
+        classifyVoiceFailure(error).recovery
+    }
+
+    private func compactVoiceMessage(_ value: String, limit: Int = 420) -> String {
+        let cleaned = value
+            .replacingOccurrences(of: "\\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if cleaned.count <= limit {
+            return cleaned
+        }
+
+        let index = cleaned.index(cleaned.startIndex, offsetBy: limit)
+        return String(cleaned[..<index]) + "…"
+    }
+
+    private func transcribeRecording(at url: URL, voice: String) async throws -> String {
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var request = URLRequest(url: TempleEnvironment.voiceTranscribeURL)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        let audioData = try Data(contentsOf: url)
+        if audioData.count < 1024 {
+            throw TempleVoiceError.server("No transcript was returned.")
+        }
+
+        var body = Data()
+
+        body.appendMultipartText(name: "voice", value: voice, boundary: boundary)
+        body.appendMultipartFile(
+            name: "file",
+            filename: "voice_input.m4a",
+            mimeType: "audio/mp4",
+            data: audioData,
+            boundary: boundary
+        )
+        body.appendString("--\(boundary)--\r\n")
+
+        let (data, response) = try await URLSession.shared.upload(for: request, from: body)
+        try validateHTTP(response: response, data: data)
+
+        let decoded = try JSONDecoder().decode(VoiceTranscribeResponse.self, from: data)
+        if let error = decoded.error, !error.isEmpty {
+            throw TempleVoiceError.server(error)
+        }
+
+        let result = (decoded.transcript ?? decoded.question ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if result.isEmpty {
+            throw TempleVoiceError.server("No transcript was returned.")
+        }
+
+        return result
+    }
+
+    private func askOracle(question: String, voice: String) async throws -> String {
+        var request = URLRequest(url: TempleEnvironment.voiceAskURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(VoiceAskPayload(question: question, voice: voice))
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateHTTP(response: response, data: data)
+
+        let decoded = try JSONDecoder().decode(VoiceAskResponse.self, from: data)
+        if let error = decoded.error, !error.isEmpty {
+            throw TempleVoiceError.server(error)
+        }
+
+        let result = (decoded.answer ?? decoded.oracle_message ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if result.isEmpty {
+            throw TempleVoiceError.server("No Oracle answer was returned.")
+        }
+
+        return result
+    }
+
+    private func prepareOracleVoice(answer: String, voice: String) async throws -> Data {
+        var request = URLRequest(url: TempleEnvironment.voiceTTSURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(VoiceTTSPayload(answer: answer, voice: voice))
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateHTTP(response: response, data: data)
+
+        let decoded = try JSONDecoder().decode(VoiceTTSResponse.self, from: data)
+
+        if let error = decoded.error, !error.isEmpty {
+            throw TempleVoiceError.server(error)
+        }
+
+        guard let audioURLString = decoded.audioURL, !audioURLString.isEmpty else {
+            throw TempleVoiceError.server("No Oracle voice audio was returned.")
+        }
+
+        guard let audioURL = URL(string: audioURLString, relativeTo: TempleEnvironment.baseAppURL) else {
+            throw TempleVoiceError.server("Oracle voice audio URL was invalid.")
+        }
+
+        let (audioData, audioResponse) = try await URLSession.shared.data(from: audioURL)
+        try validateHTTP(response: audioResponse, data: audioData)
+
+        if audioData.isEmpty {
+            throw TempleVoiceError.server("Oracle voice audio was empty.")
+        }
+
+        return audioData
+    }
+
+    private func playStoredOracleVoice() {
+        guard let audioData = oracleAudioData else {
+            return
+        }
+
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .spokenAudio)
+            try session.setActive(true)
+
+            let player = try AVAudioPlayer(data: audioData)
+            player.prepareToPlay()
+            player.play()
+
+            audioPlayer = player
+            isPlayingAudio = true
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + player.duration + 0.4) {
+                isPlayingAudio = false
+                if statusTitle == "Oracle speaking" {
+                    statusTitle = "Oracle answered"
+                    statusMessage = "You may ask another question, replay the voice, or continue by text."
+                }
+            }
+        } catch {
+            isPlayingAudio = false
+            statusTitle = "Voice playback unavailable"
+            statusMessage = "The written answer is ready, but the spoken response could not play."
+            recoveryMessage = "You can read the answer above, replay if available, ask another question, or switch to text entry."
+        }
+    }
+
+    private func validateHTTP(response: URLResponse, data: Data) throws {
+        guard let http = response as? HTTPURLResponse else {
+            return
+        }
+
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+            throw TempleVoiceError.server(message)
+        }
+    }
+}
+
+struct VoiceTranscribeResponse: Decodable {
+    let transcript: String?
+    let question: String?
+    let error: String?
+    let answer: String?
+}
+
+struct VoiceAskPayload: Encodable {
+    let question: String
+    let voice: String
+}
+
+struct VoiceAskResponse: Decodable {
+    let answer: String?
+    let error: String?
+    let oracle_message: String?
+}
+
+struct VoiceTTSPayload: Encodable {
+    let answer: String
+    let voice: String
+}
+
+struct VoiceTTSResponse: Decodable {
+    let audioURL: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case audioURL = "audio_url"
+        case error
+    }
+}
+
+enum TempleVoiceError: LocalizedError {
+    case server(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .server(let message):
+            return message
+        }
+    }
+}
+
+extension Data {
+    mutating func appendString(_ value: String) {
+        if let data = value.data(using: .utf8) {
+            append(data)
+        }
+    }
+
+    mutating func appendMultipartText(name: String, value: String, boundary: String) {
+        appendString("--\(boundary)\r\n")
+        appendString("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n")
+        appendString("\(value)\r\n")
+    }
+
+    mutating func appendMultipartFile(name: String, filename: String, mimeType: String, data: Data, boundary: String) {
+        appendString("--\(boundary)\r\n")
+        appendString("Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(filename)\"\r\n")
+        appendString("Content-Type: \(mimeType)\r\n\r\n")
+        append(data)
+        appendString("\r\n")
     }
 }
 
@@ -726,7 +1382,7 @@ struct TempleWebView: UIViewRepresentable {
 
             if requestURL.path == "/support" {
                 DispatchQueue.main.async {
-                    self.selectedTab = 2
+                    self.selectedTab = 3
                 }
                 decisionHandler(.cancel)
                 return
@@ -749,7 +1405,7 @@ struct TempleWebView: UIViewRepresentable {
             }
 
             DispatchQueue.main.async {
-                self.selectedTab = 2
+                self.selectedTab = 3
             }
         }
     }
