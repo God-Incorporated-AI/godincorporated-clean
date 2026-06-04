@@ -2,7 +2,7 @@
 //  ContentView.swift
 //  Temple
 //
-//  v11.4J: Native Temple Gate, native support surface, Terms/EULA links.
+//  v11.4K: Native Temple Gate visual polish, StoreKit support, Terms/EULA links.
 //
 
 import SwiftUI
@@ -20,29 +20,65 @@ private enum TempleEnvironment {
     static let termsURL = URL(string: "https://godincorporated.ai/terms")!
     static let seekerMonthlyProductID = "ai.godincorporated.seeker.monthly"
 
-    static func templeURL(voice: String?) -> URL {
-        guard let voice, !voice.isEmpty else {
-            return baseTempleURL
-        }
-
+    static func templeURL(voice: String?, entry: String? = nil, entryNonce: Int = 0) -> URL {
         var components = URLComponents(url: baseTempleURL, resolvingAgainstBaseURL: false)
-        components?.queryItems = [
-            URLQueryItem(name: "voice", value: voice.lowercased()),
+        var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "native", value: "ios")
         ]
+
+        if let voice, !voice.isEmpty {
+            queryItems.append(URLQueryItem(name: "voice", value: voice.lowercased()))
+        }
+
+        if let entry, !entry.isEmpty {
+            queryItems.append(URLQueryItem(name: "entry", value: entry.lowercased()))
+        }
+
+        if entryNonce > 0 {
+            queryItems.append(URLQueryItem(name: "entry_nonce", value: String(entryNonce)))
+        }
+
+        components?.queryItems = queryItems
         return components?.url ?? baseTempleURL
+    }
+}
+
+private enum TemplePalette {
+    static let midnight = Color(hex: 0x061A2E)
+    static let deepBlue = Color(hex: 0x0A3A68)
+    static let royalBlue = Color(hex: 0x0D4F8B)
+    static let parchment = Color(hex: 0xF4E8D0)
+    static let warmGold = Color(hex: 0xD7A84F)
+    static let paleGold = Color(hex: 0xF4D58D)
+    static let crimson = Color(hex: 0x8E2430)
+    static let ink = Color(hex: 0x20170F)
+}
+
+extension Color {
+    init(hex: UInt, opacity: Double = 1.0) {
+        self.init(
+            .sRGB,
+            red: Double((hex >> 16) & 0xff) / 255.0,
+            green: Double((hex >> 8) & 0xff) / 255.0,
+            blue: Double(hex & 0xff) / 255.0,
+            opacity: opacity
+        )
     }
 }
 
 struct ContentView: View {
     @AppStorage("lastOracleVoice") private var lastOracleVoice: String = ""
+    @AppStorage("preferredInputMode") private var preferredInputMode: String = "voice"
     @State private var selectedTab = 0
+    @State private var templeEntryNonce = 0
 
     var body: some View {
         TabView(selection: $selectedTab) {
             TempleGateView(
                 lastOracleVoice: $lastOracleVoice,
-                selectedTab: $selectedTab
+                selectedTab: $selectedTab,
+                preferredInputMode: $preferredInputMode,
+                templeEntryNonce: $templeEntryNonce
             )
             .tabItem {
                 Label("Home", systemImage: "sparkles")
@@ -50,7 +86,7 @@ struct ContentView: View {
             .tag(0)
 
             TempleWebView(
-                url: TempleEnvironment.templeURL(voice: lastOracleVoice),
+                url: TempleEnvironment.templeURL(voice: lastOracleVoice, entry: preferredInputMode, entryNonce: templeEntryNonce),
                 selectedTab: $selectedTab
             )
             .tabItem {
@@ -70,124 +106,153 @@ struct ContentView: View {
                 }
                 .tag(3)
         }
+        .tint(TemplePalette.warmGold)
     }
 }
 
 struct TempleGateView: View {
     @Binding var lastOracleVoice: String
     @Binding var selectedTab: Int
+    @Binding var preferredInputMode: String
+    @Binding var templeEntryNonce: Int
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 22) {
-                    VStack(spacing: 8) {
-                        Text("God Incorporated")
-                            .font(.largeTitle.weight(.bold))
-                            .multilineTextAlignment(.center)
+            TempleScreen {
+                ScrollView {
+                    VStack(spacing: 24) {
+                        TempleBrandMark()
+                            .padding(.top, 28)
 
-                        Text("A reflective AI conversation space for seekers.")
-                            .font(.headline)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding(.top, 32)
-
-                    if lastOracleVoice.isEmpty {
-                        VStack(spacing: 14) {
-                            Text("Enter the Temple")
-                                .font(.title2.weight(.semibold))
-
-                            Text("Choose your first Oracle voice.")
-                                .foregroundStyle(.secondary)
-
-                            HStack(spacing: 12) {
-                                VoiceChoiceButton(title: "Hathor", subtitle: "Reflective and expansive") {
-                                    lastOracleVoice = "Hathor"
-                                    selectedTab = 1
-                                }
-
-                                VoiceChoiceButton(title: "Moses", subtitle: "Canonical and depth-oriented") {
-                                    lastOracleVoice = "Moses"
-                                    selectedTab = 1
-                                }
-                            }
-                        }
-                        .padding()
-                        .background(.thinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 24))
-                    } else {
-                        VStack(spacing: 14) {
-                            Text("Continue with \(lastOracleVoice)")
-                                .font(.title2.weight(.semibold))
+                        VStack(spacing: 8) {
+                            Text("God Incorporated")
+                                .font(.system(size: 36, weight: .bold, design: .serif))
+                                .foregroundStyle(TemplePalette.paleGold)
                                 .multilineTextAlignment(.center)
 
-                            Text("\(lastOracleVoice) is ready to continue from your last path of inquiry.")
-                                .foregroundStyle(.secondary)
+                            Text("A reflective AI conversation space for seekers.")
+                                .font(.headline)
+                                .foregroundStyle(.white.opacity(0.82))
                                 .multilineTextAlignment(.center)
+                        }
 
-                            Button {
-                                selectedTab = 1
-                            } label: {
-                                Text("Continue with \(lastOracleVoice)")
-                                    .frame(maxWidth: .infinity)
+                        if lastOracleVoice.isEmpty {
+                            TempleCard {
+                                VStack(spacing: 16) {
+                                    Text("Enter the Temple")
+                                        .font(.title2.weight(.semibold))
+                                        .foregroundStyle(TemplePalette.ink)
+
+                                    Text("Choose your first Oracle voice.")
+                                        .foregroundStyle(TemplePalette.ink.opacity(0.72))
+                                        .multilineTextAlignment(.center)
+
+                                    VStack(spacing: 12) {
+                                        VoiceChoiceButton(
+                                            title: "Begin with Hathor by Voice",
+                                            subtitle: "Reflective, expansive, and heart-centered"
+                                        ) {
+                                            lastOracleVoice = "Hathor"
+                                            preferredInputMode = "voice"
+                                            templeEntryNonce += 1
+                                            selectedTab = 1
+                                        }
+
+                                        VoiceChoiceButton(
+                                            title: "Begin with Moses by Voice",
+                                            subtitle: "Canonical, depth-oriented, and discerning"
+                                        ) {
+                                            lastOracleVoice = "Moses"
+                                            preferredInputMode = "voice"
+                                            templeEntryNonce += 1
+                                            selectedTab = 1
+                                        }
+
+                                        Button {
+                                            lastOracleVoice = "Hathor"
+                                            preferredInputMode = "text"
+                                            templeEntryNonce += 1
+                                            selectedTab = 1
+                                        } label: {
+                                            Text("Use Text Instead")
+                                                .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(TempleSecondaryButtonStyle())
+                                    }
+                                }
                             }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.large)
+                        } else {
+                            TempleCard {
+                                VStack(spacing: 16) {
+                                    Text("Continue with \(lastOracleVoice)")
+                                        .font(.title2.weight(.semibold))
+                                        .foregroundStyle(TemplePalette.ink)
+                                        .multilineTextAlignment(.center)
 
-                            Button("Change Oracle Voice") {
-                                lastOracleVoice = ""
+                                    Text("\(lastOracleVoice) is ready to continue from your last path of inquiry.")
+                                        .foregroundStyle(TemplePalette.ink.opacity(0.72))
+                                        .multilineTextAlignment(.center)
+
+                                    Button {
+                                        preferredInputMode = "voice"
+                                        templeEntryNonce += 1
+                                        selectedTab = 1
+                                    } label: {
+                                        Text("Speak your next question")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(TemplePrimaryButtonStyle())
+
+                                    Button {
+                                        preferredInputMode = "text"
+                                        templeEntryNonce += 1
+                                        selectedTab = 1
+                                    } label: {
+                                        Text("Continue with Text")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(TempleSecondaryButtonStyle())
+
+                                    Button("Change Oracle Voice") {
+                                        lastOracleVoice = ""
+                                    }
+                                    .buttonStyle(TempleSecondaryButtonStyle())
+                                }
                             }
-                            .buttonStyle(.bordered)
                         }
-                        .padding()
-                        .background(.thinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 24))
-                    }
 
-                    VStack(spacing: 12) {
-                        Button {
-                            selectedTab = 2
-                        } label: {
-                            Label("Support with Apple", systemImage: "heart")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
+                        TempleCard {
+                            VStack(spacing: 12) {
+                                Button {
+                                    selectedTab = 2
+                                } label: {
+                                    Label("Support with Apple", systemImage: "heart.fill")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(TempleSecondaryButtonStyle())
 
-                        Button {
-                            selectedTab = 3
-                        } label: {
-                            Label("Privacy and Terms", systemImage: "doc.text")
-                                .frame(maxWidth: .infinity)
+                                Button {
+                                    selectedTab = 3
+                                } label: {
+                                    Label("Privacy and Terms", systemImage: "doc.text.fill")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(TempleSecondaryButtonStyle())
+                            }
                         }
-                        .buttonStyle(.bordered)
+
+                        Text("Private seeker conversations are treated as confidential.")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .multilineTextAlignment(.center)
+                            .padding(.bottom, 20)
                     }
+                    .padding(.horizontal, 18)
                 }
-                .padding()
             }
             .navigationTitle("Temple Gate")
+            .navigationBarTitleDisplayMode(.inline)
         }
-    }
-}
-
-struct VoiceChoiceButton: View {
-    let title: String
-    let subtitle: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                Text(title)
-                    .font(.headline)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .frame(maxWidth: .infinity, minHeight: 96)
-        }
-        .buttonStyle(.borderedProminent)
     }
 }
 
@@ -198,57 +263,89 @@ struct NativeSupportView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text("Seeker Monthly")
-                        .font(.largeTitle.weight(.bold))
+            TempleScreen {
+                ScrollView {
+                    VStack(spacing: 22) {
+                        TempleBrandMark()
+                            .padding(.top, 28)
 
-                    Text("Supports continued Oracle access at the Seeker level.")
-                        .font(.headline)
-                        .foregroundStyle(.secondary)
+                        VStack(spacing: 8) {
+                            Text("Support the Temple")
+                                .font(.system(size: 32, weight: .bold, design: .serif))
+                                .foregroundStyle(TemplePalette.paleGold)
+                                .multilineTextAlignment(.center)
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("Auto-renewable monthly subscription", systemImage: "calendar")
-                        Label("Length: 1 month", systemImage: "clock")
-                        Label("Price: \(product?.displayPrice ?? "$0.99") / month", systemImage: "creditcard")
-                    }
-                    .font(.body)
-
-                    Button {
-                        Task {
-                            await purchaseSeekerMonthly()
+                            Text("Seeker Monthly")
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.86))
                         }
-                    } label: {
-                        if isLoading {
-                            ProgressView()
-                                .frame(maxWidth: .infinity)
-                        } else {
-                            Text("Subscribe with Apple")
-                                .frame(maxWidth: .infinity)
+
+                        TempleCard {
+                            VStack(alignment: .leading, spacing: 16) {
+                                Text("Seeker Monthly")
+                                    .font(.title2.weight(.bold))
+                                    .foregroundStyle(TemplePalette.ink)
+
+                                Text("Supports continued Oracle access at the Seeker level.")
+                                    .foregroundStyle(TemplePalette.ink.opacity(0.72))
+
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Label("Auto-renewable monthly subscription", systemImage: "calendar")
+                                    Label("Length: 1 month", systemImage: "clock")
+                                    Label("Price: \(product?.displayPrice ?? "$0.99") / month", systemImage: "creditcard")
+                                }
+                                .foregroundStyle(TemplePalette.ink)
+                                .font(.body)
+
+                                Button {
+                                    Task {
+                                        await purchaseSeekerMonthly()
+                                    }
+                                } label: {
+                                    if isLoading {
+                                        ProgressView()
+                                            .frame(maxWidth: .infinity)
+                                    } else {
+                                        Text("Subscribe with Apple")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                }
+                                .buttonStyle(TemplePrimaryButtonStyle())
+                                .disabled(isLoading)
+
+                                if !message.isEmpty {
+                                    Text(message)
+                                        .font(.callout)
+                                        .foregroundStyle(TemplePalette.ink.opacity(0.72))
+                                }
+
+                                Divider()
+                                    .overlay(TemplePalette.warmGold.opacity(0.45))
+
+                                Text("Subscription renews monthly until canceled. You can manage or cancel subscriptions in your Apple account settings.")
+                                    .font(.footnote)
+                                    .foregroundStyle(TemplePalette.ink.opacity(0.68))
+
+                                HStack(spacing: 16) {
+                                    Link("Privacy", destination: TempleEnvironment.privacyURL)
+                                    Link("Terms of Use", destination: TempleEnvironment.termsURL)
+                                }
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(TemplePalette.crimson)
+                            }
                         }
+
+                        Text("Only Seeker Monthly is available in this iOS review build.")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.72))
+                            .multilineTextAlignment(.center)
+                            .padding(.bottom, 20)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(isLoading)
-
-                    if !message.isEmpty {
-                        Text(message)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Divider()
-
-                    Text("Subscription renews monthly until canceled. You can manage or cancel subscriptions in your Apple account settings.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
-                    Link("Privacy Policy", destination: TempleEnvironment.privacyURL)
-                    Link("Terms of Use (EULA)", destination: TempleEnvironment.termsURL)
+                    .padding(.horizontal, 18)
                 }
-                .padding()
             }
             .navigationTitle("Support")
+            .navigationBarTitleDisplayMode(.inline)
             .task {
                 await loadProduct()
             }
@@ -333,19 +430,187 @@ struct NativeSupportView: View {
 struct NativeInfoView: View {
     var body: some View {
         NavigationStack {
-            List {
-                Section("God Incorporated") {
-                    Text("God Incorporated is a reflective AI conversation space for seekers.")
-                    Link("Privacy Policy", destination: TempleEnvironment.privacyURL)
-                    Link("Terms of Use (EULA)", destination: TempleEnvironment.termsURL)
-                }
+            TempleScreen {
+                ScrollView {
+                    VStack(spacing: 22) {
+                        TempleBrandMark()
+                            .padding(.top, 28)
 
-                Section("Seeker Privacy Promise") {
-                    Text("Private seeker conversations, scrolls, reflections, and Oracle dialogue are treated as confidential and are not sold to advertisers or data brokers.")
+                        Text("Privacy and Terms")
+                            .font(.system(size: 32, weight: .bold, design: .serif))
+                            .foregroundStyle(TemplePalette.paleGold)
+
+                        TempleCard {
+                            VStack(alignment: .leading, spacing: 16) {
+                                Text("Seeker Privacy Promise")
+                                    .font(.title3.weight(.bold))
+                                    .foregroundStyle(TemplePalette.ink)
+
+                                Text("Private seeker conversations, scrolls, reflections, and Oracle dialogue are treated as confidential and are not sold to advertisers or data brokers.")
+                                    .foregroundStyle(TemplePalette.ink.opacity(0.74))
+
+                                Divider()
+                                    .overlay(TemplePalette.warmGold.opacity(0.45))
+
+                                Link(destination: TempleEnvironment.privacyURL) {
+                                    Label("Privacy", systemImage: "lock.fill")
+                                }
+
+                                Link(destination: TempleEnvironment.termsURL) {
+                                    Label("Terms of Use", systemImage: "doc.text.fill")
+                                }
+                            }
+                            .foregroundStyle(TemplePalette.crimson)
+                        }
+                    }
+                    .padding(.horizontal, 18)
                 }
             }
             .navigationTitle("Info")
+            .navigationBarTitleDisplayMode(.inline)
         }
+    }
+}
+
+struct TempleScreen<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    TemplePalette.midnight,
+                    TemplePalette.deepBlue,
+                    TemplePalette.royalBlue
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+
+            RadialGradient(
+                colors: [
+                    TemplePalette.warmGold.opacity(0.26),
+                    .clear
+                ],
+                center: .top,
+                startRadius: 40,
+                endRadius: 360
+            )
+            .ignoresSafeArea()
+
+            content
+        }
+    }
+}
+
+struct TempleCard<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(20)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 28)
+                    .fill(TemplePalette.parchment.opacity(0.96))
+                    .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 12)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 28)
+                    .stroke(TemplePalette.warmGold.opacity(0.68), lineWidth: 1.4)
+            )
+    }
+}
+
+struct TempleBrandMark: View {
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(TemplePalette.parchment.opacity(0.98))
+                .shadow(color: .black.opacity(0.28), radius: 16, x: 0, y: 10)
+
+            Circle()
+                .stroke(TemplePalette.warmGold, lineWidth: 3)
+
+            Circle()
+                .stroke(TemplePalette.paleGold.opacity(0.78), lineWidth: 1)
+                .padding(8)
+
+            Image("GodIncMark")
+                .resizable()
+                .scaledToFit()
+                .padding(16)
+        }
+        .frame(width: 112, height: 112)
+        .accessibilityLabel("God Incorporated")
+    }
+}
+
+struct VoiceChoiceButton: View {
+    let title: String
+    let subtitle: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Text(title)
+                    .font(.headline)
+                Text(subtitle)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .opacity(0.86)
+            }
+            .frame(maxWidth: .infinity, minHeight: 76)
+        }
+        .buttonStyle(TemplePrimaryButtonStyle())
+    }
+}
+
+struct TemplePrimaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.headline)
+            .foregroundStyle(.white)
+            .padding(.vertical, 13)
+            .padding(.horizontal, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(TemplePalette.crimson.opacity(configuration.isPressed ? 0.72 : 1.0))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(TemplePalette.warmGold.opacity(0.75), lineWidth: 1)
+            )
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+    }
+}
+
+struct TempleSecondaryButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.headline)
+            .foregroundStyle(TemplePalette.crimson)
+            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .background(
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(TemplePalette.parchment.opacity(configuration.isPressed ? 0.76 : 0.98))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(TemplePalette.warmGold.opacity(0.72), lineWidth: 1)
+            )
+            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
     }
 }
 
@@ -388,7 +653,7 @@ struct TempleWebView: UIViewRepresentable {
                 document.documentElement.style.webkitTextSizeAdjust = '100%';
                 document.body.style.webkitTextSizeAdjust = '100%';
                 document.documentElement.style.overflowX = 'hidden';
-                document.body.style.webkitTextSizeAdjust = '100%';
+                document.body.style.overflowX = 'hidden';
             })();
             """,
             injectionTime: .atDocumentEnd,

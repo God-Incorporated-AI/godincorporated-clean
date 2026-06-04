@@ -67,6 +67,11 @@ document.addEventListener("DOMContentLoaded", function () {
 
   const ANON_STORAGE_KEY = "godinc_anon_id";
   const ORACLE_VOICE_STORAGE_KEY = "godinc_oracle_voice";
+  const NATIVE_ENTRY_MODE_STORAGE_KEY = "godinc_native_entry_mode";
+  const templeUrlParams = new URLSearchParams(window.location.search);
+  const nativeEntryMode = (templeUrlParams.get("entry") || "").trim().toLowerCase();
+  const nativeVoiceParam = (templeUrlParams.get("voice") || "").trim().toLowerCase();
+  const isNativeIOSLaunch = (templeUrlParams.get("native") || "").trim().toLowerCase() === "ios";
   const INSTALL_NUDGE_STORAGE_KEY = "godinc_install_nudge_dismissed";
 
   function generateAnonymousId() {
@@ -242,11 +247,24 @@ document.addEventListener("DOMContentLoaded", function () {
       scrollCount.textContent = data.count;
     });
 
-  // Restore the last Oracle voice used on this browser
+  // Restore the last Oracle voice used on this browser, with native iOS launch taking priority.
   const validOracleVoices = new Set(Array.from(voiceSelect.options).map((option) => option.value));
   const savedOracleVoice = localStorage.getItem(ORACLE_VOICE_STORAGE_KEY);
-  if (savedOracleVoice && validOracleVoices.has(savedOracleVoice)) {
+  const nativeVoiceMap = {
+    hathor: "Hathor",
+    moses: "Moses"
+  };
+  const requestedNativeVoice = nativeVoiceMap[nativeVoiceParam] || "";
+
+  if (requestedNativeVoice && validOracleVoices.has(requestedNativeVoice)) {
+    voiceSelect.value = requestedNativeVoice;
+    localStorage.setItem(ORACLE_VOICE_STORAGE_KEY, requestedNativeVoice);
+  } else if (savedOracleVoice && validOracleVoices.has(savedOracleVoice)) {
     voiceSelect.value = savedOracleVoice;
+  }
+
+  if (nativeEntryMode === "voice" || nativeEntryMode === "text") {
+    localStorage.setItem(NATIVE_ENTRY_MODE_STORAGE_KEY, nativeEntryMode);
   }
 
   // Oracle selection helper text
@@ -949,6 +967,56 @@ if (seekerInput && oracleForm) {
       oracleAnswer.textContent = "The microphone could not be opened. You can type your question below, or adjust microphone access and try again.";
     }
   });
+
+  function focusTempleConversationForNativeEntry() {
+    const target = voiceStatusPanel || oracleForm || seekerInput;
+    if (target && typeof target.scrollIntoView === "function") {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }
+
+  function applyNativeTextEntryMode() {
+    setVoiceStatus(
+      "Text entry ready",
+      "Type your question below. You can tap Speak whenever you want to return to voice.",
+      "ready"
+    );
+    oracleAnswer.textContent = "Text entry is ready. Type your question below, or tap Speak to ask aloud.";
+    if (seekerInput && typeof seekerInput.focus === "function") {
+      seekerInput.focus();
+    }
+    focusTempleConversationForNativeEntry();
+  }
+
+  async function applyNativeVoiceEntryMode() {
+    setVoiceStatus(
+      "Voice entry ready",
+      "If prompted, allow microphone access. The Temple will listen only while the button says Stop.",
+      "notice"
+    );
+    oracleAnswer.textContent = "🎙 Voice entry is ready. If prompted, allow microphone access. You can switch to text entry below.";
+    focusTempleConversationForNativeEntry();
+
+    try {
+      await startVoiceRecording();
+    } catch (err) {
+      stopVoiceTracks();
+      resetVoiceButton();
+      const recoveryMessage = getMicrophoneRecoveryMessage(err);
+      setVoiceStatus("Tap Speak to begin", recoveryMessage, "notice");
+      oracleAnswer.textContent = "Voice entry is ready. Tap Speak to begin, or type your question below.";
+    }
+  }
+
+  if (isNativeIOSLaunch && nativeEntryMode === "voice") {
+    window.setTimeout(function () {
+      applyNativeVoiceEntryMode();
+    }, 700);
+  } else if (isNativeIOSLaunch && nativeEntryMode === "text") {
+    window.setTimeout(function () {
+      applyNativeTextEntryMode();
+    }, 500);
+  }
 
   const menuToggle = document.getElementById("menuToggle");
   const mainMenu = document.getElementById("mainMenu");
