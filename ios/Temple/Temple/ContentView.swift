@@ -19,6 +19,7 @@ private enum TempleEnvironment {
 #endif
 
     static let baseTempleURL = URL(string: "temple", relativeTo: baseAppURL)!
+    static let accountURL = URL(string: "account", relativeTo: baseAppURL)!
     static let privacyURL = URL(string: "privacy", relativeTo: baseAppURL)!
     static let termsURL = URL(string: "terms", relativeTo: baseAppURL)!
     static let voiceTranscribeURL = URL(string: "voice/transcribe", relativeTo: baseAppURL)!
@@ -27,7 +28,7 @@ private enum TempleEnvironment {
     static let seekerMonthlyProductID = "ai.godincorporated.seeker.monthly"
 
     static func templeURL(voice: String?, entry: String? = nil, entryNonce: Int = 0) -> URL {
-        var components = URLComponents(url: baseTempleURL, resolvingAgainstBaseURL: false)
+        var components = URLComponents(url: baseTempleURL.absoluteURL, resolvingAgainstBaseURL: true)
         var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "native", value: "ios")
         ]
@@ -45,7 +46,22 @@ private enum TempleEnvironment {
         }
 
         components?.queryItems = queryItems
-        return components?.url ?? baseTempleURL
+        return components?.url ?? baseTempleURL.absoluteURL
+    }
+
+    static func accountWebURL(entryNonce: Int = 0) -> URL {
+        var components = URLComponents(url: accountURL.absoluteURL, resolvingAgainstBaseURL: true)
+        if entryNonce > 0 {
+            components?.queryItems = [
+                URLQueryItem(name: "native", value: "ios"),
+                URLQueryItem(name: "entry_nonce", value: String(entryNonce))
+            ]
+        } else {
+            components?.queryItems = [
+                URLQueryItem(name: "native", value: "ios")
+            ]
+        }
+        return components?.url ?? accountURL.absoluteURL
     }
 }
 
@@ -78,6 +94,7 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @State private var templeEntryNonce = 0
     @State private var activeOracleVoice = "Hathor"
+    @State private var templeWebDestination = "temple"
 
     var body: some View {
         let effectiveOracleVoice = activeOracleVoice.isEmpty
@@ -90,7 +107,8 @@ struct ContentView: View {
                 activeOracleVoice: $activeOracleVoice,
                 selectedTab: $selectedTab,
                 preferredInputMode: $preferredInputMode,
-                templeEntryNonce: $templeEntryNonce
+                templeEntryNonce: $templeEntryNonce,
+                templeWebDestination: $templeWebDestination
             )
             .tabItem {
                 Label("Home", systemImage: "sparkles")
@@ -101,6 +119,7 @@ struct ContentView: View {
                 oracleVoice: effectiveOracleVoice,
                 onOpenTempleText: {
                     preferredInputMode = "text"
+                    templeWebDestination = "temple"
                     templeEntryNonce += 1
                     selectedTab = 2
                 },
@@ -114,7 +133,9 @@ struct ContentView: View {
             .tag(1)
 
             TempleWebView(
-                url: TempleEnvironment.templeURL(voice: lastOracleVoice, entry: preferredInputMode, entryNonce: templeEntryNonce),
+                url: templeWebDestination == "account"
+                    ? TempleEnvironment.accountWebURL(entryNonce: templeEntryNonce)
+                    : TempleEnvironment.templeURL(voice: lastOracleVoice, entry: preferredInputMode, entryNonce: templeEntryNonce),
                 selectedTab: $selectedTab
             )
             .tabItem {
@@ -144,6 +165,7 @@ struct TempleGateView: View {
     @Binding var selectedTab: Int
     @Binding var preferredInputMode: String
     @Binding var templeEntryNonce: Int
+    @Binding var templeWebDestination: String
 
     var body: some View {
         NavigationStack {
@@ -249,6 +271,16 @@ struct TempleGateView: View {
                                 .buttonStyle(TempleSecondaryButtonStyle())
 
                                 Button {
+                                    templeWebDestination = "account"
+                                    templeEntryNonce += 1
+                                    selectedTab = 2
+                                } label: {
+                                    Label("Account / Login", systemImage: "person.crop.circle")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(TempleSecondaryButtonStyle())
+
+                                Button {
                                     selectedTab = 4
                                 } label: {
                                     Label("Privacy and Terms", systemImage: "doc.text.fill")
@@ -283,6 +315,7 @@ struct TempleGateView: View {
         lastOracleVoice = voice
         activeOracleVoice = voice
         preferredInputMode = "text"
+        templeWebDestination = "temple"
         templeEntryNonce += 1
         selectedTab = 2
     }
@@ -306,6 +339,23 @@ struct NativeVoiceSessionView: View {
     @State private var oracleAudioData: Data?
     @State private var audioPlayer: AVAudioPlayer?
     @State private var isPlayingAudio = false
+    @State private var voiceMonitorTask: Task<Void, Never>?
+    @State private var recordingStartTime: Date?
+    @State private var speechDetectedTime: Date?
+    @State private var lastSpeechTime: Date?
+    @State private var isAutoSubmittingRecording = false
+    @State private var voiceMeterDebug = ""
+    @State private var quietTickCount = 0
+    @State private var strongestSpeechPowerDB: Float = -160.0
+
+    private let noSpeechTimeoutSeconds: TimeInterval = 8.0
+    private let silenceSubmitSeconds: TimeInterval = 4.0
+    private let backupSubmitAfterSpeechSeconds: TimeInterval = 18.0
+    private let hardMaxRecordingSeconds: TimeInterval = 24.0
+    private let speechPowerThresholdDB: Float = -42.0
+    private let absoluteQuietThresholdDB: Float = -48.0
+    private let quietDropFromSpeechDB: Float = 10.0
+    private let meterTickSeconds: TimeInterval = 0.25
 
     var body: some View {
         NavigationStack {
@@ -337,6 +387,13 @@ struct NativeVoiceSessionView: View {
                                     .foregroundStyle(TemplePalette.ink.opacity(0.72))
                                     .multilineTextAlignment(.center)
 
+                                if isRecording {
+                                    Text(voiceMeterDebug.isEmpty ? "mic monitor waiting..." : voiceMeterDebug)
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(TemplePalette.ink.opacity(0.55))
+                                        .multilineTextAlignment(.center)
+                                }
+
                                 if !transcript.isEmpty || !answer.isEmpty || !recoveryMessage.isEmpty {
                                     ScrollView {
                                         VStack(alignment: .leading, spacing: 12) {
@@ -355,7 +412,7 @@ struct NativeVoiceSessionView: View {
                                                     Text("\(oracleVoice) answered")
                                                         .font(.caption.weight(.bold))
                                                         .foregroundStyle(TemplePalette.crimson)
-                                                    Text(compactVoiceMessage(answer, limit: 1400))
+                                                    Text(answer)
                                                         .foregroundStyle(TemplePalette.ink)
                                                 }
                                             }
@@ -469,7 +526,7 @@ struct NativeVoiceSessionView: View {
                             }
                         }
 
-                        Text("The app listens only after you tap Start Speaking, and stops when you tap Stop.")
+                        Text("The app listens only after you tap Start Speaking, then stops automatically after a pause or when you tap Stop.")
                             .font(.footnote)
                             .foregroundStyle(.white.opacity(0.72))
                             .multilineTextAlignment(.center)
@@ -484,6 +541,7 @@ struct NativeVoiceSessionView: View {
     }
 
     private func resetVoiceSession() {
+        stopVoiceEndpointMonitor()
         recorder?.stop()
         audioPlayer?.stop()
         audioPlayer = nil
@@ -493,6 +551,13 @@ struct NativeVoiceSessionView: View {
         isRecording = false
         isWorking = false
         isPlayingAudio = false
+        isAutoSubmittingRecording = false
+        recordingStartTime = nil
+        speechDetectedTime = nil
+        lastSpeechTime = nil
+        quietTickCount = 0
+        strongestSpeechPowerDB = -160.0
+        voiceMeterDebug = ""
         transcript = ""
         answer = ""
         recoveryMessage = ""
@@ -503,7 +568,7 @@ struct NativeVoiceSessionView: View {
 
     private func requestMicrophonePermission() async -> Bool {
         await withCheckedContinuation { continuation in
-            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+            AVAudioApplication.requestRecordPermission { granted in
                 continuation.resume(returning: granted)
             }
         }
@@ -546,12 +611,13 @@ struct NativeVoiceSessionView: View {
 
             let settings: [String: Any] = [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                AVSampleRateKey: 44100,
+                AVSampleRateKey: 16000,
                 AVNumberOfChannelsKey: 1,
-                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+                AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue
             ]
 
             let newRecorder = try AVAudioRecorder(url: url, settings: settings)
+            newRecorder.isMeteringEnabled = true
             newRecorder.prepareToRecord()
             newRecorder.record()
 
@@ -561,7 +627,8 @@ struct NativeVoiceSessionView: View {
                 isRecording = true
                 isWorking = false
                 statusTitle = "Listening"
-                statusMessage = "Speak naturally. Tap Stop and Consult the Oracle when you are finished."
+                statusMessage = "Speak naturally. Pause when you are finished; the app will consult the Oracle automatically, or you can tap Stop."
+                startVoiceEndpointMonitor()
             }
         } catch {
             await MainActor.run {
@@ -577,6 +644,7 @@ struct NativeVoiceSessionView: View {
 
     private func stopAndSubmitRecording() async {
         await MainActor.run {
+            stopVoiceEndpointMonitor()
             isWorking = true
             statusTitle = "Preparing your question"
             statusMessage = "The recording is being sent to the Temple for transcription."
@@ -603,6 +671,11 @@ struct NativeVoiceSessionView: View {
 
         do {
             let spokenQuestion = try await transcribeRecording(at: url, voice: oracleVoice)
+
+            if isLikelyNoSpeechTranscript(spokenQuestion) {
+                throw TempleVoiceError.server("No clear spoken question was detected.")
+            }
+
             await MainActor.run {
                 transcript = spokenQuestion
                 statusTitle = "Consulting the Oracle"
@@ -649,11 +722,170 @@ struct NativeVoiceSessionView: View {
         }
     }
 
+    private func startVoiceEndpointMonitor() {
+        stopVoiceEndpointMonitor()
+
+        recordingStartTime = Date()
+        speechDetectedTime = nil
+        lastSpeechTime = nil
+        quietTickCount = 0
+        strongestSpeechPowerDB = -160.0
+        isAutoSubmittingRecording = false
+
+        voiceMonitorTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(meterTickSeconds * 1_000_000_000))
+                await MainActor.run {
+                    monitorVoiceEndpointing()
+                }
+            }
+        }
+    }
+
+    private func stopVoiceEndpointMonitor() {
+        voiceMonitorTask?.cancel()
+        voiceMonitorTask = nil
+    }
+
+    private func monitorVoiceEndpointing() {
+        guard isRecording, !isWorking, let activeRecorder = recorder, let started = recordingStartTime else {
+            stopVoiceEndpointMonitor()
+            return
+        }
+
+        activeRecorder.updateMeters()
+
+        let now = Date()
+        let elapsed = now.timeIntervalSince(started)
+        let averagePower = activeRecorder.averagePower(forChannel: 0)
+        let peakPower = activeRecorder.peakPower(forChannel: 0)
+        let absoluteSpeechIsPresent = averagePower > speechPowerThresholdDB || peakPower > (speechPowerThresholdDB + 8.0)
+
+        if absoluteSpeechIsPresent {
+            strongestSpeechPowerDB = max(strongestSpeechPowerDB, averagePower)
+        }
+
+        let relativeQuietThreshold = max(absoluteQuietThresholdDB, strongestSpeechPowerDB - quietDropFromSpeechDB)
+        let quietIsPresent = speechDetectedTime != nil && averagePower <= relativeQuietThreshold
+
+        voiceMeterDebug = String(
+            format: "mic avg %.1f | peak %.1f | speech %.1f | quiet<= %.1f | quiet ticks %d",
+            averagePower,
+            peakPower,
+            strongestSpeechPowerDB,
+            relativeQuietThreshold,
+            quietTickCount
+        )
+
+        if speechDetectedTime != nil {
+            statusMessage = voiceMeterDebug
+        }
+
+        if speechDetectedTime == nil {
+            if absoluteSpeechIsPresent {
+                quietTickCount = 0
+                speechDetectedTime = now
+                lastSpeechTime = now
+                statusMessage = "I hear you. Keep speaking naturally, then pause when you are finished."
+            }
+        } else if absoluteSpeechIsPresent && !quietIsPresent {
+            quietTickCount = 0
+            lastSpeechTime = now
+        } else if quietIsPresent {
+            quietTickCount += 1
+        }
+
+        if elapsed >= hardMaxRecordingSeconds {
+            if speechDetectedTime == nil {
+                stopRecordingWithoutSubmit(
+                    title: "No clear question heard",
+                    status: "The recording limit was reached before a clear question was detected.",
+                    recovery: "Tap Try Voice Again and speak clearly after the listening state appears, or switch to text entry."
+                )
+            } else {
+                autoSubmitRecording(
+                    title: "Recording limit reached",
+                    message: "The recording limit was reached. Your question is being sent to the Oracle."
+                )
+            }
+            return
+        }
+
+        if speechDetectedTime == nil && elapsed >= noSpeechTimeoutSeconds {
+            stopRecordingWithoutSubmit(
+                title: "No clear question heard",
+                status: "The Temple did not detect speech.",
+                recovery: "Tap Try Voice Again and speak clearly after the listening state appears, or switch to text entry."
+            )
+            return
+        }
+
+        if let firstSpeechTime = speechDetectedTime, let lastSpeechTime {
+            let silenceDuration = now.timeIntervalSince(lastSpeechTime)
+            let speechWindowDuration = now.timeIntervalSince(firstSpeechTime)
+            let requiredQuietTicks = max(1, Int(silenceSubmitSeconds / meterTickSeconds))
+
+            if silenceDuration >= silenceSubmitSeconds && quietTickCount >= requiredQuietTicks {
+                autoSubmitRecording(
+                    title: "Question heard",
+                    message: "Your pause was detected. The recording is being sent to the Oracle."
+                )
+                return
+            }
+
+            if speechWindowDuration >= backupSubmitAfterSpeechSeconds
+                && silenceDuration >= silenceSubmitSeconds {
+                autoSubmitRecording(
+                    title: "Question captured",
+                    message: "Your spoken question is being sent to the Oracle."
+                )
+                return
+            }
+        }
+    }
+
+    private func autoSubmitRecording(title: String, message: String) {
+        guard isRecording, !isWorking, !isAutoSubmittingRecording else {
+            return
+        }
+
+        isAutoSubmittingRecording = true
+        statusTitle = title
+        statusMessage = message
+
+        Task {
+            await stopAndSubmitRecording()
+        }
+    }
+
+    private func stopRecordingWithoutSubmit(title: String, status: String, recovery: String) {
+        guard !isAutoSubmittingRecording else {
+            return
+        }
+
+        isAutoSubmittingRecording = true
+        stopVoiceEndpointMonitor()
+        recorder?.stop()
+        recorder = nil
+        recordingURL = nil
+        isRecording = false
+        isWorking = false
+        isAutoSubmittingRecording = false
+        quietTickCount = 0
+        strongestSpeechPowerDB = -160.0
+        voiceMeterDebug = ""
+        statusTitle = title
+        statusMessage = status
+        recoveryMessage = recovery
+        showRecoveryActions = true
+    }
+
     private func classifyVoiceFailure(_ error: Error) -> (title: String, status: String, recovery: String) {
         let raw = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = raw.lowercased()
 
         if lower.contains("no transcript")
+            || lower.contains("no clear spoken question")
             || lower.contains("whisper")
             || lower.contains("could not transcribe")
             || lower.contains("transcription failed") {
@@ -708,10 +940,47 @@ struct NativeVoiceSessionView: View {
         return String(cleaned[..<index]) + "…"
     }
 
+    private func isLikelyNoSpeechTranscript(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return true
+        }
+
+        let lower = trimmed.lowercased()
+        let letterCount = lower.filter { $0.isLetter }.count
+        let digitCount = lower.filter { $0.isNumber }.count
+        let percentCount = lower.filter { $0 == "%" }.count
+        let words = lower
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+
+        if letterCount < 3 && digitCount > 0 {
+            return true
+        }
+
+        if percentCount > 0 && letterCount < 5 {
+            return true
+        }
+
+        if words.count <= 2 && trimmed.count < 8 {
+            return true
+        }
+
+        let repeatedNoiseTokens = ["1.5", "1.5%", "%"]
+        let noiseHits = repeatedNoiseTokens.reduce(0) { count, token in
+            count + lower.components(separatedBy: token).count - 1
+        }
+
+        if noiseHits >= 2 && letterCount < 10 {
+            return true
+        }
+
+        return false
+    }
+
     private func transcribeRecording(at url: URL, voice: String) async throws -> String {
         let boundary = "Boundary-\(UUID().uuidString)"
-        var request = URLRequest(url: TempleEnvironment.voiceTranscribeURL)
-        request.httpMethod = "POST"
+        var request = await authenticatedVoiceRequest(url: TempleEnvironment.voiceTranscribeURL, method: "POST")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
         let audioData = try Data(contentsOf: url)
@@ -748,8 +1017,7 @@ struct NativeVoiceSessionView: View {
     }
 
     private func askOracle(question: String, voice: String) async throws -> String {
-        var request = URLRequest(url: TempleEnvironment.voiceAskURL)
-        request.httpMethod = "POST"
+        var request = await authenticatedVoiceRequest(url: TempleEnvironment.voiceAskURL, method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(VoiceAskPayload(question: question, voice: voice))
 
@@ -770,8 +1038,7 @@ struct NativeVoiceSessionView: View {
     }
 
     private func prepareOracleVoice(answer: String, voice: String) async throws -> Data {
-        var request = URLRequest(url: TempleEnvironment.voiceTTSURL)
-        request.httpMethod = "POST"
+        var request = await authenticatedVoiceRequest(url: TempleEnvironment.voiceTTSURL, method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(VoiceTTSPayload(answer: answer, voice: voice))
 
@@ -831,6 +1098,40 @@ struct NativeVoiceSessionView: View {
             statusTitle = "Voice playback unavailable"
             statusMessage = "The written answer is ready, but the spoken response could not play."
             recoveryMessage = "You can read the answer above, replay if available, ask another question, or switch to text entry."
+        }
+    }
+
+    private func authenticatedVoiceRequest(url: URL, method: String) async -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("GodIncorporatedIOSApp/1.0", forHTTPHeaderField: "User-Agent")
+
+        let cookies = await sharedWebCookies(for: url)
+        if !cookies.isEmpty {
+            let headers = HTTPCookie.requestHeaderFields(with: cookies)
+            if let cookieHeader = headers["Cookie"] {
+                request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+            }
+        }
+
+        return request
+    }
+
+    private func sharedWebCookies(for url: URL) async -> [HTTPCookie] {
+        await withCheckedContinuation { continuation in
+            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
+                guard let host = url.host else {
+                    continuation.resume(returning: [])
+                    return
+                }
+
+                let matchingCookies = cookies.filter { cookie in
+                    let domain = cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
+                    return host == domain || host.hasSuffix("." + domain)
+                }
+
+                continuation.resume(returning: matchingCookies)
+            }
         }
     }
 

@@ -31,7 +31,7 @@ import stripe
 
 from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio, get_openai_tts_model
-from services.whisper import transcribe_audio
+from services.voice_transcription import transcribe_audio_with_metrics
 from services.llama_phase1 import build_support_packet, run_llama_phase1, apply_phase1_result, summarize_phase1_result
 from services.mail import send_email
 from services.stripe_billing import create_checkout_session_for_user, change_existing_subscription_plan
@@ -4030,17 +4030,32 @@ async def voice_transcribe_endpoint(
     try:
         file_bytes = await file.read()
         transcribe_started_at = datetime.datetime.now()
-        transcript = transcribe_audio(file_bytes)
+        transcription_result = transcribe_audio_with_metrics(
+            file_bytes,
+            filename=file.filename or "voice_input.m4a",
+            content_type=file.content_type or "audio/mp4",
+            voice=voice,
+        )
+        transcript = (transcription_result.get("transcript") or "").strip()
         transcribe_finished_at = datetime.datetime.now()
+        transcribe_provider = transcription_result.get("provider", "unknown")
+        transcribe_model = transcription_result.get("model", "unknown")
+        transcribe_api_ms = transcription_result.get("api_ms", "-")
+        transcribe_audio_bytes = transcription_result.get("audio_bytes", len(file_bytes or b""))
+        transcribe_attempts = transcription_result.get("attempts", [])
 
         if not transcript:
             transcribe_ms = voice_stage_ms(transcribe_started_at, transcribe_finished_at)
             total_ms = voice_stage_ms(started_at, datetime.datetime.now())
             logger.info(
-                "VOICE_TRANSCRIBE_STAGE status=failed voice=%s transcribe_ms=%s total_ms=%s transcript_chars=0",
+                "VOICE_TRANSCRIBE_STAGE status=failed voice=%s provider=%s model=%s transcribe_ms=%s api_ms=%s total_ms=%s audio_bytes=%s transcript_chars=0",
                 voice,
+                transcribe_provider,
+                transcribe_model,
                 transcribe_ms,
-                total_ms
+                transcribe_api_ms,
+                total_ms,
+                transcribe_audio_bytes,
             )
             record_voice_usage_event(
                 **usage_context,
@@ -4052,8 +4067,13 @@ async def voice_transcribe_endpoint(
                 total_ms=total_ms,
                 transcript_chars=0,
                 metadata_json={
-                    "phase": "10.5",
+                    "phase": "11.x",
                     "event_source": "voice_transcribe_endpoint",
+                    "provider": transcribe_provider,
+                    "model": transcribe_model,
+                    "api_ms": transcribe_api_ms,
+                    "audio_bytes": transcribe_audio_bytes,
+                    "attempts": transcribe_attempts,
                 }
             )
             return JSONResponse(
@@ -4064,11 +4084,15 @@ async def voice_transcribe_endpoint(
         transcribe_ms = voice_stage_ms(transcribe_started_at, transcribe_finished_at)
         total_ms = voice_stage_ms(started_at, datetime.datetime.now())
         logger.info(
-            "VOICE_TRANSCRIBE_STAGE status=ok voice=%s transcribe_ms=%s total_ms=%s transcript_chars=%s",
+            "VOICE_TRANSCRIBE_STAGE status=ok voice=%s provider=%s model=%s transcribe_ms=%s api_ms=%s total_ms=%s audio_bytes=%s transcript_chars=%s",
             voice,
+            transcribe_provider,
+            transcribe_model,
             transcribe_ms,
+            transcribe_api_ms,
             total_ms,
-            len(transcript or "")
+            transcribe_audio_bytes,
+            len(transcript or ""),
         )
         record_voice_usage_event(
             **usage_context,
@@ -4080,8 +4104,13 @@ async def voice_transcribe_endpoint(
             total_ms=total_ms,
             transcript_chars=len(transcript or ""),
             metadata_json={
-                "phase": "10.5",
+                "phase": "11.x",
                 "event_source": "voice_transcribe_endpoint",
+                "provider": transcribe_provider,
+                "model": transcribe_model,
+                "api_ms": transcribe_api_ms,
+                "audio_bytes": transcribe_audio_bytes,
+                "attempts": transcribe_attempts,
             }
         )
 
