@@ -157,9 +157,8 @@ def build_openai_realtime_payload(
         "tracing": os.getenv("OPENAI_REALTIME_TRACING", "auto").strip() or "auto",
     }
 
-    if metadata:
-        session["metadata"] = metadata
-
+    # OpenAI realtime client_secrets currently rejects session.metadata.
+    # Keep our tracking metadata in God Incorporated logs/DB instead.
     return {
         "expires_after": {
             "anchor": "created_at",
