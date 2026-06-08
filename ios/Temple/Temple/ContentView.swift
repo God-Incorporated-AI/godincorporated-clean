@@ -1588,6 +1588,7 @@ struct TempleWebView: UIViewRepresentable {
                     platform: "ios",
                     storeKit: true,
                     nativeSupport: true,
+                    nativeNavigation: true,
                     supportedProducts: ["ai.godincorporated.seeker.monthly"]
                 };
                 window.dispatchEvent(new Event("godIncNativeReady"));
@@ -1620,6 +1621,7 @@ struct TempleWebView: UIViewRepresentable {
         configuration.userContentController.addUserScript(nativeBridgeScript)
         configuration.userContentController.addUserScript(viewportScript)
         configuration.userContentController.add(context.coordinator, name: "templeStoreKit")
+        configuration.userContentController.add(context.coordinator, name: "templeNativeNav")
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         context.coordinator.webView = webView
@@ -1666,6 +1668,7 @@ struct TempleWebView: UIViewRepresentable {
                     platform: "ios",
                     storeKit: true,
                     nativeSupport: true,
+                    nativeNavigation: true,
                     supportedProducts: ["ai.godincorporated.seeker.monthly"]
                 };
                 window.dispatchEvent(new Event("godIncNativeReady"));
@@ -1701,12 +1704,18 @@ struct TempleWebView: UIViewRepresentable {
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.name == "templeStoreKit" else {
+            if message.name == "templeStoreKit" {
+                DispatchQueue.main.async {
+                    self.selectedTab = 3
+                }
                 return
             }
 
-            DispatchQueue.main.async {
-                self.selectedTab = 3
+            if message.name == "templeNativeNav" {
+                DispatchQueue.main.async {
+                    self.selectedTab = 0
+                }
+                return
             }
         }
     }
