@@ -866,7 +866,41 @@ if (seekerInput && oracleForm) {
     }
   }
 
+
+  function shouldUseNativeIOSVoicePath() {
+    return Boolean(isNativeIOSLaunch || isNativeIOSApp());
+  }
+
+  function applyNativeIOSWebVoiceSuppression() {
+    if (!shouldUseNativeIOSVoicePath()) {
+      return false;
+    }
+
+    if (speakButton) {
+      speakButton.disabled = true;
+      speakButton.hidden = true;
+      speakButton.style.display = "none";
+      speakButton.setAttribute("aria-hidden", "true");
+      speakButton.setAttribute("data-native-ios-disabled", "true");
+    }
+
+    setVoiceStatus(
+      "iOS voice active",
+      "Voice is handled by the iOS app. Use the native microphone button, or type your question below.",
+      "ready"
+    );
+
+    return true;
+  }
+
   async function startVoiceRecording() {
+    if (applyNativeIOSWebVoiceSuppression()) {
+      if (oracleAnswer) {
+        oracleAnswer.textContent = "Voice is handled by the iOS app. Use the native microphone button, or type your question below.";
+      }
+      return;
+    }
+
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setVoiceStatus(
         "Microphone unavailable",
@@ -949,6 +983,13 @@ if (seekerInput && oracleForm) {
   }
 
   speakButton.addEventListener("click", async function () {
+    if (applyNativeIOSWebVoiceSuppression()) {
+      if (oracleAnswer) {
+        oracleAnswer.textContent = "Voice is handled by the iOS app. Use the native microphone button, or type your question below.";
+      }
+      return;
+    }
+
     if (voiceIsRecording && voiceRecorder && voiceRecorder.state === "recording") {
       speakButton.disabled = true;
       speakButton.textContent = "🔄 Transcribing...";
@@ -978,10 +1019,14 @@ if (seekerInput && oracleForm) {
   function applyNativeTextEntryMode() {
     setVoiceStatus(
       "Text entry ready",
-      "Type your question below. You can tap Speak whenever you want to return to voice.",
+      shouldUseNativeIOSVoicePath()
+        ? "Type your question below. Voice is handled by the iOS app microphone button."
+        : "Type your question below. You can tap Speak whenever you want to return to voice.",
       "ready"
     );
-    oracleAnswer.textContent = "Text entry is ready. Type your question below, or tap Speak to ask aloud.";
+    oracleAnswer.textContent = shouldUseNativeIOSVoicePath()
+      ? "Text entry is ready. Type your question below, or use the native iOS microphone button."
+      : "Text entry is ready. Type your question below, or tap Speak to ask aloud.";
     if (seekerInput && typeof seekerInput.focus === "function") {
       seekerInput.focus();
     }
@@ -989,6 +1034,12 @@ if (seekerInput && oracleForm) {
   }
 
   async function applyNativeVoiceEntryMode() {
+    if (applyNativeIOSWebVoiceSuppression()) {
+      oracleAnswer.textContent = "Voice is handled by the iOS app. Use the native microphone button, or type your question below.";
+      focusTempleConversationForNativeEntry();
+      return;
+    }
+
     setVoiceStatus(
       "Voice entry ready",
       "If prompted, allow microphone access. The Temple will listen only while the button says Stop.",
@@ -1098,6 +1149,7 @@ if (seekerInput && oracleForm) {
   });
 
   window.addEventListener("godIncNativeReady", function() {
+    applyNativeIOSWebVoiceSuppression();
     applyNativeIOSSupportGate(Boolean(currentIdentity && currentIdentity.authenticated));
   });
 
