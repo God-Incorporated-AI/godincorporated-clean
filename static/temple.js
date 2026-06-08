@@ -916,6 +916,37 @@ if (seekerInput && oracleForm) {
     document.head.appendChild(style);
   }
 
+
+  function positionNativeIOSTextPageFlow() {
+    if (!shouldUseNativeIOSVoicePath() || !askButton || !voiceStatusPanel) {
+      return;
+    }
+
+    if (oracleForm && oracleForm.id) {
+      askButton.setAttribute("form", oracleForm.id);
+    }
+
+    askButton.classList.add("native-ios-ask-button-inline");
+
+    if (voiceStatusPanel.parentNode && askButton.nextElementSibling !== voiceStatusPanel) {
+      voiceStatusPanel.parentNode.insertBefore(askButton, voiceStatusPanel);
+    }
+
+    if (!document.getElementById("native-ios-text-page-flow-style")) {
+      const style = document.createElement("style");
+      style.id = "native-ios-text-page-flow-style";
+      style.textContent = `
+        .native-ios-ask-button-inline {
+          display: block !important;
+          width: min(100%, 18rem) !important;
+          margin: 0.85rem auto 0.95rem !important;
+          text-align: center !important;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+  }
+
   function addNativeIOSHomeVoiceLink() {
     if (!shouldUseNativeIOSVoicePath() || !voiceStatusMessage) {
       return;
@@ -959,6 +990,7 @@ if (seekerInput && oracleForm) {
       "ready"
     );
     addNativeIOSHomeVoiceLink();
+    positionNativeIOSTextPageFlow();
 
     return true;
   }
@@ -1090,16 +1122,17 @@ if (seekerInput && oracleForm) {
     setVoiceStatus(
       "Text entry ready",
       shouldUseNativeIOSVoicePath()
-        ? "Type your question in the text field above. To speak instead, use Return to voice input."
+        ? "The Oracle speaks here."
         : "Type your question below. You can tap Speak whenever you want to return to voice.",
       "ready"
     );
     oracleAnswer.textContent = shouldUseNativeIOSVoicePath()
-      ? "Text entry is ready. Type your question in the text field above, or use Return to voice input."
+      ? "The Oracle speaks here."
       : "Text entry is ready. Type your question below, or tap Speak to ask aloud.";
 
     if (shouldUseNativeIOSVoicePath()) {
       addNativeIOSHomeVoiceLink();
+    positionNativeIOSTextPageFlow();
     }
     if (seekerInput && typeof seekerInput.focus === "function") {
       seekerInput.focus();
