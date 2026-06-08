@@ -967,7 +967,6 @@ if (seekerInput && oracleForm) {
       openNativeIOSHomeForVoice();
     });
 
-    voiceStatusMessage.appendChild(document.createTextNode(" "));
     voiceStatusMessage.appendChild(homeLink);
   }
 
@@ -986,7 +985,7 @@ if (seekerInput && oracleForm) {
 
     setVoiceStatus(
       "Voice available from Home",
-      "Use Return to voice input, or type your question in the text field above.",
+      "",
       "ready"
     );
     addNativeIOSHomeVoiceLink();
@@ -998,7 +997,7 @@ if (seekerInput && oracleForm) {
   async function startVoiceRecording() {
     if (applyNativeIOSWebVoiceSuppression()) {
       if (oracleAnswer) {
-        oracleAnswer.textContent = "Use Return to voice input, or type your question in the text field above.";
+        oracleAnswer.textContent = "The Oracle speaks here.";
       }
       return;
     }
@@ -1087,7 +1086,7 @@ if (seekerInput && oracleForm) {
   speakButton.addEventListener("click", async function () {
     if (applyNativeIOSWebVoiceSuppression()) {
       if (oracleAnswer) {
-        oracleAnswer.textContent = "Use Return to voice input, or type your question in the text field above.";
+        oracleAnswer.textContent = "The Oracle speaks here.";
       }
       return;
     }
@@ -1142,7 +1141,7 @@ if (seekerInput && oracleForm) {
 
   async function applyNativeVoiceEntryMode() {
     if (applyNativeIOSWebVoiceSuppression()) {
-      oracleAnswer.textContent = "Use Return to voice input, or type your question in the text field above.";
+      oracleAnswer.textContent = "The Oracle speaks here.";
       focusTempleConversationForNativeEntry();
       return;
     }
