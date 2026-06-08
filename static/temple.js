@@ -871,6 +871,43 @@ if (seekerInput && oracleForm) {
     return Boolean(isNativeIOSLaunch || isNativeIOSApp());
   }
 
+
+  function openNativeIOSHomeForVoice() {
+    const handler = window.webkit?.messageHandlers?.templeNativeNav;
+    if (handler) {
+      handler.postMessage({
+        destination: "home",
+        reason: "voice"
+      });
+      return true;
+    }
+
+    window.location.href = "/";
+    return false;
+  }
+
+  function addNativeIOSHomeVoiceLink() {
+    if (!shouldUseNativeIOSVoicePath() || !voiceStatusMessage) {
+      return;
+    }
+
+    if (voiceStatusMessage.querySelector("[data-native-ios-home-link='true']")) {
+      return;
+    }
+
+    const homeLink = document.createElement("button");
+    homeLink.type = "button";
+    homeLink.className = "native-ios-home-link";
+    homeLink.dataset.nativeIosHomeLink = "true";
+    homeLink.textContent = "Return Home for voice input";
+    homeLink.addEventListener("click", function () {
+      openNativeIOSHomeForVoice();
+    });
+
+    voiceStatusMessage.appendChild(document.createTextNode(" "));
+    voiceStatusMessage.appendChild(homeLink);
+  }
+
   function applyNativeIOSWebVoiceSuppression() {
     if (!shouldUseNativeIOSVoicePath()) {
       return false;
@@ -885,10 +922,11 @@ if (seekerInput && oracleForm) {
     }
 
     setVoiceStatus(
-      "iOS voice active",
-      "Voice is handled by the iOS app. Use the native microphone button, or type your question below.",
+      "Voice available from Home",
+      "Voice is available from Home. Use Return Home for voice input, or type your question in the text field on this page.",
       "ready"
     );
+    addNativeIOSHomeVoiceLink();
 
     return true;
   }
@@ -896,7 +934,7 @@ if (seekerInput && oracleForm) {
   async function startVoiceRecording() {
     if (applyNativeIOSWebVoiceSuppression()) {
       if (oracleAnswer) {
-        oracleAnswer.textContent = "Voice is handled by the iOS app. Use the native microphone button, or type your question below.";
+        oracleAnswer.textContent = "Voice is available from Home. Use Return Home for voice input, or type your question in the text field on this page.";
       }
       return;
     }
@@ -985,7 +1023,7 @@ if (seekerInput && oracleForm) {
   speakButton.addEventListener("click", async function () {
     if (applyNativeIOSWebVoiceSuppression()) {
       if (oracleAnswer) {
-        oracleAnswer.textContent = "Voice is handled by the iOS app. Use the native microphone button, or type your question below.";
+        oracleAnswer.textContent = "Voice is available from Home. Use Return Home for voice input, or type your question in the text field on this page.";
       }
       return;
     }
@@ -1020,13 +1058,17 @@ if (seekerInput && oracleForm) {
     setVoiceStatus(
       "Text entry ready",
       shouldUseNativeIOSVoicePath()
-        ? "Type your question below. Voice is handled by the iOS app microphone button."
+        ? "Type your question in the text field on this page. To speak instead, use Return Home for voice input."
         : "Type your question below. You can tap Speak whenever you want to return to voice.",
       "ready"
     );
     oracleAnswer.textContent = shouldUseNativeIOSVoicePath()
-      ? "Text entry is ready. Type your question below, or use the native iOS microphone button."
+      ? "Text entry is ready. Type your question in the text field on this page, or use Return Home for voice input."
       : "Text entry is ready. Type your question below, or tap Speak to ask aloud.";
+
+    if (shouldUseNativeIOSVoicePath()) {
+      addNativeIOSHomeVoiceLink();
+    }
     if (seekerInput && typeof seekerInput.focus === "function") {
       seekerInput.focus();
     }
@@ -1035,7 +1077,7 @@ if (seekerInput && oracleForm) {
 
   async function applyNativeVoiceEntryMode() {
     if (applyNativeIOSWebVoiceSuppression()) {
-      oracleAnswer.textContent = "Voice is handled by the iOS app. Use the native microphone button, or type your question below.";
+      oracleAnswer.textContent = "Voice is available from Home. Use Return Home for voice input, or type your question in the text field on this page.";
       focusTempleConversationForNativeEntry();
       return;
     }
