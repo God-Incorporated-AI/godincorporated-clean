@@ -882,6 +882,12 @@ async def get_oracle_response(
         Be tender, lucid, and quietly sacred.
 
         Use the background wisdom provided, but do not cite it explicitly.
+
+        Formatting rules:
+        Write in plain conversational prose.
+        Do not use markdown.
+        Do not use **bold**, headings, bullet lists, numbered lists, or decorative symbols unless the seeker explicitly asks for structure.
+        End with a complete sentence.
         """
         
         
@@ -1971,16 +1977,33 @@ def get_response_word_cap(
 
 
 def words_to_max_tokens(word_cap: int) -> int:
-    # Tighter completion budget after Phase 10 latency tuning.
-    # This helps stop long generations instead of trimming only after the fact.
-    return max(120, int(word_cap * 1.35))
+    # Completion budget should be larger than the visible word target.
+    # A tight token cap causes the model to stop mid-sentence before
+    # sentence-safe trimming can do its job.
+    return max(180, int(word_cap * 2.25))
 
 
 def trim_response_to_word_cap(answer: str, word_cap: int) -> str:
-    words = (answer or "").split()
+    text = (answer or "").strip()
+    words = text.split()
     if len(words) <= word_cap:
-        return answer
-    return " ".join(words[:word_cap]).rstrip() + "..."
+        return text
+
+    rough = " ".join(words[:word_cap]).strip()
+    sentence_enders = [".", "!", "?", ".”", "!”", "?”"]
+    last_end = -1
+
+    for marker in sentence_enders:
+        last_end = max(last_end, rough.rfind(marker))
+
+    # Prefer a complete sentence if one exists near the end of the trimmed text.
+    minimum_usable = max(80, int(len(rough) * 0.55))
+    if last_end >= minimum_usable:
+        return rough[:last_end + 1].strip()
+
+    # If no sentence ending exists, give a clean continuation cue instead of
+    # making the answer look like it crashed.
+    return rough.rstrip(" ,;:-") + ". I can continue from here if you would like."
 
 
 def normalize_plan_code(plan_code: Optional[str]) -> str:
@@ -4146,8 +4169,76 @@ async def voice_transcribe_endpoint(
         )
 
 
+def is_likely_no_speech_transcript(value: str) -> bool:
+    """
+    Reject known no-speech/STT artifact transcripts before /voice/ask reaches ask_oracle.
+
+    Keep this intentionally narrow. A short real question like "why", "help",
+    "love", or "I hurt" must still be allowed through.
+    """
+    text = (value or "").strip()
+    if not text:
+        return True
+
+    compact = re.sub(r"\s+", " ", text.lower()).strip()
+    normalized = compact.strip(" \t\r\n.,!?;:\"'`*_~#()[]{}")
+
+    if not normalized:
+        return True
+
+    artifact_phrases = {
+        "token",
+        "tokens",
+        "1.5",
+        "1.5%",
+        "%",
+        "percent",
+        "percentage",
+        "uh",
+        "um",
+        "umm",
+        "uhh",
+        "hm",
+        "hmm",
+        "mmm",
+    }
+
+    if normalized in artifact_phrases:
+        return True
+
+    # Numeric-only or percent-only fragments are common no-speech artifacts.
+    if re.fullmatch(r"(\d+(\.\d+)?\s*%?|%)(\s+(\d+(\.\d+)?\s*%?|%))*", normalized):
+        return True
+
+    letters = sum(1 for ch in normalized if ch.isalpha())
+    digits = sum(1 for ch in normalized if ch.isdigit())
+    words = re.findall(r"[a-zA-Z]+", normalized)
+
+    if digits > 0 and letters < 3 and len(normalized) <= 16:
+        return True
+
+    if "%" in normalized and letters < 6:
+        return True
+
+    filler_words = {"uh", "um", "umm", "uhh", "hm", "hmm", "mmm"}
+    if words and len(words) <= 3 and all(word in filler_words for word in words):
+        return True
+
+    return False
+
+
 @app.post("/voice/ask")
 async def voice_ask_endpoint(request: Request, payload: dict):
+    question = (payload.get("question") or "").strip()
+
+    if is_likely_no_speech_transcript(question):
+        return JSONResponse(
+            content={
+                "error": "No clear spoken question was detected. Please try again or type your question."
+            },
+            status_code=422
+        )
+
     request.state.oracle_input_mode = "voice"
     oracle_payload = QuestionInput(**payload)
     return await ask_oracle(request, oracle_payload)
