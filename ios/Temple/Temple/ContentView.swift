@@ -344,8 +344,8 @@ struct NativeVoiceSessionView: View {
     @State private var speechDetectedTime: Date?
     @State private var lastSpeechTime: Date?
     @State private var isAutoSubmittingRecording = false
-    @State private var voiceMeterDebug = ""
     @State private var quietTickCount = 0
+    @State private var speechCandidateTickCount = 0
     @State private var strongestSpeechPowerDB: Float = -160.0
 
     private let noSpeechTimeoutSeconds: TimeInterval = 8.0
@@ -353,6 +353,7 @@ struct NativeVoiceSessionView: View {
     private let backupSubmitAfterSpeechSeconds: TimeInterval = 18.0
     private let hardMaxRecordingSeconds: TimeInterval = 24.0
     private let speechPowerThresholdDB: Float = -42.0
+    private let requiredSpeechStartTicks = 2
     private let absoluteQuietThresholdDB: Float = -48.0
     private let quietDropFromSpeechDB: Float = 10.0
     private let meterTickSeconds: TimeInterval = 0.25
@@ -388,10 +389,6 @@ struct NativeVoiceSessionView: View {
                                     .multilineTextAlignment(.center)
 
                                 if isRecording {
-                                    Text(voiceMeterDebug.isEmpty ? "mic monitor waiting..." : voiceMeterDebug)
-                                        .font(.caption2.monospaced())
-                                        .foregroundStyle(TemplePalette.ink.opacity(0.55))
-                                        .multilineTextAlignment(.center)
                                 }
 
                                 if !transcript.isEmpty || !answer.isEmpty || !recoveryMessage.isEmpty {
@@ -556,8 +553,8 @@ struct NativeVoiceSessionView: View {
         speechDetectedTime = nil
         lastSpeechTime = nil
         quietTickCount = 0
+        speechCandidateTickCount = 0
         strongestSpeechPowerDB = -160.0
-        voiceMeterDebug = ""
         transcript = ""
         answer = ""
         recoveryMessage = ""
@@ -729,6 +726,7 @@ struct NativeVoiceSessionView: View {
         speechDetectedTime = nil
         lastSpeechTime = nil
         quietTickCount = 0
+        speechCandidateTickCount = 0
         strongestSpeechPowerDB = -160.0
         isAutoSubmittingRecording = false
 
@@ -768,27 +766,22 @@ struct NativeVoiceSessionView: View {
         let relativeQuietThreshold = max(absoluteQuietThresholdDB, strongestSpeechPowerDB - quietDropFromSpeechDB)
         let quietIsPresent = speechDetectedTime != nil && averagePower <= relativeQuietThreshold
 
-        voiceMeterDebug = String(
-            format: "mic avg %.1f | peak %.1f | speech %.1f | quiet<= %.1f | quiet ticks %d",
-            averagePower,
-            peakPower,
-            strongestSpeechPowerDB,
-            relativeQuietThreshold,
-            quietTickCount
-        )
-
-        if speechDetectedTime != nil {
-            statusMessage = voiceMeterDebug
-        }
 
         if speechDetectedTime == nil {
             if absoluteSpeechIsPresent {
+                speechCandidateTickCount += 1
                 quietTickCount = 0
-                speechDetectedTime = now
-                lastSpeechTime = now
-                statusMessage = "I hear you. Keep speaking naturally, then pause when you are finished."
+
+                if speechCandidateTickCount >= requiredSpeechStartTicks {
+                    speechDetectedTime = now
+                    lastSpeechTime = now
+                    statusMessage = "I hear you. Keep speaking naturally, then pause when you are finished."
+                }
+            } else {
+                speechCandidateTickCount = 0
             }
         } else if absoluteSpeechIsPresent && !quietIsPresent {
+            speechCandidateTickCount = requiredSpeechStartTicks
             quietTickCount = 0
             lastSpeechTime = now
         } else if quietIsPresent {
@@ -872,8 +865,8 @@ struct NativeVoiceSessionView: View {
         isWorking = false
         isAutoSubmittingRecording = false
         quietTickCount = 0
+        speechCandidateTickCount = 0
         strongestSpeechPowerDB = -160.0
-        voiceMeterDebug = ""
         statusTitle = title
         statusMessage = status
         recoveryMessage = recovery
