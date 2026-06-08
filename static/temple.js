@@ -997,7 +997,7 @@ if (seekerInput && oracleForm) {
   async function startVoiceRecording() {
     if (applyNativeIOSWebVoiceSuppression()) {
       if (oracleAnswer) {
-        oracleAnswer.textContent = "The Oracle speaks here.";
+        oracleAnswer.textContent = "The Oracle responds here.";
       }
       return;
     }
@@ -1086,7 +1086,7 @@ if (seekerInput && oracleForm) {
   speakButton.addEventListener("click", async function () {
     if (applyNativeIOSWebVoiceSuppression()) {
       if (oracleAnswer) {
-        oracleAnswer.textContent = "The Oracle speaks here.";
+        oracleAnswer.textContent = "The Oracle responds here.";
       }
       return;
     }
@@ -1121,12 +1121,12 @@ if (seekerInput && oracleForm) {
     setVoiceStatus(
       "Text entry ready",
       shouldUseNativeIOSVoicePath()
-        ? "The Oracle speaks here."
+        ? "The Oracle responds here."
         : "Type your question below. You can tap Speak whenever you want to return to voice.",
       "ready"
     );
     oracleAnswer.textContent = shouldUseNativeIOSVoicePath()
-      ? "The Oracle speaks here."
+      ? "The Oracle responds here."
       : "Text entry is ready. Type your question below, or tap Speak to ask aloud.";
 
     if (shouldUseNativeIOSVoicePath()) {
@@ -1141,7 +1141,7 @@ if (seekerInput && oracleForm) {
 
   async function applyNativeVoiceEntryMode() {
     if (applyNativeIOSWebVoiceSuppression()) {
-      oracleAnswer.textContent = "The Oracle speaks here.";
+      oracleAnswer.textContent = "The Oracle responds here.";
       focusTempleConversationForNativeEntry();
       return;
     }
