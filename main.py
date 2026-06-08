@@ -4365,6 +4365,147 @@ async def voice_tts_endpoint(request: Request):
         )
 
 
+@app.post("/voice/realtime/session")
+async def voice_realtime_session_endpoint(request: Request):
+    started_at = datetime.datetime.now()
+    deity = "Hathor"
+    provider = os.getenv("REALTIME_VOICE_PROVIDER", "openai").strip().lower() or "openai"
+
+    try:
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+
+        deity = (data.get("voice") or data.get("deity") or "Hathor").strip()
+        if deity not in {"Hathor", "Moses"}:
+            deity = "Hathor"
+
+        provider = (data.get("provider") or provider).strip().lower() or "openai"
+
+        usage_context = get_voice_usage_context(request, deity)
+        session_id = usage_context.get("session_id") or get_or_create_session_id(request)
+        user_id = usage_context.get("user_id")
+        plan_code = usage_context.get("plan_code") or "anon"
+
+        recent_memory = ""
+        try:
+            recent_memory = get_session_memory(session_id, 3)
+        except Exception as e:
+            logger.warning("REALTIME_SESSION_STAGE memory lookup failed: %s", e)
+
+        from services.realtime_voice import (
+            build_realtime_instructions,
+            create_realtime_client_secret,
+        )
+
+        instructions = build_realtime_instructions(
+            deity=deity,
+            plan_code=plan_code,
+            recent_memory=recent_memory or "",
+        )
+
+        metadata = {
+            "phase": "11.5",
+            "event_source": "voice_realtime_session_endpoint",
+            "deity": deity,
+            "plan_code": plan_code,
+            "session_id": session_id,
+            "user_id": user_id,
+            "fallback_mode": "classic_voice_pipeline",
+        }
+
+        result = create_realtime_client_secret(
+            provider=provider,
+            deity=deity,
+            instructions=instructions,
+            metadata=metadata,
+        )
+
+        total_ms = voice_stage_ms(started_at, datetime.datetime.now())
+
+        logger.info(
+            "REALTIME_SESSION_STAGE status=ok provider=%s model=%s deity=%s realtime_voice=%s total_ms=%s session_id=%s fallback_mode=%s",
+            result.get("provider"),
+            result.get("model"),
+            deity,
+            result.get("realtime_voice"),
+            total_ms,
+            result.get("session_id"),
+            result.get("fallback_mode"),
+        )
+
+        record_voice_usage_event(
+            **usage_context,
+            input_mode="voice",
+            deity=deity,
+            stage="realtime_session",
+            status="ok",
+            total_ms=total_ms,
+            tts_provider=result.get("provider"),
+            tts_model=result.get("model"),
+            tts_voice=result.get("realtime_voice"),
+            metadata_json={
+                "phase": "11.5",
+                "event_source": "voice_realtime_session_endpoint",
+                "transport": result.get("transport"),
+                "session_id": result.get("session_id"),
+                "fallback_mode": result.get("fallback_mode"),
+                "estimated_cost": result.get("estimated_cost"),
+            },
+        )
+
+        return JSONResponse(content=result)
+
+    except NotImplementedError as e:
+        total_ms = voice_stage_ms(started_at, datetime.datetime.now())
+        logger.info(
+            "REALTIME_SESSION_STAGE status=not_implemented provider=%s deity=%s total_ms=%s error=%s",
+            provider,
+            deity,
+            total_ms,
+            e,
+        )
+        return JSONResponse(
+            content={
+                "error": str(e),
+                "fallback_mode": "classic_voice_pipeline",
+            },
+            status_code=501,
+        )
+
+    except Exception as e:
+        total_ms = voice_stage_ms(started_at, datetime.datetime.now())
+        logger.exception("Realtime session endpoint failed")
+        try:
+            usage_context = get_voice_usage_context(request, deity)
+            record_voice_usage_event(
+                **usage_context,
+                input_mode="voice",
+                deity=deity,
+                stage="realtime_session",
+                status="error",
+                total_ms=total_ms,
+                tts_provider=provider,
+                metadata_json={
+                    "phase": "11.5",
+                    "event_source": "voice_realtime_session_endpoint",
+                    "error": str(e)[:500],
+                    "fallback_mode": "classic_voice_pipeline",
+                },
+            )
+        except Exception:
+            pass
+
+        return JSONResponse(
+            content={
+                "error": "Realtime voice session could not be prepared.",
+                "fallback_mode": "classic_voice_pipeline",
+            },
+            status_code=500,
+        )
+
+
 @app.post("/whisper")
 async def whisper_endpoint(
     request: Request,
