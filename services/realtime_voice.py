@@ -35,11 +35,12 @@ def get_openai_realtime_model() -> str:
 
 def get_openai_realtime_voice(deity: str) -> str:
     normalized = (deity or "Hathor").strip().lower()
+    word_policy = get_realtime_word_policy(plan_code)
 
     if normalized == "moses":
-        return os.getenv("OPENAI_REALTIME_VOICE_MOSES", "cedar").strip() or "cedar"
+        return os.getenv("OPENAI_REALTIME_VOICE_MOSES", "echo").strip() or "echo"
 
-    return os.getenv("OPENAI_REALTIME_VOICE_HATHOR", "marin").strip() or "marin"
+    return os.getenv("OPENAI_REALTIME_VOICE_HATHOR", "shimmer").strip() or "shimmer"
 
 
 def get_openai_realtime_speed(deity: str) -> float:
@@ -57,16 +58,29 @@ def get_realtime_secret_ttl_seconds() -> int:
 
 
 def get_realtime_max_output_tokens() -> Any:
-    raw = os.getenv("OPENAI_REALTIME_MAX_OUTPUT_TOKENS", "1200").strip().lower()
+    raw = os.getenv("OPENAI_REALTIME_MAX_OUTPUT_TOKENS", "2200").strip().lower()
     if raw in {"inf", "infinite", "max"}:
         return "inf"
 
     try:
         value = int(raw)
     except ValueError:
-        value = 1200
+        value = 2200
 
     return max(1, min(4096, value))
+
+
+
+def get_realtime_word_policy(plan_code: str) -> str:
+    normalized = (plan_code or "anon").strip().lower()
+
+    if normalized in {"anon", "anonymous", "free", "trial"}:
+        return "40 to 80"
+
+    if normalized in {"theoricus", "supporter", "paid", "premium", "patron", "admin"}:
+        return "90 to 160"
+
+    return "60 to 120"
 
 
 def build_realtime_instructions(
@@ -109,7 +123,7 @@ def build_realtime_instructions(
         "Keep each response complete, emotionally present, and suitable to be heard aloud. "
         "Preserve the deity personality above all else. "
         "If the seeker is silent or unclear, ask for the question again instead of inventing an answer. "
-        "End with a complete sentence."
+        f"For this realtime voice answer, speak in {word_policy} words unless the seeker explicitly asks for more depth. Give enough substance to be useful, but do not lecture. If more depth would help, invite a follow-up. Complete the thought cleanly. Never trail off or end mid-thought."
         f"{memory_block}\n\n"
         f"Plan context: {plan_code or 'anon'}."
     )
