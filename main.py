@@ -4365,6 +4365,11 @@ async def voice_tts_endpoint(request: Request):
         )
 
 
+@app.get("/realtime-lab", response_class=HTMLResponse)
+async def realtime_lab_page(request: Request):
+    return templates.TemplateResponse("realtime_lab.html", {"request": request})
+
+
 @app.post("/voice/realtime/session")
 async def voice_realtime_session_endpoint(request: Request):
     started_at = datetime.datetime.now()
