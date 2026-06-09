@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>xAI Realtime Oracle Voice Lab</title>
+  <title>xAI Voice Lab — Text In / Voice Out</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body {
@@ -24,6 +24,21 @@
       border: 1px solid rgba(103, 72, 43, 0.35);
       border-radius: 0.75rem;
       background: rgba(255, 250, 240, 0.85);
+    }
+
+    select {
+      margin: 0.25rem 0.75rem 0.25rem 0.25rem;
+      padding: 0.55rem 0.65rem;
+      border-radius: 0.55rem;
+      border: 1px solid rgba(103, 72, 43, 0.4);
+      background: rgba(255, 255, 255, 0.72);
+      color: #3b2718;
+    }
+
+    label {
+      display: inline-block;
+      margin-top: 0.5rem;
+      font-weight: bold;
     }
 
     button {
@@ -81,13 +96,29 @@
 </head>
 <body>
   <main>
-    <h1>xAI Realtime Oracle Voice Lab</h1>
-    <p>This lab tests xAI text-in / voice-out realtime behavior only. It does not use the microphone.</p>
+    <h1>xAI Voice Lab — Text In / Voice Out</h1>
+    <p>This lab tests xAI text-in / voice-out behavior only. Microphone capture is not enabled in this spike.</p>
 
     <section class="lab-panel">
-      <button id="startHathorButton" type="button">Start Hathor / Eve</button>
-      <button id="startMosesButton" type="button">Start Moses / Leo</button>
-      <button id="stopButton" type="button" disabled>Stop Session</button>
+      <label for="hathorVoiceSelect">Hathor voice</label>
+      <select id="hathorVoiceSelect">
+        <option value="sal" selected>Sal — smooth / balanced</option>
+        <option value="ara">Ara — warm / friendly</option>
+        <option value="eve">Eve — energetic / upbeat</option>
+      </select>
+
+      <label for="mosesVoiceSelect">Moses voice</label>
+      <select id="mosesVoiceSelect">
+        <option value="leo" selected>Leo — authoritative / strong</option>
+        <option value="rex">Rex — confident / clear</option>
+        <option value="sal">Sal — smooth / balanced</option>
+      </select>
+
+      <div>
+        <button id="startHathorButton" type="button">Start Hathor</button>
+        <button id="startMosesButton" type="button">Start Moses</button>
+        <button id="stopButton" type="button" disabled>Stop Session</button>
+      </div>
       <div id="status">Idle.</div>
     </section>
 
