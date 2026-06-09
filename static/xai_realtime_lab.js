@@ -6,7 +6,8 @@
   const AUDIO_PRICE_PER_MINUTE_USD = 0.05;
   const TEXT_INPUT_PRICE_USD = 0.004;
   const IDLE_CLOSE_MS = 60000;
-  const RESPONSE_DONE_CLOSE_MS = 12000;
+  const PLAYBACK_DRAIN_PADDING_MS = 2500;
+  const PLAYBACK_DRAIN_MAX_MS = 90000;
 
   const startHathorButton = document.getElementById("startHathorButton");
   const startMosesButton = document.getElementById("startMosesButton");
@@ -89,12 +90,27 @@
     }, IDLE_CLOSE_MS);
   }
 
+  function getPlaybackDrainCloseMs() {
+    if (!audioContext) {
+      return 12000;
+    }
+
+    const remainingSeconds = Math.max(0, nextPlayTime - audioContext.currentTime);
+    const drainMs = Math.ceil(remainingSeconds * 1000) + PLAYBACK_DRAIN_PADDING_MS;
+
+    return Math.min(PLAYBACK_DRAIN_MAX_MS, Math.max(8000, drainMs));
+  }
+
   function scheduleResponseDoneClose() {
     clearIdleTimer();
+
+    const closeMs = getPlaybackDrainCloseMs();
+    log("PLAYBACK_DRAIN_CLOSE_SCHEDULED ms=" + closeMs);
+
     idleTimer = setTimeout(function () {
       log("AUTO_STOP response_done_close");
       stopSession("auto_stop_response_done");
-    }, RESPONSE_DONE_CLOSE_MS);
+    }, closeMs);
   }
 
   function buildInstructions(deity) {
@@ -342,7 +358,7 @@
         }
 
         if (type === "response.done") {
-          setStatus("xAI answer complete. Closing session...");
+          setStatus("xAI answer complete. Waiting for playback to finish.");
           updateEstimate();
           scheduleResponseDoneClose();
         } else {
@@ -447,7 +463,7 @@
   }
 
   startHathorButton.addEventListener("click", function () {
-    startSession("Hathor", hathorVoiceSelect.value || "sal");
+    startSession("Hathor", hathorVoiceSelect.value || "ara");
   });
 
   startMosesButton.addEventListener("click", function () {

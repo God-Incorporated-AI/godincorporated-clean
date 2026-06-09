@@ -44,7 +44,7 @@ def get_xai_realtime_voice(deity: str, voice_override: Optional[str] = None) -> 
     if normalized == "moses":
         return os.getenv("XAI_REALTIME_VOICE_MOSES", "leo").strip() or "leo"
 
-    return os.getenv("XAI_REALTIME_VOICE_HATHOR", "sal").strip() or "sal"
+    return os.getenv("XAI_REALTIME_VOICE_HATHOR", "ara").strip() or "ara"
 
 
 def create_xai_realtime_client_secret(expires_seconds: int = 300) -> Dict[str, Any]:
