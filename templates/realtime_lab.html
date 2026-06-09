@@ -77,7 +77,29 @@
       overflow: auto;
       font-size: 0.88rem;
     }
-  </style>
+
+    .answer-panel {
+      margin-top: 1rem;
+    }
+
+    .last-answer {
+      min-height: 5rem;
+      white-space: pre-wrap;
+      line-height: 1.55;
+      padding: 1rem;
+      border: 1px solid rgba(103, 72, 43, 0.35);
+      border-radius: 0.75rem;
+      background: rgba(255, 250, 240, 0.75);
+    }
+
+    .answer-actions {
+      margin-top: 0.75rem;
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+</style>
 </head>
 <body>
   <main>
@@ -99,7 +121,17 @@
     <audio id="remoteAudio" autoplay playsinline controls></audio>
 
     <h2>Event Log</h2>
-    <pre id="eventLog"></pre>
+
+      <section class="lab-panel answer-panel">
+        <h2>Last Answer</h2>
+        <div id="lastAnswer" class="last-answer">No answer yet.</div>
+        <div class="answer-actions">
+          <button id="copyAnswerButton" type="button" disabled>Copy Answer</button>
+          <button id="printAnswerButton" type="button" disabled>Print Answer</button>
+        </div>
+      </section>
+
+<pre id="eventLog"></pre>
   </main>
 
   <script src="/static/realtime_lab.js?v=11.5a"></script>

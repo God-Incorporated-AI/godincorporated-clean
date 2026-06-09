@@ -1,9 +1,10 @@
 (function () {
   "use strict";
 
-  const FIRST_SPEECH_TIMEOUT_MS = 20000;
-  const POST_RESPONSE_IDLE_TIMEOUT_MS = 30000;
+  const FIRST_SPEECH_TIMEOUT_MS = 8000;
+  const POST_RESPONSE_IDLE_TIMEOUT_MS = 25000;
   const MAX_SESSION_TIMEOUT_MS = 180000;
+  const PLAYBACK_DRAIN_FALLBACK_TIMEOUT_MS = 90000;
 
   const startHathorButton = document.getElementById("startHathorButton");
   const startMosesButton = document.getElementById("startMosesButton");
@@ -11,6 +12,9 @@
   const statusEl = document.getElementById("status");
   const eventLog = document.getElementById("eventLog");
   const remoteAudio = document.getElementById("remoteAudio");
+  const lastAnswerEl = document.getElementById("lastAnswer");
+  const copyAnswerButton = document.getElementById("copyAnswerButton");
+  const printAnswerButton = document.getElementById("printAnswerButton");
 
   let peerConnection = null;
   let dataChannel = null;
@@ -20,10 +24,12 @@
   let firstPlayingAt = null;
   let activeDeity = null;
   let sawSpeech = false;
+  let lastAnswerTranscript = "";
 
   let firstSpeechTimer = null;
   let postResponseIdleTimer = null;
   let maxSessionTimer = null;
+  let playbackDrainTimer = null;
 
   function nowMs() {
     return Math.round(performance.now());
@@ -95,10 +101,18 @@
     }
   }
 
+  function clearPlaybackDrainTimer() {
+    if (playbackDrainTimer) {
+      clearTimeout(playbackDrainTimer);
+      playbackDrainTimer = null;
+    }
+  }
+
   function clearSessionTimers() {
     clearFirstSpeechTimer();
     clearPostResponseIdleTimer();
     clearMaxSessionTimer();
+    clearPlaybackDrainTimer();
   }
 
   function scheduleFirstSpeechTimeout() {
@@ -119,6 +133,16 @@
       log("AUTO_STOP post_response_idle_timeout");
       stopRealtime("auto_stop_post_response_idle");
     }, POST_RESPONSE_IDLE_TIMEOUT_MS);
+  }
+
+  function schedulePlaybackDrainFallback() {
+    clearPlaybackDrainTimer();
+
+    playbackDrainTimer = setTimeout(function () {
+      log("PLAYBACK_DRAIN_FALLBACK scheduling post-response idle timer");
+      setStatus("Answer should be complete. Mic remains live briefly. Ask again or tap Stop.");
+      schedulePostResponseIdleTimeout();
+    }, PLAYBACK_DRAIN_FALLBACK_TIMEOUT_MS);
   }
 
   function scheduleMaxSessionTimeout() {
@@ -179,6 +203,39 @@
     };
   }
 
+  function extractAnswerTranscript(responseDoneEvent) {
+    const response = responseDoneEvent.response || {};
+    const output = Array.isArray(response.output) ? response.output : [];
+
+    for (const item of output) {
+      const content = Array.isArray(item.content) ? item.content : [];
+
+      for (const part of content) {
+        if (part && typeof part.transcript === "string" && part.transcript.trim()) {
+          return part.transcript.trim();
+        }
+      }
+    }
+
+    return "";
+  }
+
+  function setLastAnswer(transcript) {
+    lastAnswerTranscript = transcript || "";
+
+    if (lastAnswerEl) {
+      lastAnswerEl.textContent = lastAnswerTranscript || "No answer yet.";
+    }
+
+    if (copyAnswerButton) {
+      copyAnswerButton.disabled = !lastAnswerTranscript;
+    }
+
+    if (printAnswerButton) {
+      printAnswerButton.disabled = !lastAnswerTranscript;
+    }
+  }
+
   async function createRealtimeBrokerSession(deity) {
     const response = await fetch("/voice/realtime/session", {
       method: "POST",
@@ -217,6 +274,7 @@
     activeDeity = deity;
     sawSpeech = false;
     eventLog.textContent = "";
+    setLastAnswer("");
 
     setButtons(true);
     setStatus("Creating " + deity + " realtime session.");
@@ -327,20 +385,33 @@
 
         if (type === "response.created") {
           clearPostResponseIdleTimer();
+          clearPlaybackDrainTimer();
           setStatus("The Oracle is speaking. Mic remains live; you may interrupt.");
         }
 
         if (type === "response.done") {
           const summary = usageSummary(parsed);
+          const transcript = extractAnswerTranscript(parsed);
           log("USAGE_SUMMARY", summary);
+
+          if (transcript) {
+            setLastAnswer(transcript);
+            log("LAST_ANSWER_TRANSCRIPT_CAPTURED chars=" + transcript.length);
+          }
 
           if (summary.status === "incomplete") {
             log("RESPONSE_INCOMPLETE " + (summary.incomplete_reason || "unknown"));
             setStatus("Answer ended incomplete. This needs tuning. Mic is still live.");
+            schedulePostResponseIdleTimeout();
           } else {
-            setStatus("Answer complete. Mic is still live. Ask again or tap Stop.");
+            setStatus("Answer generated. Waiting for playback to finish before idle timer starts.");
+            schedulePlaybackDrainFallback();
           }
+        }
 
+        if (type === "output_audio_buffer.stopped") {
+          clearPlaybackDrainTimer();
+          setStatus("Answer playback ended. Mic remains live briefly. Ask again or tap Stop.");
           schedulePostResponseIdleTimeout();
         }
 
@@ -453,6 +524,38 @@
   stopButton.addEventListener("click", function () {
     stopRealtime("manual_stop");
   });
+
+  if (copyAnswerButton) {
+    copyAnswerButton.addEventListener("click", async function () {
+      if (!lastAnswerTranscript) return;
+
+      try {
+        await navigator.clipboard.writeText(lastAnswerTranscript);
+        log("LAST_ANSWER_COPIED");
+      } catch (error) {
+        log("LAST_ANSWER_COPY_FAILED " + error.message);
+      }
+    });
+  }
+
+  if (printAnswerButton) {
+    printAnswerButton.addEventListener("click", function () {
+      if (!lastAnswerTranscript) return;
+
+      const printWindow = window.open("", "_blank", "noopener,noreferrer");
+      if (!printWindow) {
+        log("LAST_ANSWER_PRINT_FAILED popup_blocked");
+        return;
+      }
+
+      printWindow.document.write("<!doctype html><html><head><title>Realtime Oracle Answer</title></head><body><pre style='white-space:pre-wrap;font-family:serif;line-height:1.5;'>" + lastAnswerTranscript.replace(/[&<>]/g, function (char) {
+        return {"&":"&amp;","<":"&lt;",">":"&gt;"}[char];
+      }) + "</pre></body></html>");
+      printWindow.document.close();
+      printWindow.focus();
+      printWindow.print();
+    });
+  }
 
   window.addEventListener("beforeunload", function () {
     stopRealtime("page_unload");
