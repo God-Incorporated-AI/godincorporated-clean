@@ -35,7 +35,6 @@ def get_openai_realtime_model() -> str:
 
 def get_openai_realtime_voice(deity: str) -> str:
     normalized = (deity or "Hathor").strip().lower()
-    word_policy = get_realtime_word_policy(plan_code)
 
     if normalized == "moses":
         return os.getenv("OPENAI_REALTIME_VOICE_MOSES", "echo").strip() or "echo"
@@ -89,6 +88,7 @@ def build_realtime_instructions(
     recent_memory: str = "",
 ) -> str:
     normalized = (deity or "Hathor").strip().lower()
+    word_policy = get_realtime_word_policy(plan_code)
 
     if normalized == "moses":
         identity = (
