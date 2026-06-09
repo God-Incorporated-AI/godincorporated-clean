@@ -6,9 +6,12 @@
   const AUDIO_PRICE_PER_MINUTE_USD = 0.05;
   const TEXT_INPUT_PRICE_USD = 0.004;
   const IDLE_CLOSE_MS = 60000;
+  const RESPONSE_DONE_CLOSE_MS = 12000;
 
   const startHathorButton = document.getElementById("startHathorButton");
   const startMosesButton = document.getElementById("startMosesButton");
+  const hathorVoiceSelect = document.getElementById("hathorVoiceSelect");
+  const mosesVoiceSelect = document.getElementById("mosesVoiceSelect");
   const stopButton = document.getElementById("stopButton");
   const sendButton = document.getElementById("sendButton");
   const questionInput = document.getElementById("questionInput");
@@ -84,6 +87,14 @@
       log("AUTO_STOP idle_close");
       stopSession("auto_stop_idle");
     }, IDLE_CLOSE_MS);
+  }
+
+  function scheduleResponseDoneClose() {
+    clearIdleTimer();
+    idleTimer = setTimeout(function () {
+      log("AUTO_STOP response_done_close");
+      stopSession("auto_stop_response_done");
+    }, RESPONSE_DONE_CLOSE_MS);
   }
 
   function buildInstructions(deity) {
@@ -191,12 +202,12 @@
     }, null, 2);
   }
 
-  async function createBrokerSession(deity) {
+  async function createBrokerSession(deity, voiceName) {
     const response = await fetch("/voice/xai/realtime/session", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       credentials: "same-origin",
-      body: JSON.stringify({voice: deity})
+      body: JSON.stringify({voice: deity, realtime_voice: voiceName})
     });
 
     const data = await response.json();
@@ -208,7 +219,7 @@
     return data;
   }
 
-  async function startSession(deity) {
+  async function startSession(deity, voiceName) {
     await stopSession("restart");
 
     startedAt = nowMs();
@@ -223,10 +234,10 @@
     estimateLog.textContent = "No estimate yet.";
 
     setButtons(true);
-    setStatus("Creating xAI " + deity + " realtime session.");
+    setStatus("Creating xAI " + deity + " session with " + voiceName + ".");
 
     try {
-      const sessionData = await createBrokerSession(deity);
+      const sessionData = await createBrokerSession(deity, voiceName);
       activeVoice = sessionData.realtime_voice;
       activeModel = sessionData.model;
 
@@ -285,8 +296,6 @@
       };
 
       socket.onmessage = function (event) {
-        clearIdleTimer();
-
         let parsed = null;
         try {
           parsed = JSON.parse(event.data);
@@ -297,6 +306,12 @@
         }
 
         const type = parsed.type || "unknown";
+
+        if (type === "ping") {
+          return;
+        }
+
+        clearIdleTimer();
 
         if (type === "response.created") {
           responseCreatedAt = elapsedMs();
@@ -327,9 +342,9 @@
         }
 
         if (type === "response.done") {
-          setStatus("xAI answer complete. Session remains open briefly.");
+          setStatus("xAI answer complete. Closing session...");
           updateEstimate();
-          scheduleIdleClose();
+          scheduleResponseDoneClose();
         } else {
           scheduleIdleClose();
         }
@@ -432,11 +447,11 @@
   }
 
   startHathorButton.addEventListener("click", function () {
-    startSession("Hathor");
+    startSession("Hathor", hathorVoiceSelect.value || "sal");
   });
 
   startMosesButton.addEventListener("click", function () {
-    startSession("Moses");
+    startSession("Moses", mosesVoiceSelect.value || "leo");
   });
 
   sendButton.addEventListener("click", function () {

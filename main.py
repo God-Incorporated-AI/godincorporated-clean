@@ -4381,9 +4381,10 @@ async def voice_xai_realtime_session_endpoint(request: Request):
         body = {}
 
     deity = (body.get("voice") or body.get("deity") or "Hathor").strip() or "Hathor"
+    voice_override = body.get("realtime_voice") or body.get("voice_name") or body.get("xai_voice")
 
     try:
-        result = create_xai_realtime_session(deity)
+        result = create_xai_realtime_session(deity, voice_override=voice_override)
         _logging.info(
             "XAI_REALTIME_SESSION_STAGE status=ok provider=%s model=%s deity=%s realtime_voice=%s total_ms=%s transport=%s",
             result.get("provider"),

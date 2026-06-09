@@ -3,7 +3,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 XAI_CLIENT_SECRET_URL = "https://api.x.ai/v1/realtime/client_secrets"
 
@@ -26,13 +26,25 @@ def get_xai_realtime_model() -> str:
     return os.getenv("XAI_REALTIME_MODEL", "grok-voice-latest").strip() or "grok-voice-latest"
 
 
-def get_xai_realtime_voice(deity: str) -> str:
+def normalize_xai_realtime_voice(value: Optional[str]) -> Optional[str]:
+    normalized = (value or "").strip().lower()
+    allowed = {"ara", "eve", "sal", "rex", "leo"}
+    if normalized in allowed:
+        return normalized
+    return None
+
+
+def get_xai_realtime_voice(deity: str, voice_override: Optional[str] = None) -> str:
+    override = normalize_xai_realtime_voice(voice_override)
+    if override:
+        return override
+
     normalized = (deity or "Hathor").strip().lower()
 
     if normalized == "moses":
         return os.getenv("XAI_REALTIME_VOICE_MOSES", "leo").strip() or "leo"
 
-    return os.getenv("XAI_REALTIME_VOICE_HATHOR", "eve").strip() or "eve"
+    return os.getenv("XAI_REALTIME_VOICE_HATHOR", "sal").strip() or "sal"
 
 
 def create_xai_realtime_client_secret(expires_seconds: int = 300) -> Dict[str, Any]:
@@ -58,7 +70,7 @@ def create_xai_realtime_client_secret(expires_seconds: int = 300) -> Dict[str, A
         raise RuntimeError(f"xAI realtime client secret failed with HTTP {error.code}: {body[:1000]}") from error
 
 
-def create_xai_realtime_session(deity: str) -> Dict[str, Any]:
+def create_xai_realtime_session(deity: str, voice_override: Optional[str] = None) -> Dict[str, Any]:
     started = time.perf_counter()
     secret = create_xai_realtime_client_secret()
     total_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -67,7 +79,7 @@ def create_xai_realtime_session(deity: str) -> Dict[str, Any]:
     if not token:
         raise RuntimeError("xAI realtime client secret response did not include value.")
 
-    voice = get_xai_realtime_voice(deity)
+    voice = get_xai_realtime_voice(deity, voice_override=voice_override)
     model = get_xai_realtime_model()
 
     return {
