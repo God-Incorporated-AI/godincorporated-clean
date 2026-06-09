@@ -463,7 +463,7 @@
   }
 
   startHathorButton.addEventListener("click", function () {
-    startSession("Hathor", hathorVoiceSelect.value || "ara");
+    startSession("Hathor", hathorVoiceSelect.value || "eve");
   });
 
   startMosesButton.addEventListener("click", function () {
