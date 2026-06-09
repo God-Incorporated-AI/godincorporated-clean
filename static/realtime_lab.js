@@ -1,6 +1,10 @@
 (function () {
   "use strict";
 
+  const FIRST_SPEECH_TIMEOUT_MS = 20000;
+  const POST_RESPONSE_IDLE_TIMEOUT_MS = 30000;
+  const MAX_SESSION_TIMEOUT_MS = 180000;
+
   const startHathorButton = document.getElementById("startHathorButton");
   const startMosesButton = document.getElementById("startMosesButton");
   const stopButton = document.getElementById("stopButton");
@@ -14,6 +18,12 @@
   let sessionStartedAt = null;
   let firstTrackAt = null;
   let firstPlayingAt = null;
+  let activeDeity = null;
+  let sawSpeech = false;
+
+  let firstSpeechTimer = null;
+  let postResponseIdleTimer = null;
+  let maxSessionTimer = null;
 
   function nowMs() {
     return Math.round(performance.now());
@@ -29,16 +39,32 @@
     log("STATUS " + message);
   }
 
+  function redactForLog(value) {
+    const clone = JSON.parse(JSON.stringify(value));
+
+    if (clone.session && clone.session.instructions) {
+      clone.session.instructions = "[redacted in lab log]";
+    }
+
+    if (clone.response && clone.response.instructions) {
+      clone.response.instructions = "[redacted in lab log]";
+    }
+
+    return clone;
+  }
+
   function log(message, payload) {
     const line = "[" + new Date().toISOString() + " +" + elapsed() + "] " + message;
     eventLog.textContent += line + "\n";
+
     if (payload !== undefined) {
       try {
-        eventLog.textContent += JSON.stringify(payload, null, 2) + "\n";
+        eventLog.textContent += JSON.stringify(redactForLog(payload), null, 2) + "\n";
       } catch (error) {
         eventLog.textContent += String(payload) + "\n";
       }
     }
+
     eventLog.scrollTop = eventLog.scrollHeight;
   }
 
@@ -46,6 +72,62 @@
     startHathorButton.disabled = active;
     startMosesButton.disabled = active;
     stopButton.disabled = !active;
+  }
+
+  function clearFirstSpeechTimer() {
+    if (firstSpeechTimer) {
+      clearTimeout(firstSpeechTimer);
+      firstSpeechTimer = null;
+    }
+  }
+
+  function clearPostResponseIdleTimer() {
+    if (postResponseIdleTimer) {
+      clearTimeout(postResponseIdleTimer);
+      postResponseIdleTimer = null;
+    }
+  }
+
+  function clearMaxSessionTimer() {
+    if (maxSessionTimer) {
+      clearTimeout(maxSessionTimer);
+      maxSessionTimer = null;
+    }
+  }
+
+  function clearSessionTimers() {
+    clearFirstSpeechTimer();
+    clearPostResponseIdleTimer();
+    clearMaxSessionTimer();
+  }
+
+  function scheduleFirstSpeechTimeout() {
+    clearFirstSpeechTimer();
+
+    firstSpeechTimer = setTimeout(function () {
+      if (!sawSpeech) {
+        log("AUTO_STOP first_speech_timeout");
+        stopRealtime("auto_stop_no_first_speech");
+      }
+    }, FIRST_SPEECH_TIMEOUT_MS);
+  }
+
+  function schedulePostResponseIdleTimeout() {
+    clearPostResponseIdleTimer();
+
+    postResponseIdleTimer = setTimeout(function () {
+      log("AUTO_STOP post_response_idle_timeout");
+      stopRealtime("auto_stop_post_response_idle");
+    }, POST_RESPONSE_IDLE_TIMEOUT_MS);
+  }
+
+  function scheduleMaxSessionTimeout() {
+    clearMaxSessionTimer();
+
+    maxSessionTimer = setTimeout(function () {
+      log("AUTO_STOP max_session_timeout");
+      stopRealtime("auto_stop_max_session");
+    }, MAX_SESSION_TIMEOUT_MS);
   }
 
   function extractEphemeralKey(sessionData) {
@@ -74,6 +156,26 @@
       session_id: sessionData.session_id,
       fallback_mode: sessionData.fallback_mode,
       transport: sessionData.transport
+    };
+  }
+
+  function usageSummary(responseDoneEvent) {
+    const response = responseDoneEvent.response || {};
+    const usage = response.usage || {};
+    const inputDetails = usage.input_token_details || {};
+    const outputDetails = usage.output_token_details || {};
+
+    return {
+      response_id: response.id,
+      status: response.status,
+      incomplete_reason: response.status_details && response.status_details.reason,
+      total_tokens: usage.total_tokens,
+      input_tokens: usage.input_tokens,
+      output_tokens: usage.output_tokens,
+      input_text_tokens: inputDetails.text_tokens,
+      input_audio_tokens: inputDetails.audio_tokens,
+      output_text_tokens: outputDetails.text_tokens,
+      output_audio_tokens: outputDetails.audio_tokens
     };
   }
 
@@ -107,17 +209,21 @@
   }
 
   async function startRealtime(deity) {
-    await stopRealtime();
+    await stopRealtime("restart");
 
     sessionStartedAt = nowMs();
     firstTrackAt = null;
     firstPlayingAt = null;
+    activeDeity = deity;
+    sawSpeech = false;
     eventLog.textContent = "";
 
     setButtons(true);
     setStatus("Creating " + deity + " realtime session.");
 
     try {
+      scheduleMaxSessionTimeout();
+
       const sessionData = await createRealtimeBrokerSession(deity);
       const ephemeralKey = extractEphemeralKey(sessionData);
 
@@ -127,7 +233,7 @@
         throw new Error("Broker response did not include a usable ephemeral realtime key.");
       }
 
-      setStatus("Opening microphone.");
+      setStatus("Opening microphone. Mic will be live until Stop or auto-stop.");
       localStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -141,9 +247,11 @@
 
       peerConnection.onconnectionstatechange = function () {
         log("PEER_CONNECTION_STATE " + peerConnection.connectionState);
+
         if (peerConnection.connectionState === "connected") {
-          setStatus("Realtime connected. Speak naturally.");
+          setStatus("Mic is live. Speak naturally, or tap Stop.");
         }
+
         if (
           peerConnection.connectionState === "failed" ||
           peerConnection.connectionState === "disconnected" ||
@@ -162,6 +270,7 @@
           firstTrackAt = nowMs();
           log("FIRST_REMOTE_AUDIO_TRACK at " + String(firstTrackAt - sessionStartedAt) + "ms");
         }
+
         remoteAudio.srcObject = event.streams[0];
         remoteAudio.play().catch(function (error) {
           log("REMOTE_AUDIO_PLAY_WARNING " + error.message);
@@ -204,6 +313,37 @@
         }
 
         const type = parsed.type || "unknown";
+
+        if (type === "input_audio_buffer.speech_started") {
+          sawSpeech = true;
+          clearFirstSpeechTimer();
+          clearPostResponseIdleTimer();
+          setStatus("Mic is live. Listening to your question.");
+        }
+
+        if (type === "input_audio_buffer.speech_stopped") {
+          setStatus("Speech captured. The Oracle is responding.");
+        }
+
+        if (type === "response.created") {
+          clearPostResponseIdleTimer();
+          setStatus("The Oracle is speaking. Mic remains live; you may interrupt.");
+        }
+
+        if (type === "response.done") {
+          const summary = usageSummary(parsed);
+          log("USAGE_SUMMARY", summary);
+
+          if (summary.status === "incomplete") {
+            log("RESPONSE_INCOMPLETE " + (summary.incomplete_reason || "unknown"));
+            setStatus("Answer ended incomplete. This needs tuning. Mic is still live.");
+          } else {
+            setStatus("Answer complete. Mic is still live. Ask again or tap Stop.");
+          }
+
+          schedulePostResponseIdleTimeout();
+        }
+
         if (
           type === "session.created" ||
           type === "session.updated" ||
@@ -213,6 +353,8 @@
           type === "response.created" ||
           type === "response.done" ||
           type === "response.cancelled" ||
+          type === "output_audio_buffer.started" ||
+          type === "output_audio_buffer.stopped" ||
           type === "error"
         ) {
           log("SERVER_EVENT " + type, parsed);
@@ -246,16 +388,22 @@
         sdp: answerSdp
       });
 
-      setStatus("Realtime session ready. Speak naturally.");
+      setStatus("Mic is live. Speak naturally, or tap Stop.");
+      scheduleFirstSpeechTimeout();
       log("REMOTE_DESCRIPTION_SET");
     } catch (error) {
       log("START_REALTIME_ERROR " + error.message);
       setStatus("Realtime failed: " + error.message);
-      await stopRealtime();
+      await stopRealtime("start_failed");
     }
   }
 
-  async function stopRealtime() {
+  async function stopRealtime(reason) {
+    const stopReason = reason || "manual_stop";
+    const hadActiveSession = Boolean(dataChannel || peerConnection || localStream || (remoteAudio && remoteAudio.srcObject));
+
+    clearSessionTimers();
+
     if (dataChannel) {
       try {
         dataChannel.close();
@@ -284,6 +432,12 @@
       remoteAudio.load();
     }
 
+    if (hadActiveSession) {
+      log("SESSION_STOPPED reason=" + stopReason + " deity=" + (activeDeity || "unknown"));
+    }
+
+    activeDeity = null;
+    sawSpeech = false;
     setButtons(false);
     setStatus("Idle.");
   }
@@ -297,10 +451,10 @@
   });
 
   stopButton.addEventListener("click", function () {
-    stopRealtime();
+    stopRealtime("manual_stop");
   });
 
   window.addEventListener("beforeunload", function () {
-    stopRealtime();
+    stopRealtime("page_unload");
   });
 })();
