@@ -4365,6 +4365,46 @@ async def voice_tts_endpoint(request: Request):
         )
 
 
+@app.get("/xai-realtime-lab", response_class=HTMLResponse)
+async def xai_realtime_lab_page(request: Request):
+    return templates.TemplateResponse("xai_realtime_lab.html", {"request": request})
+
+
+@app.post("/voice/xai/realtime/session")
+async def voice_xai_realtime_session_endpoint(request: Request):
+    import logging as _logging
+    from services.xai_realtime import create_xai_realtime_session
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    deity = (body.get("voice") or body.get("deity") or "Hathor").strip() or "Hathor"
+
+    try:
+        result = create_xai_realtime_session(deity)
+        _logging.info(
+            "XAI_REALTIME_SESSION_STAGE status=ok provider=%s model=%s deity=%s realtime_voice=%s total_ms=%s transport=%s",
+            result.get("provider"),
+            result.get("model"),
+            result.get("deity"),
+            result.get("realtime_voice"),
+            result.get("total_ms"),
+            result.get("transport"),
+        )
+        return result
+    except Exception as exc:
+        _logging.exception("xAI realtime session endpoint failed")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "xAI realtime voice session could not be prepared.",
+                "detail": str(exc),
+            },
+        )
+
+
 @app.get("/realtime-lab", response_class=HTMLResponse)
 async def realtime_lab_page(request: Request):
     return templates.TemplateResponse("realtime_lab.html", {"request": request})

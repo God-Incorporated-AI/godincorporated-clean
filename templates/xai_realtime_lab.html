@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>xAI Realtime Oracle Voice Lab</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {
+      margin: 0;
+      padding: 2rem;
+      font-family: Georgia, "Times New Roman", serif;
+      color: #3b2718;
+      background: #f4ead8;
+    }
+
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+    }
+
+    .lab-panel {
+      margin: 1rem 0;
+      padding: 1rem;
+      border: 1px solid rgba(103, 72, 43, 0.35);
+      border-radius: 0.75rem;
+      background: rgba(255, 250, 240, 0.85);
+    }
+
+    button {
+      margin: 0.25rem;
+      padding: 0.7rem 1rem;
+      border-radius: 0.6rem;
+      border: 1px solid rgba(103, 72, 43, 0.4);
+      background: #f1ddbd;
+      color: #3b2718;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 6rem;
+      box-sizing: border-box;
+      padding: 0.75rem;
+      border-radius: 0.6rem;
+      border: 1px solid rgba(103, 72, 43, 0.35);
+      font-family: inherit;
+      font-size: 1rem;
+      line-height: 1.45;
+      background: rgba(255, 255, 255, 0.7);
+    }
+
+    #status {
+      font-weight: bold;
+      margin-top: 0.75rem;
+    }
+
+    #lastAnswer {
+      min-height: 5rem;
+      white-space: pre-wrap;
+      line-height: 1.55;
+      padding: 1rem;
+      border: 1px solid rgba(103, 72, 43, 0.35);
+      border-radius: 0.75rem;
+      background: rgba(255, 250, 240, 0.75);
+    }
+
+    pre {
+      white-space: pre-wrap;
+      overflow: auto;
+      max-height: 28rem;
+      padding: 1rem;
+      border-radius: 0.75rem;
+      background: rgba(45, 29, 17, 0.08);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>xAI Realtime Oracle Voice Lab</h1>
+    <p>This lab tests xAI text-in / voice-out realtime behavior only. It does not use the microphone.</p>
+
+    <section class="lab-panel">
+      <button id="startHathorButton" type="button">Start Hathor / Eve</button>
+      <button id="startMosesButton" type="button">Start Moses / Leo</button>
+      <button id="stopButton" type="button" disabled>Stop Session</button>
+      <div id="status">Idle.</div>
+    </section>
+
+    <section class="lab-panel">
+      <h2>Question</h2>
+      <textarea id="questionInput">Hathor, tell me briefly about Isis.</textarea>
+      <div>
+        <button id="sendButton" type="button" disabled>Send Text Question</button>
+      </div>
+    </section>
+
+    <section class="lab-panel">
+      <h2>Last Answer</h2>
+      <div id="lastAnswer">No answer yet.</div>
+    </section>
+
+    <section class="lab-panel">
+      <h2>Cost / Timing Estimate</h2>
+      <pre id="estimateLog">No estimate yet.</pre>
+    </section>
+
+    <section class="lab-panel">
+      <h2>Event Log</h2>
+      <pre id="eventLog"></pre>
+    </section>
+  </main>
+
+  <script src="/static/xai_realtime_lab.js?v=11.5d1"></script>
+</body>
+</html>
