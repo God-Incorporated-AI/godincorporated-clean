@@ -205,7 +205,7 @@
     }
 
     function resolveWebSocketUrl(data) {
-      return firstPresent([
+      const explicitUrl = firstPresent([
         data.websocket_url,
         data.ws_url,
         data.realtime_url,
@@ -214,6 +214,17 @@
         data.session && data.session.ws_url,
         data.session && data.session.url
       ]);
+
+      if (explicitUrl) {
+        return explicitUrl;
+      }
+
+      const model = firstPresent([
+        data.model,
+        data.session && data.session.model
+      ]) || "grok-voice-latest";
+
+      return "wss://api.x.ai/v1/realtime?model=" + encodeURIComponent(model);
     }
 
     function normalizeProtocolValue(value) {
@@ -267,6 +278,12 @@
           reject(new Error("No WebSocket URL was returned by the broker."));
           return;
         }
+
+        log("XAI_WEBSOCKET_CONNECTING", {
+          url_present: Boolean(wsUrl),
+          protocols_present: protocols.length > 0,
+          protocol_count: protocols.length
+        });
 
         let ws;
         try {
