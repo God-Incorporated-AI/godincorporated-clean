@@ -219,11 +219,89 @@
       </div>
     </section>
 
+
+    <section class="xai-card" id="xaiConversationLabPanel">
+      <style>
+        #xaiConversationLabPanel {
+          border: 1px solid rgba(255, 255, 255, 0.18);
+          border-radius: 16px;
+          padding: 1rem;
+          margin: 1rem 0;
+          background: rgba(255, 255, 255, 0.055);
+        }
+
+        #xaiConversationLabPanel .conversation-controls {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.65rem;
+          align-items: center;
+          margin: 0.85rem 0;
+        }
+
+        #xaiConversationLabPanel button,
+        #xaiConversationLabPanel select {
+          min-height: 2.4rem;
+        }
+
+        #xaiConversationLabPanel .conversation-readout {
+          margin-top: 0.75rem;
+          padding: 0.75rem;
+          border-radius: 12px;
+          background: rgba(0, 0, 0, 0.2);
+          white-space: pre-wrap;
+        }
+
+        #xaiConversationLabPanel .conversation-label {
+          font-weight: 700;
+          margin-top: 0.65rem;
+        }
+
+        #conversationTiming {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 0.88rem;
+          overflow-wrap: anywhere;
+        }
+      </style>
+
+      <h2>xAI Realtime Conversation Mode Lab</h2>
+      <p>
+        Experimental conversation mode. The microphone stays open locally after Start Conversation,
+        but audio is streamed to xAI only when the local speech gate detects speech. Use End Conversation
+        to close the session.
+      </p>
+
+      <div class="conversation-controls">
+        <label for="conversationDeitySelect">Conversation Oracle</label>
+        <select id="conversationDeitySelect">
+          <option value="Hathor" selected>Hathor - Eve default</option>
+          <option value="Moses">Moses - Leo default</option>
+        </select>
+
+        <button type="button" id="conversationStartButton">Start Conversation</button>
+        <button type="button" id="conversationEndButton" disabled>End Conversation</button>
+      </div>
+
+      <div class="conversation-readout">
+        <div class="conversation-label">Conversation status</div>
+        <div id="conversationStatus">Conversation mode ready.</div>
+
+        <div class="conversation-label">Input transcript</div>
+        <div id="conversationInputTranscript"></div>
+
+        <div class="conversation-label">Assistant transcript</div>
+        <div id="conversationAssistantTranscript"></div>
+
+        <div class="conversation-label">Timing / cost-relevant audio duration</div>
+        <div id="conversationTiming"></div>
+      </div>
+    </section>
+
 <pre id="eventLog"></pre>
     </section>
   </main>
 
   <script src="/static/xai_realtime_lab.js?v=11.5d1"></script>
   <script src="/static/xai_realtime_mic_lab.js"></script>
+  <script src="/static/xai_realtime_conversation_lab.js"></script>
 </body>
 </html>
