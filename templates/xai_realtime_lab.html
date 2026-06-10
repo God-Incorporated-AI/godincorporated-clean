@@ -142,10 +142,88 @@
 
     <section class="lab-panel">
       <h2>Event Log</h2>
-      <pre id="eventLog"></pre>
+
+    <section class="xai-card" id="xaiMicLabPanel">
+      <style>
+        #xaiMicLabPanel {
+          border: 1px solid rgba(255, 255, 255, 0.18);
+          border-radius: 16px;
+          padding: 1rem;
+          margin: 1rem 0;
+          background: rgba(255, 255, 255, 0.04);
+        }
+
+        #xaiMicLabPanel .mic-controls {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 0.65rem;
+          align-items: center;
+          margin: 0.85rem 0;
+        }
+
+        #xaiMicLabPanel button,
+        #xaiMicLabPanel select {
+          min-height: 2.4rem;
+        }
+
+        #xaiMicLabPanel .mic-readout {
+          margin-top: 0.75rem;
+          padding: 0.75rem;
+          border-radius: 12px;
+          background: rgba(0, 0, 0, 0.2);
+          white-space: pre-wrap;
+        }
+
+        #xaiMicLabPanel .mic-label {
+          font-weight: 700;
+          margin-top: 0.65rem;
+        }
+
+        #micTiming {
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 0.88rem;
+          overflow-wrap: anywhere;
+        }
+      </style>
+
+      <h2>xAI Realtime Mic Input Lab</h2>
+      <p>
+        Controlled microphone test path only. This does not change the main Temple experience.
+        The mic sends PCM audio only while Start/Hold is active, then commits the input buffer to xAI.
+      </p>
+
+      <div class="mic-controls">
+        <label for="micDeitySelect">Mic Oracle</label>
+        <select id="micDeitySelect">
+          <option value="Hathor" selected>Hathor - uses current Hathor voice selector</option>
+          <option value="Moses">Moses - uses current Moses voice selector</option>
+        </select>
+
+        <button type="button" id="micStartButton">Start Mic Capture</button>
+        <button type="button" id="micStopButton" disabled>Stop + Commit Audio</button>
+        <button type="button" id="micHoldButton">Hold to Speak</button>
+      </div>
+
+      <div class="mic-readout">
+        <div class="mic-label">Mic status</div>
+        <div id="micStatus">Mic lab ready.</div>
+
+        <div class="mic-label">Input transcript</div>
+        <div id="micInputTranscript"></div>
+
+        <div class="mic-label">Assistant transcript</div>
+        <div id="micAssistantTranscript"></div>
+
+        <div class="mic-label">Timing / cost-relevant audio duration</div>
+        <div id="micTiming"></div>
+      </div>
+    </section>
+
+<pre id="eventLog"></pre>
     </section>
   </main>
 
   <script src="/static/xai_realtime_lab.js?v=11.5d1"></script>
+  <script src="/static/xai_realtime_mic_lab.js"></script>
 </body>
 </html>
