@@ -16,9 +16,17 @@
 
     const INPUT_SAMPLE_RATE = 24000;
     const OUTPUT_SAMPLE_RATE = 24000;
-    const SPEECH_RMS_THRESHOLD = 0.008;
+    const AUDIO_PRICE_PER_MINUTE_USD = 0.05;
+
+    // Cost/pacing tuning:
+    // - Require more than one loud frame before opening the speech gate.
+    // - Add a short cooldown after playback before listening resumes.
+    // - Keep enough trailing audio to avoid clipping the seeker's last word.
+    const SPEECH_RMS_THRESHOLD = 0.010;
+    const SPEECH_START_FRAMES_REQUIRED = 2;
+    const POST_PLAYBACK_COOLDOWN_MS = 900;
     const PRE_ROLL_MS = 320;
-    const TRAILING_AUDIO_MS = 900;
+    const TRAILING_AUDIO_MS = 650;
     const IDLE_TIMEOUT_MS = 90000;
     const MAX_SESSION_MS = 300000;
     const PLAYBACK_DRAIN_PADDING_MS = 1200;
@@ -57,6 +65,10 @@
       preRollChunks: [],
       preRollSamples: 0,
       trailingMsRemaining: 0,
+      speechAboveThresholdFrames: 0,
+      listeningCooldownUntil: 0,
+      turnInputStartSamples: 0,
+      responseOutputStartSamples: 0,
 
       inputSamplesSent: 0,
       inputBytesSent: 0,
@@ -108,17 +120,23 @@
       if (startButton) startButton.textContent = state.starting ? "Starting conversation..." : "Start Conversation";
     }
 
+    function estimatedAudioCostUsd(inputSeconds, outputSeconds) {
+      return ((inputSeconds + outputSeconds) / 60) * AUDIO_PRICE_PER_MINUTE_USD;
+    }
+
     function updateTiming() {
       if (!timingEl) return;
 
       const sessionMs = state.sessionStartedAt ? elapsedMs(state.sessionStartedAt) : 0;
       const inputSeconds = state.inputSamplesSent / INPUT_SAMPLE_RATE;
       const outputSeconds = state.outputSamplesReceived / OUTPUT_SAMPLE_RATE;
+      const estimatedCost = estimatedAudioCostUsd(inputSeconds, outputSeconds);
 
       timingEl.textContent = [
         "session_ms=" + (sessionMs || 0),
         "input_audio_seconds=" + inputSeconds.toFixed(3),
         "output_audio_seconds=" + outputSeconds.toFixed(3),
+        "estimated_audio_cost_usd=" + estimatedCost.toFixed(4),
         "input_chunks=" + state.inputChunksSent,
         "input_bytes=" + state.inputBytesSent,
         "output_bytes=" + state.outputBytesReceived,
@@ -181,7 +199,8 @@
           "You are Moses in the God Incorporated realtime voice lab.",
           "This is a live conversational voice test.",
           "Speak with clarity, moral seriousness, patience, and humane strength.",
-          "Do not be verbose. Give one clear thought, then allow the seeker to continue.",
+          "Keep voice answers short: one to three spoken sentences unless the seeker asks for more.",
+          "Give one clear thought, then invite the seeker to continue.",
           "Avoid markdown, headings, numbered lists, and long formal explanations.",
           "If the seeker pauses briefly, do not rush to fill every silence."
         ].join(" ");
@@ -191,7 +210,8 @@
         "You are Hathor in the God Incorporated realtime voice lab.",
         "This is a live conversational voice test.",
         "Speak with warmth, luminous presence, emotional intelligence, and gentle sacredness.",
-        "Do not be verbose. Give one clear, warm thought, then allow the seeker to continue.",
+        "Keep voice answers short: one to three spoken sentences unless the seeker asks for more.",
+        "Give one clear, warm thought, then invite the seeker to continue.",
         "Avoid markdown, headings, numbered lists, and ornate over-poetry.",
         "If the seeker pauses briefly, do not rush to fill every silence."
       ].join(" ");
@@ -402,6 +422,10 @@
       state.preRollChunks = [];
       state.preRollSamples = 0;
       state.trailingMsRemaining = 0;
+      state.speechAboveThresholdFrames = 0;
+      state.listeningCooldownUntil = 0;
+      state.turnInputStartSamples = 0;
+      state.responseOutputStartSamples = 0;
       state.inputSamplesSent = 0;
       state.inputBytesSent = 0;
       state.inputChunksSent = 0;
@@ -551,18 +575,33 @@
       const rms = computeRms(input);
       const resampled = resampleFloat32(input, sourceRate, INPUT_SAMPLE_RATE);
 
+      if (performance.now() < state.listeningCooldownUntil) {
+        state.speechAboveThresholdFrames = 0;
+        state.preRollChunks = [];
+        state.preRollSamples = 0;
+        return;
+      }
+
       rememberPreRoll(resampled);
 
       if (rms >= SPEECH_RMS_THRESHOLD) {
+        state.speechAboveThresholdFrames += 1;
+
+        if (!state.speechGateOpen && state.speechAboveThresholdFrames < SPEECH_START_FRAMES_REQUIRED) {
+          return;
+        }
+
         if (!state.speechGateOpen) {
           state.speechGateOpen = true;
           state.speechTurnIndex += 1;
+          state.turnInputStartSamples = state.inputSamplesSent;
           state.currentInputTranscript = "";
           if (inputTranscriptEl) inputTranscriptEl.textContent = "";
 
           log("CONVERSATION_SPEECH_GATE_OPEN", {
             speech_turn: state.speechTurnIndex,
-            rms: Number(rms.toFixed(5))
+            rms: Number(rms.toFixed(5)),
+            speech_start_frames_required: SPEECH_START_FRAMES_REQUIRED
           });
 
           flushPreRoll();
@@ -574,6 +613,8 @@
         return;
       }
 
+      state.speechAboveThresholdFrames = 0;
+
       if (state.speechGateOpen && state.trailingMsRemaining > 0) {
         state.trailingMsRemaining -= chunkMs;
         sendAudioChunk(resampled, "trailing_audio");
@@ -582,10 +623,21 @@
 
       if (state.speechGateOpen && state.trailingMsRemaining <= 0) {
         state.speechGateOpen = false;
+
+        const turnInputSeconds = (state.inputSamplesSent - state.turnInputStartSamples) / INPUT_SAMPLE_RATE;
+
         log("CONVERSATION_SPEECH_GATE_CLOSED", {
           speech_turn: state.speechTurnIndex,
-          input_audio_seconds: Number((state.inputSamplesSent / INPUT_SAMPLE_RATE).toFixed(3))
+          input_audio_seconds: Number((state.inputSamplesSent / INPUT_SAMPLE_RATE).toFixed(3)),
+          turn_input_audio_seconds: Number(turnInputSeconds.toFixed(3))
         });
+
+        log("CONVERSATION_TURN_INPUT_AUDIO_COST_RELEVANT", {
+          speech_turn: state.speechTurnIndex,
+          turn_input_audio_seconds: Number(turnInputSeconds.toFixed(3)),
+          estimated_turn_input_cost_usd: estimatedAudioCostUsd(turnInputSeconds, 0).toFixed(4)
+        });
+
         setStatus("Speech sent. Waiting for xAI turn detection / response...");
         touchActivity("local_speech_gate_closed");
       }
@@ -819,6 +871,8 @@
 
       if (type === "response.created") {
         state.assistantTurnIndex += 1;
+        state.responseOutputStartSamples = state.outputSamplesReceived;
+        state.firstAudioDeltaAt = 0;
         state.currentAssistantTranscript = "";
         if (assistantTranscriptEl) assistantTranscriptEl.textContent = "";
         setStatus("Oracle is preparing a spoken response...");
@@ -891,14 +945,28 @@
       });
 
       state.playbackDrainTimer = window.setTimeout(function () {
+        const turnOutputSeconds = (state.outputSamplesReceived - state.responseOutputStartSamples) / OUTPUT_SAMPLE_RATE;
         state.assistantSpeaking = false;
         state.currentAssistantTranscript = "";
         state.firstAudioDeltaAt = 0;
-        setStatus("Returned to listening. Speak again, or tap End Conversation.");
+        state.speechAboveThresholdFrames = 0;
+        state.preRollChunks = [];
+        state.preRollSamples = 0;
+        state.listeningCooldownUntil = performance.now() + POST_PLAYBACK_COOLDOWN_MS;
+
+        setStatus("Returned to listening after a short cooldown. Speak again, or tap End Conversation.");
+
+        log("CONVERSATION_TURN_OUTPUT_AUDIO_COST_RELEVANT", {
+          assistant_turn: state.assistantTurnIndex,
+          turn_output_audio_seconds: Number(turnOutputSeconds.toFixed(3)),
+          estimated_turn_output_cost_usd: estimatedAudioCostUsd(0, turnOutputSeconds).toFixed(4)
+        });
+
         log("CONVERSATION_RETURN_TO_LISTENING", {
           active: state.active,
           input_audio_seconds: Number((state.inputSamplesSent / INPUT_SAMPLE_RATE).toFixed(3)),
-          output_audio_seconds: Number((state.outputSamplesReceived / OUTPUT_SAMPLE_RATE).toFixed(3))
+          output_audio_seconds: Number((state.outputSamplesReceived / OUTPUT_SAMPLE_RATE).toFixed(3)),
+          post_playback_cooldown_ms: POST_PLAYBACK_COOLDOWN_MS
         });
         touchActivity("returned_to_listening");
       }, drainMs);
@@ -949,9 +1017,14 @@
         assistant_turns: state.assistantTurnIndex
       });
 
+      const finalInputSeconds = state.inputSamplesSent / INPUT_SAMPLE_RATE;
+      const finalOutputSeconds = state.outputSamplesReceived / OUTPUT_SAMPLE_RATE;
+
       log("CONVERSATION_AUDIO_DURATION_COST_RELEVANT", {
-        input_audio_seconds: Number((state.inputSamplesSent / INPUT_SAMPLE_RATE).toFixed(3)),
-        output_audio_seconds: Number((state.outputSamplesReceived / OUTPUT_SAMPLE_RATE).toFixed(3)),
+        input_audio_seconds: Number(finalInputSeconds.toFixed(3)),
+        output_audio_seconds: Number(finalOutputSeconds.toFixed(3)),
+        estimated_audio_cost_usd: estimatedAudioCostUsd(finalInputSeconds, finalOutputSeconds).toFixed(4),
+        audio_price_per_minute_usd: AUDIO_PRICE_PER_MINUTE_USD,
         note: "xAI Voice Agent audio is billed by duration; this is client-side lab telemetry."
       });
 
