@@ -22,11 +22,12 @@
     // - Require more than one loud frame before opening the speech gate.
     // - Add a short cooldown after playback before listening resumes.
     // - Keep enough trailing audio to avoid clipping the seeker's last word.
-    const SPEECH_RMS_THRESHOLD = 0.010;
-    const SPEECH_START_FRAMES_REQUIRED = 2;
-    const POST_PLAYBACK_COOLDOWN_MS = 900;
+    const SPEECH_RMS_THRESHOLD = 0.014;
+    const SPEECH_START_FRAMES_REQUIRED = 4;
+    const POST_PLAYBACK_COOLDOWN_MS = 1800;
+    const IDLE_AUTO_END_AFTER_RETURN_MS = 20000;
     const PRE_ROLL_MS = 320;
-    const TRAILING_AUDIO_MS = 650;
+    const TRAILING_AUDIO_MS = 500;
     const IDLE_TIMEOUT_MS = 90000;
     const MAX_SESSION_MS = 300000;
     const PLAYBACK_DRAIN_PADDING_MS = 1200;
@@ -69,6 +70,7 @@
       listeningCooldownUntil: 0,
       turnInputStartSamples: 0,
       responseOutputStartSamples: 0,
+      idleAutoEndTimer: null,
 
       inputSamplesSent: 0,
       inputBytesSent: 0,
@@ -122,6 +124,35 @@
 
     function estimatedAudioCostUsd(inputSeconds, outputSeconds) {
       return ((inputSeconds + outputSeconds) / 60) * AUDIO_PRICE_PER_MINUTE_USD;
+    }
+
+    function clearIdleAutoEndTimer() {
+      if (state.idleAutoEndTimer) {
+        window.clearTimeout(state.idleAutoEndTimer);
+        state.idleAutoEndTimer = null;
+      }
+    }
+
+    function scheduleIdleAutoEnd() {
+      clearIdleAutoEndTimer();
+
+      if (!state.active) return;
+
+      state.idleAutoEndTimer = window.setTimeout(function () {
+        if (!state.active || state.speechGateOpen || state.assistantSpeaking) {
+          scheduleIdleAutoEnd();
+          return;
+        }
+
+        log("CONVERSATION_IDLE_AUTO_END", {
+          idle_after_return_ms: IDLE_AUTO_END_AFTER_RETURN_MS,
+          input_audio_seconds: Number((state.inputSamplesSent / INPUT_SAMPLE_RATE).toFixed(3)),
+          output_audio_seconds: Number((state.outputSamplesReceived / OUTPUT_SAMPLE_RATE).toFixed(3)),
+          note: "Auto-ending after quiet local listening. No silence streaming is intended."
+        });
+
+        endConversation("idle_auto_end");
+      }, IDLE_AUTO_END_AFTER_RETURN_MS);
     }
 
     function updateTiming() {
@@ -426,6 +457,10 @@
       state.listeningCooldownUntil = 0;
       state.turnInputStartSamples = 0;
       state.responseOutputStartSamples = 0;
+      if (state.idleAutoEndTimer) {
+        window.clearTimeout(state.idleAutoEndTimer);
+        state.idleAutoEndTimer = null;
+      }
       state.inputSamplesSent = 0;
       state.inputBytesSent = 0;
       state.inputChunksSent = 0;
@@ -573,6 +608,13 @@
       const sourceRate = state.inputAudioContext ? state.inputAudioContext.sampleRate : event.inputBuffer.sampleRate;
       const chunkMs = (input.length / sourceRate) * 1000;
       const rms = computeRms(input);
+      if (state.assistantSpeaking) {
+        state.speechAboveThresholdFrames = 0;
+        state.preRollChunks = [];
+        state.preRollSamples = 0;
+        return;
+      }
+
       const resampled = resampleFloat32(input, sourceRate, INPUT_SAMPLE_RATE);
 
       if (performance.now() < state.listeningCooldownUntil) {
@@ -597,6 +639,8 @@
           state.turnInputStartSamples = state.inputSamplesSent;
           state.currentInputTranscript = "";
           if (inputTranscriptEl) inputTranscriptEl.textContent = "";
+
+          clearIdleAutoEndTimer();
 
           log("CONVERSATION_SPEECH_GATE_OPEN", {
             speech_turn: state.speechTurnIndex,
@@ -870,12 +914,19 @@
       }
 
       if (type === "response.created") {
+        clearIdleAutoEndTimer();
         state.assistantTurnIndex += 1;
         state.responseOutputStartSamples = state.outputSamplesReceived;
         state.firstAudioDeltaAt = 0;
+        state.assistantSpeaking = true;
+        state.speechGateOpen = false;
+        state.trailingMsRemaining = 0;
+        state.speechAboveThresholdFrames = 0;
+        state.preRollChunks = [];
+        state.preRollSamples = 0;
         state.currentAssistantTranscript = "";
         if (assistantTranscriptEl) assistantTranscriptEl.textContent = "";
-        setStatus("Oracle is preparing a spoken response...");
+        setStatus("Oracle is preparing a spoken response. Listening is paused until playback completes...");
         touchActivity("response_created");
         return;
       }
@@ -966,9 +1017,11 @@
           active: state.active,
           input_audio_seconds: Number((state.inputSamplesSent / INPUT_SAMPLE_RATE).toFixed(3)),
           output_audio_seconds: Number((state.outputSamplesReceived / OUTPUT_SAMPLE_RATE).toFixed(3)),
-          post_playback_cooldown_ms: POST_PLAYBACK_COOLDOWN_MS
+          post_playback_cooldown_ms: POST_PLAYBACK_COOLDOWN_MS,
+          idle_auto_end_after_return_ms: IDLE_AUTO_END_AFTER_RETURN_MS
         });
         touchActivity("returned_to_listening");
+        scheduleIdleAutoEnd();
       }, drainMs);
     }
 
@@ -1025,6 +1078,9 @@
         output_audio_seconds: Number(finalOutputSeconds.toFixed(3)),
         estimated_audio_cost_usd: estimatedAudioCostUsd(finalInputSeconds, finalOutputSeconds).toFixed(4),
         audio_price_per_minute_usd: AUDIO_PRICE_PER_MINUTE_USD,
+        idle_auto_end_after_return_ms: IDLE_AUTO_END_AFTER_RETURN_MS,
+        local_gate_threshold: SPEECH_RMS_THRESHOLD,
+        speech_start_frames_required: SPEECH_START_FRAMES_REQUIRED,
         note: "xAI Voice Agent audio is billed by duration; this is client-side lab telemetry."
       });
 
