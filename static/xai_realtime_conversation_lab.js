@@ -23,9 +23,9 @@
     // - Add a short cooldown after playback before listening resumes.
     // - Keep enough trailing audio to avoid clipping the seeker's last word.
     const SPEECH_RMS_THRESHOLD = 0.014;
-    const SPEECH_START_FRAMES_REQUIRED = 4;
-    const POST_PLAYBACK_COOLDOWN_MS = 1800;
-    const IDLE_AUTO_END_AFTER_RETURN_MS = 20000;
+    const SPEECH_START_FRAMES_REQUIRED = 3;
+    const POST_PLAYBACK_COOLDOWN_MS = 900;
+    const IDLE_AUTO_END_AFTER_RETURN_MS = 12000;
     const PRE_ROLL_MS = 320;
     const CLIENT_TURN_COMMIT_SILENCE_MS = 2400;
     const TRAILING_AUDIO_MS = CLIENT_TURN_COMMIT_SILENCE_MS;
