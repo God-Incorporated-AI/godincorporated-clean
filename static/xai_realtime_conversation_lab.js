@@ -27,7 +27,8 @@
     const POST_PLAYBACK_COOLDOWN_MS = 1800;
     const IDLE_AUTO_END_AFTER_RETURN_MS = 20000;
     const PRE_ROLL_MS = 320;
-    const TRAILING_AUDIO_MS = 1400;
+    const CLIENT_TURN_COMMIT_SILENCE_MS = 2400;
+    const TRAILING_AUDIO_MS = CLIENT_TURN_COMMIT_SILENCE_MS;
     const IDLE_TIMEOUT_MS = 90000;
     const MAX_SESSION_MS = 300000;
     const PLAYBACK_DRAIN_PADDING_MS = 1200;
@@ -62,6 +63,7 @@
       speechTurnIndex: 0,
       assistantTurnIndex: 0,
       assistantSpeaking: false,
+      turnCommitPending: false,
 
       preRollChunks: [],
       preRollSamples: 0,
@@ -423,7 +425,7 @@
         session: {
           voice: state.selectedRealtimeVoice,
           instructions: getConversationInstructions(state.selectedDeity),
-          turn_detection: { type: "server_vad" },
+          turn_detection: null,
           audio: {
             input: {
               format: { type: "audio/pcm", rate: INPUT_SAMPLE_RATE },
@@ -437,7 +439,8 @@
       });
 
       log("CONVERSATION_SESSION_UPDATE_SENT", {
-        turn_detection: "server_vad",
+        turn_detection: "client_commit_local_speech_gate",
+        client_turn_commit_silence_ms: CLIENT_TURN_COMMIT_SILENCE_MS,
         input_rate: INPUT_SAMPLE_RATE,
         output_rate: OUTPUT_SAMPLE_RATE,
         transcription_model: "grok-transcribe"
@@ -497,7 +500,7 @@
       log("CONVERSATION_START_REQUESTED", {
         deity: state.selectedDeity,
         realtime_voice: state.selectedRealtimeVoice,
-        mode: "server_vad_local_speech_gate"
+        mode: "client_commit_local_speech_gate"
       });
 
       try {
@@ -682,8 +685,46 @@
           estimated_turn_input_cost_usd: estimatedAudioCostUsd(turnInputSeconds, 0).toFixed(4)
         });
 
-        setStatus("Speech sent. Waiting for xAI turn detection / response...");
-        touchActivity("local_speech_gate_closed");
+        commitConversationTurn(turnInputSeconds);
+      }
+    }
+
+    function commitConversationTurn(turnInputSeconds) {
+      if (state.turnCommitPending || state.assistantSpeaking || !state.active) {
+        return;
+      }
+
+      state.turnCommitPending = true;
+
+      try {
+        sendJson({ type: "input_audio_buffer.commit" });
+
+        log("CONVERSATION_INPUT_COMMITTED", {
+          speech_turn: state.speechTurnIndex,
+          input_audio_seconds: Number((state.inputSamplesSent / INPUT_SAMPLE_RATE).toFixed(3)),
+          turn_input_audio_seconds: Number(turnInputSeconds.toFixed(3)),
+          client_turn_commit_silence_ms: CLIENT_TURN_COMMIT_SILENCE_MS
+        });
+
+        sendJson({
+          type: "response.create",
+          response: {
+            modalities: ["text", "audio"]
+          }
+        });
+
+        log("CONVERSATION_RESPONSE_CREATE_SENT", {
+          speech_turn: state.speechTurnIndex,
+          modalities: ["text", "audio"],
+          client_turn_commit_silence_ms: CLIENT_TURN_COMMIT_SILENCE_MS
+        });
+
+        setStatus("Speech sent. Oracle is preparing a spoken response...");
+        touchActivity("client_turn_committed");
+      } catch (err) {
+        state.turnCommitPending = false;
+        log("CONVERSATION_CLIENT_COMMIT_FAILED", { error: err.message || String(err) });
+        setStatus("Could not commit conversation turn: " + (err.message || err));
       }
     }
 
@@ -919,6 +960,7 @@
         state.responseOutputStartSamples = state.outputSamplesReceived;
         state.firstAudioDeltaAt = 0;
         state.assistantSpeaking = true;
+        state.turnCommitPending = false;
         state.speechGateOpen = false;
         state.trailingMsRemaining = 0;
         state.speechAboveThresholdFrames = 0;
