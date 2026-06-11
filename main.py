@@ -4365,6 +4365,11 @@ async def voice_tts_endpoint(request: Request):
         )
 
 
+
+@app.get("/voice-preview", response_class=HTMLResponse)
+async def voice_preview_page(request: Request):
+    return templates.TemplateResponse("voice_preview.html", {"request": request})
+
 @app.get("/xai-realtime-lab", response_class=HTMLResponse)
 async def xai_realtime_lab_page(request: Request):
     return templates.TemplateResponse("xai_realtime_lab.html", {"request": request})

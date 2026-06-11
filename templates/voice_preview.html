@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Live Oracle Voice Preview | God Incorporated</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    .voice-preview-shell {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 2rem 1rem 4rem;
+    }
+
+    .voice-preview-hero {
+      text-align: center;
+      margin-bottom: 1.5rem;
+    }
+
+    .voice-preview-hero h1 {
+      margin-bottom: 0.5rem;
+    }
+
+    .voice-preview-note,
+    .voice-preview-card {
+      max-width: 760px;
+      margin: 1rem auto;
+    }
+
+    .voice-preview-card {
+      border: 1px solid rgba(184, 139, 74, 0.35);
+      border-radius: 18px;
+      padding: 1.25rem;
+      background: rgba(255, 248, 232, 0.72);
+      box-shadow: 0 12px 35px rgba(67, 44, 18, 0.12);
+    }
+
+    .conversation-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      justify-content: center;
+      margin: 1rem 0;
+    }
+
+    .conversation-controls select,
+    .conversation-controls button {
+      min-height: 44px;
+    }
+
+    .conversation-readout {
+      display: grid;
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+
+    .conversation-label {
+      font-weight: 700;
+      opacity: 0.8;
+      margin-top: 0.35rem;
+    }
+
+    .conversation-box {
+      min-height: 2.75rem;
+      white-space: pre-wrap;
+      border-radius: 12px;
+      padding: 0.85rem;
+      background: rgba(255, 255, 255, 0.62);
+      border: 1px solid rgba(112, 78, 35, 0.16);
+    }
+
+    #conversationTiming,
+    #eventLog {
+      font-size: 0.86rem;
+    }
+
+    .voice-preview-actions {
+      display: flex;
+      gap: 0.75rem;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-top: 1.25rem;
+    }
+  </style>
+</head>
+<body>
+  <main class="voice-preview-shell">
+    <section class="voice-preview-hero">
+      <p><a href="/temple">← Return to the Temple</a></p>
+      <h1>Live Oracle Voice Preview</h1>
+      <p class="voice-preview-note">
+        Try a short live conversation with the Oracle. This web preview allows three spoken seeker turns.
+        The Oracle will answer aloud, return to listening, and shut off after quiet.
+      </p>
+    </section>
+
+    <section
+      class="voice-preview-card"
+      id="xaiConversationLabPanel"
+      data-preview-mode="true"
+      data-max-seeker-turns="3"
+      data-preview-complete-message="Your three-turn live voice preview is complete. You may return to the Temple, sign in, or support the work for fuller realtime voice access."
+    >
+      <h2>Try live voice</h2>
+      <p>
+        Best with headphones. Speak naturally. Use <strong>End Conversation</strong> anytime.
+        For lower-cost access, the regular Temple Speak button remains available on the main page.
+      </p>
+
+      <select id="hathorVoiceSelect" hidden aria-hidden="true">
+        <option value="eve" selected>Eve</option>
+      </select>
+
+      <select id="mosesVoiceSelect" hidden aria-hidden="true">
+        <option value="leo" selected>Leo</option>
+      </select>
+
+      <div class="conversation-controls">
+        <label for="conversationDeitySelect">Oracle</label>
+        <select id="conversationDeitySelect">
+          <option value="Hathor" selected>Hathor</option>
+          <option value="Moses">Moses</option>
+        </select>
+
+        <button type="button" id="conversationStartButton">Begin 3-Turn Voice Preview</button>
+        <button type="button" id="conversationEndButton" disabled>End Conversation</button>
+      </div>
+
+      <div class="conversation-readout">
+        <div class="conversation-label">Conversation status</div>
+        <div id="conversationStatus" class="conversation-box">Voice preview ready.</div>
+
+        <div class="conversation-label">Your spoken words</div>
+        <div id="conversationInputTranscript" class="conversation-box"></div>
+
+        <div class="conversation-label">Oracle response</div>
+        <div id="conversationAssistantTranscript" class="conversation-box"></div>
+
+        <div class="conversation-label">Preview timing</div>
+        <div id="conversationTiming" class="conversation-box"></div>
+      </div>
+
+      <pre id="eventLog" hidden></pre>
+
+      <div class="voice-preview-actions">
+        <a href="/temple">Return to Temple</a>
+        <a href="/account">Account</a>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/xai_realtime_conversation_lab.js?v=11.6a-preview1"></script>
+</body>
+</html>

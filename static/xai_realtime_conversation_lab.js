@@ -14,6 +14,11 @@
     const assistantTranscriptEl = document.getElementById("conversationAssistantTranscript");
     const timingEl = document.getElementById("conversationTiming");
 
+    const maxSeekerTurns = Math.max(0, parseInt(panel.dataset.maxSeekerTurns || "0", 10) || 0);
+    const previewMode = panel.dataset.previewMode === "true";
+    const previewCompleteMessage = panel.dataset.previewCompleteMessage ||
+      "Your live voice preview is complete. Return to the Temple, sign in, or support the work for fuller realtime voice access.";
+
     const INPUT_SAMPLE_RATE = 24000;
     const OUTPUT_SAMPLE_RATE = 24000;
     const AUDIO_PRICE_PER_MINUTE_USD = 0.05;
@@ -112,6 +117,17 @@
       } catch (err) {
         /* no-op */
       }
+    }
+
+    function seekerTurnsRemaining() {
+      if (maxSeekerTurns <= 0) return null;
+      return Math.max(0, maxSeekerTurns - state.speechTurnIndex);
+    }
+
+    function previewProgressLabel() {
+      if (maxSeekerTurns <= 0) return "";
+      const used = Math.min(state.speechTurnIndex, maxSeekerTurns);
+      return " Preview turn " + used + " of " + maxSeekerTurns + ".";
     }
 
     function setStatus(message) {
@@ -1047,7 +1063,22 @@
         state.preRollSamples = 0;
         state.listeningCooldownUntil = performance.now() + POST_PLAYBACK_COOLDOWN_MS;
 
-        setStatus("Returned to listening after a short cooldown. Speak again, or tap End Conversation.");
+        if (maxSeekerTurns > 0 && state.speechTurnIndex >= maxSeekerTurns) {
+          setStatus("Voice preview complete. " + previewCompleteMessage);
+          log("CONVERSATION_PREVIEW_TURN_LIMIT_REACHED", {
+            speech_turns: state.speechTurnIndex,
+            max_seeker_turns: maxSeekerTurns,
+            preview_mode: previewMode
+          });
+          endConversation("preview_turn_limit");
+          return;
+        }
+
+        const remainingTurns = seekerTurnsRemaining();
+        const remainingNote = remainingTurns === null
+          ? ""
+          : " " + remainingTurns + " preview turn" + (remainingTurns === 1 ? "" : "s") + " remaining.";
+        setStatus("Returned to listening after a short cooldown. Speak again, or tap End Conversation." + remainingNote);
 
         log("CONVERSATION_TURN_OUTPUT_AUDIO_COST_RELEVANT", {
           assistant_turn: state.assistantTurnIndex,
@@ -1149,7 +1180,15 @@
     }
 
     setButtons(false);
-    setStatus("Conversation mode ready. Start once, speak naturally, then End Conversation.");
+    if (previewMode && startButton) {
+      startButton.textContent = maxSeekerTurns > 0
+        ? "Begin " + maxSeekerTurns + "-Turn Voice Preview"
+        : "Begin Voice Preview";
+    }
+
+    setStatus(previewMode
+      ? "Voice preview ready. Start once, speak naturally, then End Conversation."
+      : "Conversation mode ready. Start once, speak naturally, then End Conversation.");
     updateTiming();
   });
 })();
