@@ -143,7 +143,7 @@
     <section class="lab-panel">
       <h2>Event Log</h2>
 
-    <section class="xai-card" id="xaiMicLabPanel">
+    <section class="xai-card" id="xaiMicLabPanel" hidden aria-hidden="true">
       <style>
         #xaiMicLabPanel {
           border: 1px solid rgba(255, 255, 255, 0.18);
@@ -263,27 +263,27 @@
         }
       </style>
 
-      <h2>xAI Realtime Conversation Mode Lab</h2>
+      <h2>xAI Realtime Conversational Oracle Lab</h2>
       <p>
-        Experimental conversation mode. The microphone stays open locally after Start Conversation,
-        but audio is streamed to xAI only when the local speech gate detects speech. Use End Conversation
-        to close the session.
+        Primary conversational voice path for the Oracle. The microphone stays open locally during the session,
+        but audio is streamed to xAI only when the local speech gate detects speech. After the Oracle speaks,
+        the session returns to listening until the seeker ends the conversation or the idle timer closes it.
       </p>
 
       <div class="conversation-controls">
-        <label for="conversationDeitySelect">Conversation Oracle</label>
+        <label for="conversationDeitySelect">Oracle</label>
         <select id="conversationDeitySelect">
           <option value="Hathor" selected>Hathor - Eve default</option>
           <option value="Moses">Moses - Leo default</option>
         </select>
 
-        <button type="button" id="conversationStartButton">Start Conversation</button>
+        <button type="button" id="conversationStartButton">Begin Voice Conversation</button>
         <button type="button" id="conversationEndButton" disabled>End Conversation</button>
       </div>
 
       <div class="conversation-readout">
         <div class="conversation-label">Conversation status</div>
-        <div id="conversationStatus">Conversation mode ready.</div>
+        <div id="conversationStatus">Voice conversation ready.</div>
 
         <div class="conversation-label">Input transcript</div>
         <div id="conversationInputTranscript"></div>

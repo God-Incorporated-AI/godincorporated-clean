@@ -119,7 +119,7 @@
     function setButtons(activeMode) {
       if (startButton) startButton.disabled = activeMode || state.starting;
       if (endButton) endButton.disabled = !activeMode && !state.starting;
-      if (startButton) startButton.textContent = state.starting ? "Starting conversation..." : "Start Conversation";
+      if (startButton) startButton.textContent = state.starting ? "Starting conversation..." : "Begin Voice Conversation";
     }
 
     function estimatedAudioCostUsd(inputSeconds, outputSeconds) {
