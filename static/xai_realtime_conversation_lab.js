@@ -24,15 +24,15 @@
     // - Keep enough trailing audio to avoid clipping the seeker's last word.
     const SPEECH_RMS_THRESHOLD = 0.014;
     const SPEECH_START_FRAMES_REQUIRED = 3;
-    const POST_PLAYBACK_COOLDOWN_MS = 900;
+    const POST_PLAYBACK_COOLDOWN_MS = 100;
     const IDLE_AUTO_END_AFTER_RETURN_MS = 12000;
-    const PRE_ROLL_MS = 320;
+    const PRE_ROLL_MS = 650;
     const CLIENT_TURN_COMMIT_SILENCE_MS = 2400;
     const TRAILING_AUDIO_MS = CLIENT_TURN_COMMIT_SILENCE_MS;
     const IDLE_TIMEOUT_MS = 90000;
     const MAX_SESSION_MS = 300000;
-    const PLAYBACK_DRAIN_PADDING_MS = 1200;
-    const PLAYBACK_DRAIN_MIN_MS = 1500;
+    const PLAYBACK_DRAIN_PADDING_MS = 150;
+    const PLAYBACK_DRAIN_MIN_MS = 250;
     const PLAYBACK_DRAIN_MAX_MS = 60000;
 
     const state = {
