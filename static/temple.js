@@ -967,6 +967,68 @@ if (seekerInput && oracleForm) {
       voices[0];
   }
 
+  function getBrowserSpeechSettings(selectedDeity) {
+    const deity = (selectedDeity || "").trim().toLowerCase();
+
+    if (deity === "moses") {
+      return {
+        rate: 0.86,
+        pitch: 0.98,
+        volume: 1.0
+      };
+    }
+
+    return {
+      rate: 0.90,
+      pitch: 1.0,
+      volume: 1.0
+    };
+  }
+
+  function chunkBrowserSpeechText(answerText) {
+    const normalized = String(answerText || "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!normalized) return [];
+
+    const maxChunkLength = 260;
+    const softChunkLength = 210;
+    const sentencePieces = normalized.match(/[^.!?;:]+[.!?;:]?|\S+/g) || [normalized];
+    const chunks = [];
+    let current = "";
+
+    sentencePieces.forEach((piece) => {
+      const trimmed = piece.trim();
+      if (!trimmed) return;
+
+      const candidate = current ? current + " " + trimmed : trimmed;
+
+      if (candidate.length > maxChunkLength && current.length >= softChunkLength) {
+        chunks.push(current);
+        current = trimmed;
+      } else if (candidate.length > maxChunkLength && current) {
+        chunks.push(current);
+        current = trimmed;
+      } else {
+        current = candidate;
+      }
+
+      while (current.length > maxChunkLength * 1.5) {
+        const splitAt = current.lastIndexOf(",", maxChunkLength);
+        const safeSplit = splitAt > 80 ? splitAt + 1 : maxChunkLength;
+        chunks.push(current.slice(0, safeSplit).trim());
+        current = current.slice(safeSplit).trim();
+      }
+    });
+
+    if (current) {
+      chunks.push(current);
+    }
+
+    return chunks.filter(Boolean);
+  }
+
   function speakAnswerWithBrowserVoice(answerText, selectedDeity) {
     return new Promise((resolve, reject) => {
       if (!browserVoiceIsAvailable()) {
@@ -974,17 +1036,30 @@ if (seekerInput && oracleForm) {
         return;
       }
 
-      const text = (answerText || "").trim();
-      if (!text) {
+      const chunks = chunkBrowserSpeechText(answerText);
+      if (!chunks.length) {
         reject(new Error("browser_voice_empty_answer"));
         return;
       }
 
-      try {
-        window.speechSynthesis.cancel();
+      const chosenVoice = pickBrowserVoice(selectedDeity);
+      const settings = getBrowserSpeechSettings(selectedDeity);
+      let currentChunkIndex = 0;
+      let hasStarted = false;
 
-        const utterance = new SpeechSynthesisUtterance(text);
-        const chosenVoice = pickBrowserVoice(selectedDeity);
+      function speakNextChunk() {
+        if (currentChunkIndex >= chunks.length) {
+          setVoiceStatus(
+            "Voice complete",
+            "Tap Speak to continue the conversation.",
+            "ready"
+          );
+          maybeShowInstallNudge("voice_complete");
+          resolve();
+          return;
+        }
+
+        const utterance = new SpeechSynthesisUtterance(chunks[currentChunkIndex]);
 
         if (chosenVoice) {
           utterance.voice = chosenVoice;
@@ -993,25 +1068,24 @@ if (seekerInput && oracleForm) {
           utterance.lang = "en-US";
         }
 
-        utterance.rate = 0.92;
-        utterance.pitch = selectedDeity === "Moses" ? 0.88 : 1.0;
+        utterance.rate = settings.rate;
+        utterance.pitch = settings.pitch;
+        utterance.volume = settings.volume;
 
         utterance.onstart = function () {
-          setVoiceStatus(
-            "Browser voice speaking",
-            "The written answer is ready. Your browser is reading it aloud.",
-            "speaking"
-          );
+          if (!hasStarted) {
+            hasStarted = true;
+            setVoiceStatus(
+              "Browser voice speaking",
+              "The written answer is ready. Your browser is reading it aloud.",
+              "speaking"
+            );
+          }
         };
 
         utterance.onend = function () {
-          setVoiceStatus(
-            "Voice complete",
-            "Tap Speak to continue the conversation.",
-            "ready"
-          );
-          maybeShowInstallNudge("voice_complete");
-          resolve();
+          currentChunkIndex += 1;
+          window.setTimeout(speakNextChunk, 40);
         };
 
         utterance.onerror = function (event) {
@@ -1019,6 +1093,11 @@ if (seekerInput && oracleForm) {
         };
 
         window.speechSynthesis.speak(utterance);
+      }
+
+      try {
+        window.speechSynthesis.cancel();
+        speakNextChunk();
       } catch (err) {
         reject(err);
       }
