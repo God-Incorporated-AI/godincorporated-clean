@@ -573,6 +573,20 @@ if (seekerInput && oracleForm) {
   let voiceStream = null;
   let voiceChunks = [];
   let voiceIsRecording = false;
+  let voiceStopReason = "";
+  let voiceAudioContext = null;
+  let voiceAnalyser = null;
+  let voiceMonitorFrame = null;
+  let voiceSpeechDetected = false;
+  let voiceSilenceStartedAt = null;
+  let voiceRecordingStartedAt = 0;
+  let voiceMaxRecordingTimer = null;
+
+  const VOICE_NO_SPEECH_TIMEOUT_MS = 5000;
+  const VOICE_SILENCE_AUTO_STOP_MS = 1800;
+  const VOICE_MIN_RECORDING_MS = 900;
+  const VOICE_MAX_RECORDING_MS = 30000;
+  const VOICE_VOLUME_THRESHOLD = 0.025;
   let oracleAudio = null;
   let replayVoiceButton = null;
 
@@ -729,7 +743,140 @@ if (seekerInput && oracleForm) {
     installNudgeDismissBtn.addEventListener("click", dismissInstallNudge);
   }
 
+
+  function cleanupVoiceAutoStop() {
+    if (voiceMonitorFrame) {
+      window.cancelAnimationFrame(voiceMonitorFrame);
+      voiceMonitorFrame = null;
+    }
+
+    if (voiceMaxRecordingTimer) {
+      window.clearTimeout(voiceMaxRecordingTimer);
+      voiceMaxRecordingTimer = null;
+    }
+
+    if (voiceAudioContext) {
+      try {
+        voiceAudioContext.close();
+      } catch (err) {
+        // Ignore browser cleanup failures.
+      }
+      voiceAudioContext = null;
+    }
+
+    voiceAnalyser = null;
+    voiceSpeechDetected = false;
+    voiceSilenceStartedAt = null;
+    voiceRecordingStartedAt = 0;
+  }
+
+  function stopCurrentVoiceRecording(reason) {
+    voiceStopReason = reason || "manual";
+
+    if (voiceRecorder && voiceRecorder.state === "recording") {
+      voiceRecorder.stop();
+      return true;
+    }
+
+    return false;
+  }
+
+  function beginVoiceAutoStopMonitor(stream) {
+    cleanupVoiceAutoStop();
+
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass || !stream) {
+      return;
+    }
+
+    try {
+      voiceAudioContext = new AudioContextClass();
+      if (voiceAudioContext.state === "suspended" && voiceAudioContext.resume) {
+        voiceAudioContext.resume().catch(function () {});
+      }
+
+      const source = voiceAudioContext.createMediaStreamSource(stream);
+      voiceAnalyser = voiceAudioContext.createAnalyser();
+      voiceAnalyser.fftSize = 2048;
+      source.connect(voiceAnalyser);
+    } catch (err) {
+      cleanupVoiceAutoStop();
+      return;
+    }
+
+    const samples = new Uint8Array(voiceAnalyser.fftSize);
+    voiceRecordingStartedAt = Date.now();
+    voiceSpeechDetected = false;
+    voiceSilenceStartedAt = null;
+
+    voiceMaxRecordingTimer = window.setTimeout(function () {
+      if (voiceIsRecording && voiceRecorder && voiceRecorder.state === "recording") {
+        setVoiceStatus(
+          "Processing your question",
+          "Recording reached the safety limit. The Temple is preparing what it heard.",
+          "working"
+        );
+        stopCurrentVoiceRecording("max_duration");
+      }
+    }, VOICE_MAX_RECORDING_MS);
+
+    function tick() {
+      if (!voiceIsRecording || !voiceRecorder || voiceRecorder.state !== "recording" || !voiceAnalyser) {
+        return;
+      }
+
+      voiceAnalyser.getByteTimeDomainData(samples);
+
+      let sumSquares = 0;
+      for (let i = 0; i < samples.length; i += 1) {
+        const value = (samples[i] - 128) / 128;
+        sumSquares += value * value;
+      }
+
+      const volume = Math.sqrt(sumSquares / samples.length);
+      const now = Date.now();
+      const elapsed = now - voiceRecordingStartedAt;
+
+      if (volume >= VOICE_VOLUME_THRESHOLD) {
+        voiceSpeechDetected = true;
+        voiceSilenceStartedAt = null;
+      } else if (voiceSpeechDetected) {
+        if (!voiceSilenceStartedAt) {
+          voiceSilenceStartedAt = now;
+        }
+
+        if (
+          elapsed >= VOICE_MIN_RECORDING_MS &&
+          now - voiceSilenceStartedAt >= VOICE_SILENCE_AUTO_STOP_MS
+        ) {
+          setVoiceStatus(
+            "Processing your question",
+            "Silence detected. The Temple is preparing your spoken question.",
+            "working"
+          );
+          stopCurrentVoiceRecording("silence");
+          return;
+        }
+      } else if (elapsed >= VOICE_NO_SPEECH_TIMEOUT_MS) {
+        setVoiceStatus(
+          "No clear speech detected",
+          "The microphone did not detect a spoken question. Tap Speak and try again, or type your question below.",
+          "notice"
+        );
+        stopCurrentVoiceRecording("no_speech");
+        return;
+      }
+
+      voiceMonitorFrame = window.requestAnimationFrame(tick);
+    }
+
+    voiceMonitorFrame = window.requestAnimationFrame(tick);
+  }
+
+
   function stopVoiceTracks() {
+    cleanupVoiceAutoStop();
+
     if (voiceStream) {
       voiceStream.getTracks().forEach((track) => track.stop());
       voiceStream = null;
@@ -796,6 +943,97 @@ if (seekerInput && oracleForm) {
     }
   }
 
+
+  function browserVoiceIsAvailable() {
+    return typeof window !== "undefined" && "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined";
+  }
+
+  function pickBrowserVoice(selectedDeity) {
+    if (!browserVoiceIsAvailable()) return null;
+
+    const voices = window.speechSynthesis.getVoices() || [];
+    if (!voices.length) return null;
+
+    const deity = (selectedDeity || "").toLowerCase();
+
+    if (deity === "moses") {
+      return voices.find((voice) => /male|daniel|alex|david|george|fred|tom|microsoft mark/i.test(voice.name)) ||
+        voices.find((voice) => /^en[-_]/i.test(voice.lang)) ||
+        voices[0];
+    }
+
+    return voices.find((voice) => /female|samantha|victoria|karen|zira|susan|ava/i.test(voice.name)) ||
+      voices.find((voice) => /^en[-_]/i.test(voice.lang)) ||
+      voices[0];
+  }
+
+  function speakAnswerWithBrowserVoice(answerText, selectedDeity) {
+    return new Promise((resolve, reject) => {
+      if (!browserVoiceIsAvailable()) {
+        reject(new Error("browser_voice_unavailable"));
+        return;
+      }
+
+      const text = (answerText || "").trim();
+      if (!text) {
+        reject(new Error("browser_voice_empty_answer"));
+        return;
+      }
+
+      try {
+        window.speechSynthesis.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        const chosenVoice = pickBrowserVoice(selectedDeity);
+
+        if (chosenVoice) {
+          utterance.voice = chosenVoice;
+          utterance.lang = chosenVoice.lang || "en-US";
+        } else {
+          utterance.lang = "en-US";
+        }
+
+        utterance.rate = 0.92;
+        utterance.pitch = selectedDeity === "Moses" ? 0.88 : 1.0;
+
+        utterance.onstart = function () {
+          setVoiceStatus(
+            "Browser voice speaking",
+            "The written answer is ready. Your browser is reading it aloud.",
+            "speaking"
+          );
+        };
+
+        utterance.onend = function () {
+          setVoiceStatus(
+            "Voice complete",
+            "Tap Speak to continue the conversation.",
+            "ready"
+          );
+          maybeShowInstallNudge("voice_complete");
+          resolve();
+        };
+
+        utterance.onerror = function (event) {
+          reject(new Error(event.error || "browser_voice_error"));
+        };
+
+        window.speechSynthesis.speak(utterance);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  }
+
+  function showBrowserVoiceUnavailable() {
+    setVoiceStatus(
+      "Voice playback unavailable",
+      "The written Oracle answer is ready. Your browser may not support voice playback, or voice output may be blocked by browser settings. Try another browser, check sound permissions, or continue by reading the answer on screen. Recurring live realtime voice begins at Sovereign.",
+      "notice"
+    );
+  }
+
+
   async function submitVoiceRecording(blob) {
     const selectedVoice = voiceSelect.value;
     const formData = new FormData();
@@ -845,24 +1083,19 @@ if (seekerInput && oracleForm) {
     }
 
     const replayButton = ensureReplayVoiceButton();
-    replayButton.style.display = "inline-block";
-    replayButton.textContent = "Preparing Oracle Voice...";
+    replayButton.style.display = "none";
     replayButton.disabled = true;
-    setVoiceStatus("Preparing Oracle voice", "The Temple is preparing the spoken response.", "working");
+
+    setVoiceStatus(
+      "Browser voice preparing",
+      "The written answer is ready. Your browser will read it aloud where available.",
+      "working"
+    );
 
     try {
-      const ttsData = await prepareOracleVoice(answerData.answer, selectedVoice);
-      if (ttsData.audio_url) {
-        await playOracleAudio(ttsData.audio_url);
-      } else {
-        replayButton.textContent = "Voice unavailable";
-        replayButton.disabled = true;
-        setVoiceStatus("Voice unavailable", "The written answer is ready, but the spoken voice could not be prepared.", "notice");
-      }
+      await speakAnswerWithBrowserVoice(answerData.answer, selectedVoice);
     } catch (err) {
-      replayButton.textContent = "Voice unavailable";
-      replayButton.disabled = true;
-      setVoiceStatus("Voice unavailable", "The written answer is ready, but the spoken voice could not be prepared.", "notice");
+      showBrowserVoiceUnavailable();
     }
   }
 
@@ -1022,7 +1255,7 @@ if (seekerInput && oracleForm) {
 
     setVoiceStatus(
       "Microphone permission",
-      "Safari may ask for microphone access. The Temple listens only while the button says Stop.",
+      "Safari may ask for microphone access. The Temple listens while you speak and stops automatically after silence.",
       "notice"
     );
 
@@ -1049,8 +1282,22 @@ if (seekerInput && oracleForm) {
       const recorderType = voiceRecorder && voiceRecorder.mimeType ? voiceRecorder.mimeType : "";
       const chunkType = voiceChunks[0] && voiceChunks[0].type ? voiceChunks[0].type : "";
       const blobType = recorderType || chunkType || "audio/webm";
+      const stopReason = voiceStopReason || "manual";
+      voiceStopReason = "";
+
       const blob = new Blob(voiceChunks, { type: blobType });
       voiceChunks = [];
+
+      if (stopReason === "no_speech") {
+        oracleAnswer.textContent = "No clear speech was detected. Tap Speak and try again, or type your question below.";
+        resetVoiceButton();
+        setVoiceStatus(
+          "No clear speech detected",
+          "The microphone did not detect a spoken question. Tap Speak and try again, or type your question below.",
+          "notice"
+        );
+        return;
+      }
 
       try {
         speakButton.disabled = true;
@@ -1077,10 +1324,12 @@ if (seekerInput && oracleForm) {
 
     voiceRecorder.start();
     voiceIsRecording = true;
+    voiceStopReason = "";
+    beginVoiceAutoStopMonitor(voiceStream);
     speakButton.disabled = false;
     speakButton.textContent = "⏹ Stop";
-    setVoiceStatus("Listening", "Speak naturally. Tap Stop when you are finished.", "listening");
-    oracleAnswer.textContent = "🎙 Listening... Tap Stop when you are finished.";
+    setVoiceStatus("Listening", "Speak naturally. The microphone will stop after you finish speaking, or you can tap Stop.", "listening");
+    oracleAnswer.textContent = "Listening... The microphone will stop after you finish speaking, or tap Stop.";
   }
 
   speakButton.addEventListener("click", async function () {
@@ -1095,7 +1344,7 @@ if (seekerInput && oracleForm) {
       speakButton.disabled = true;
       speakButton.textContent = "🔄 Transcribing...";
       oracleAnswer.textContent = "🔄 Transcribing...";
-      voiceRecorder.stop();
+      stopCurrentVoiceRecording("manual");
       return;
     }
 
@@ -1148,7 +1397,7 @@ if (seekerInput && oracleForm) {
 
     setVoiceStatus(
       "Voice entry ready",
-      "If prompted, allow microphone access. The Temple will listen only while the button says Stop.",
+      "If prompted, allow microphone access. The Temple listens while you speak and stops automatically after silence.",
       "notice"
     );
     oracleAnswer.textContent = "🎙 Voice entry is ready. If prompted, allow microphone access. You can switch to text entry below.";
