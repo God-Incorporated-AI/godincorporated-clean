@@ -949,22 +949,9 @@ if (seekerInput && oracleForm) {
   }
 
   function pickBrowserVoice(selectedDeity) {
-    if (!browserVoiceIsAvailable()) return null;
-
-    const voices = window.speechSynthesis.getVoices() || [];
-    if (!voices.length) return null;
-
-    const deity = (selectedDeity || "").toLowerCase();
-
-    if (deity === "moses") {
-      return voices.find((voice) => /male|daniel|alex|david|george|fred|tom|microsoft mark/i.test(voice.name)) ||
-        voices.find((voice) => /^en[-_]/i.test(voice.lang)) ||
-        voices[0];
-    }
-
-    return voices.find((voice) => /female|samantha|victoria|karen|zira|susan|ava/i.test(voice.name)) ||
-      voices.find((voice) => /^en[-_]/i.test(voice.lang)) ||
-      voices[0];
+    // Let the browser choose its default voice for regular Speak.
+    // Some named system voices sound slurred or warbled, especially when forced by gender/name.
+    return null;
   }
 
   function getBrowserSpeechSettings(selectedDeity) {
@@ -972,14 +959,14 @@ if (seekerInput && oracleForm) {
 
     if (deity === "moses") {
       return {
-        rate: 0.86,
-        pitch: 0.98,
+        rate: 0.88,
+        pitch: 1.0,
         volume: 1.0
       };
     }
 
     return {
-      rate: 0.90,
+      rate: 0.88,
       pitch: 1.0,
       volume: 1.0
     };
