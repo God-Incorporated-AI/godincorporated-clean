@@ -3380,6 +3380,7 @@ def get_admin_user_detail(target_user_id: str) -> dict:
         },
         "donations": donation_stats,
         "support": support,
+        "voice_access": get_voice_policy(effective_plan_code),
         "entitlement": {
             "raw_plan_code": entitlement["raw_plan_code"],
             "effective_plan_code": entitlement["effective_plan_code"],
@@ -4036,6 +4037,7 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
         "support_message": support["message"],
         "renewal_message": support["renewal_message"],
         "support": support,
+        "voice_access": get_voice_policy(plan_code),
         "entitlement": {
             "status": entitlement["entitlement_status"],
             "raw_plan_code": entitlement["raw_plan_code"],
@@ -4145,6 +4147,7 @@ def build_anonymous_me_response(session_id: str) -> dict:
         "support_message": support["message"],
         "renewal_message": support["renewal_message"],
         "support": support,
+        "voice_access": get_voice_policy("anon"),
         "continuity_nudges": continuity_nudges,
         "anonymous_upload_limit": ANONYMOUS_UPLOAD_LIMIT,
         "claim_required": session_scroll_count >= ANONYMOUS_UPLOAD_LIMIT,

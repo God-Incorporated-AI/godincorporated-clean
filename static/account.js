@@ -63,6 +63,35 @@ document.addEventListener("DOMContentLoaded", async function () {
     return String(value).replace(/T(\d{2}:\d{2}:\d{2}(?:\.\d+)?)?(?:[+-]\d{2}:\d{2}|Z)?/g, " ");
   }
 
+  function formatVoiceAccess(voiceAccess) {
+    if (!voiceAccess) return "-";
+
+    const parts = [];
+
+    if (voiceAccess.has_recurring_web_realtime) {
+      if (voiceAccess.web_realtime_fair_use) {
+        parts.push("Live realtime voice under fair-use monitoring");
+      } else if (voiceAccess.web_realtime_monthly_turns) {
+        parts.push(`${voiceAccess.web_realtime_monthly_turns} live realtime turns/month`);
+      } else {
+        parts.push("Live realtime voice");
+      }
+    } else {
+      parts.push("Regular Speak voice with browser voice-out");
+      if (voiceAccess.one_time_realtime_preview_turns) {
+        parts.push(`${voiceAccess.one_time_realtime_preview_turns}-turn live preview`);
+      }
+    }
+
+    if (voiceAccess.library_full_research) {
+      parts.push("full library/research");
+    } else if (voiceAccess.library_access) {
+      parts.push("library access begins");
+    }
+
+    return parts.join(" · ");
+  }
+
   try {
     const response = await fetch("/me", { credentials: "same-origin" });
     const data = await response.json();
@@ -85,6 +114,7 @@ document.addEventListener("DOMContentLoaded", async function () {
     setText("accountStoredLevel", formatValue(data.stored_plan_label || data.stored_plan_code));
     setText("accountSupportMode", formatValue(data.support?.mode_label || data.support?.mode));
     setText("accountMemoryDepth", formatValue(data.memory_depth));
+    setText("accountVoiceAccess", formatVoiceAccess(data.voice_access));
     setText("accountSupportStatus", formatValue(data.support?.status));
 
     setText("accountQuestionsUsed", formatValue(data.usage?.questions_used));
