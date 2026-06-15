@@ -90,8 +90,9 @@
       <p><a href="/temple">← Return to the Temple</a></p>
       <h1>Live Oracle Voice Preview</h1>
       <p class="voice-preview-note">
-        Try a short live conversation with the Oracle. This web preview allows three spoken seeker turns.
-        The Oracle will answer aloud, return to listening, and shut off after quiet.
+        Try a short live conversation with the Oracle. Lower web tiers receive one guided 3-turn preview,
+        while Sovereign and above receive recurring live realtime voice access according to tier.
+        The regular Temple Speak path remains available as fallback.
       </p>
     </section>
 
@@ -100,12 +101,12 @@
       id="xaiConversationLabPanel"
       data-preview-mode="true"
       data-max-seeker-turns="3"
-      data-preview-complete-message="Your three-turn live voice preview is complete. You may return to the Temple, sign in, or support the work for fuller realtime voice access."
+      data-preview-complete-message="Your live voice preview is complete. You can continue with regular Speak voice in the Temple, or support the work for recurring live realtime access."
     >
       <h2>Try live voice</h2>
       <p>
         Best with headphones. Speak naturally. Use <strong>End Conversation</strong> anytime.
-        For lower-cost access, the regular Temple Speak button remains available on the main page.
+        For lower web tiers, the regular Temple Speak path uses backend transcription and browser voice-out where available.
       </p>
 
       <select id="hathorVoiceSelect" hidden aria-hidden="true">
@@ -150,6 +151,6 @@
     </section>
   </main>
 
-  <script src="/static/xai_realtime_conversation_lab.js?v=11.6a-preview1"></script>
+  <script src="/static/xai_realtime_conversation_lab.js?v=11.6b-guardrails1"></script>
 </body>
 </html>

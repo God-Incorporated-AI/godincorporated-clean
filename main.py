@@ -671,6 +671,186 @@ def get_voice_usage_context(request: Request, voice: Optional[str] = None) -> di
     return context
 
 
+def _voice_identity_filter(user_id=None, anonymous_user_id=None):
+    if user_id:
+        return "user_id = %s", [user_id]
+    if anonymous_user_id:
+        return "anonymous_user_id = %s", [anonymous_user_id]
+    return None, []
+
+
+def get_realtime_voice_turn_count(
+    user_id=None,
+    anonymous_user_id=None,
+    window_start=None,
+) -> int:
+    identity_clause, params = _voice_identity_filter(
+        user_id=user_id,
+        anonymous_user_id=anonymous_user_id,
+    )
+    if not identity_clause:
+        return 0
+
+    where_parts = [
+        identity_clause,
+        "input_mode = 'realtime_voice'",
+        "stage = 'realtime_turn'",
+        "status = 'ok'",
+    ]
+
+    if window_start:
+        where_parts.append("created_at >= %s")
+        params.append(window_start)
+
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT COUNT(*) AS total
+                FROM voice_usage_events
+                WHERE {" AND ".join(where_parts)}
+                """,
+                tuple(params),
+            )
+            row = cur.fetchone()
+            return int(row["total"] if row and row.get("total") is not None else 0)
+    except Exception as exc:
+        logger.warning("Realtime voice turn count failed: %s", exc)
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_realtime_voice_window_start(user_id=None, plan_code="anon"):
+    if user_id:
+        try:
+            entitlement = get_user_entitlement_snapshot(user_id)
+            return get_effective_usage_window_start(entitlement)
+        except Exception as exc:
+            logger.warning("Realtime voice entitlement window lookup failed: %s", exc)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def build_realtime_voice_access_payload(
+    usage_context: dict,
+    is_admin: bool = False,
+) -> dict:
+    plan_code = normalize_plan_code(usage_context.get("plan_code") or "anon")
+    policy = get_voice_policy(plan_code)
+    user_id = usage_context.get("user_id")
+    anonymous_user_id = usage_context.get("anonymous_user_id")
+    identity_kind = "user" if user_id else "anonymous"
+
+    if is_admin:
+        return {
+            "allowed": True,
+            "reason": "admin_unrestricted",
+            "message": "Admin realtime voice access is unrestricted in this environment.",
+            "plan_code": plan_code,
+            "plan_label": policy["plan_label"],
+            "identity_kind": identity_kind,
+            "is_preview": False,
+            "regular_speak_voice": True,
+            "browser_voice_out": True,
+            "monthly_limit": None,
+            "monthly_used": 0,
+            "monthly_remaining": None,
+            "preview_turn_limit": policy["one_time_realtime_preview_turns"],
+            "preview_turns_used": 0,
+            "preview_turns_remaining": None,
+            "web_realtime_fair_use": True,
+        }
+
+    if policy["has_recurring_web_realtime"]:
+        window_start = get_realtime_voice_window_start(user_id=user_id, plan_code=plan_code)
+        monthly_used = get_realtime_voice_turn_count(
+            user_id=user_id,
+            anonymous_user_id=anonymous_user_id,
+            window_start=window_start,
+        )
+        monthly_limit = policy["web_realtime_monthly_turns"]
+
+        if monthly_limit is None:
+            return {
+                "allowed": True,
+                "reason": "realtime_fair_use_allowed",
+                "message": "Live realtime voice is available under fair-use monitoring.",
+                "plan_code": plan_code,
+                "plan_label": policy["plan_label"],
+                "identity_kind": identity_kind,
+                "is_preview": False,
+                "regular_speak_voice": True,
+                "browser_voice_out": True,
+                "monthly_limit": None,
+                "monthly_used": monthly_used,
+                "monthly_remaining": None,
+                "preview_turn_limit": policy["one_time_realtime_preview_turns"],
+                "preview_turns_used": 0,
+                "preview_turns_remaining": None,
+                "web_realtime_fair_use": True,
+            }
+
+        remaining = max(monthly_limit - monthly_used, 0)
+        return {
+            "allowed": remaining > 0,
+            "reason": "realtime_monthly_turns_available" if remaining > 0 else "realtime_monthly_turn_limit_reached",
+            "message": (
+                f"{remaining} live realtime voice turn{'s' if remaining != 1 else ''} remain this month."
+                if remaining > 0
+                else "Your live realtime voice turns are complete for this month. You can continue with regular Speak voice."
+            ),
+            "plan_code": plan_code,
+            "plan_label": policy["plan_label"],
+            "identity_kind": identity_kind,
+            "is_preview": False,
+            "regular_speak_voice": True,
+            "browser_voice_out": True,
+            "monthly_limit": monthly_limit,
+            "monthly_used": monthly_used,
+            "monthly_remaining": remaining,
+            "preview_turn_limit": policy["one_time_realtime_preview_turns"],
+            "preview_turns_used": 0,
+            "preview_turns_remaining": None,
+            "web_realtime_fair_use": False,
+        }
+
+    preview_used = get_realtime_voice_turn_count(
+        user_id=user_id,
+        anonymous_user_id=anonymous_user_id,
+        window_start=None,
+    )
+    preview_limit = policy["one_time_realtime_preview_turns"]
+    preview_remaining = max(preview_limit - preview_used, 0)
+
+    return {
+        "allowed": preview_remaining > 0,
+        "reason": "realtime_preview_available" if preview_remaining > 0 else "realtime_preview_used",
+        "message": (
+            f"Your one-time live voice preview has {preview_remaining} turn{'s' if preview_remaining != 1 else ''} remaining."
+            if preview_remaining > 0
+            else "Your one-time live voice preview is complete. You can continue with regular Speak voice."
+        ),
+        "plan_code": plan_code,
+        "plan_label": policy["plan_label"],
+        "identity_kind": identity_kind,
+        "is_preview": True,
+        "regular_speak_voice": True,
+        "browser_voice_out": True,
+        "monthly_limit": 0,
+        "monthly_used": 0,
+        "monthly_remaining": 0,
+        "preview_turn_limit": preview_limit,
+        "preview_turns_used": preview_used,
+        "preview_turns_remaining": preview_remaining,
+        "web_realtime_fair_use": False,
+    }
+
+
 def record_voice_usage_event(
     session_id=None,
     user_id=None,
@@ -1872,39 +2052,16 @@ def require_admin(request: Request) -> dict:
         raise HTTPException(status_code=403, detail="Admin access required.")
     return user
 
-PLAN_LIMITS = {
-    "anon": 9,
-    "pilgrim": 1,
-    "seeker": 33,
-    "magister": 144,
-    "sovereign": 333,
-    "philosophus": 999999,
-    "theoricus": 999999,
-}
+from services.voice_access_policy import (
+    WEB_PLAN_QUERY_LIMITS,
+    WEB_PLAN_MEMORY_DEPTH,
+    WEB_PLAN_RECALL_MEMORY_DEPTH,
+    get_voice_policy,
+)
 
-PLAN_MEMORY_DEPTH = {
-    # Reflection mode uses a bounded working-memory window.
-    # Unlimited history should be reserved for targeted recall/search, not every answer.
-    "anon": 1,
-    "pilgrim": 1,
-    "seeker": 3,
-    "magister": 5,
-    "sovereign": 7,
-    "philosophus": 8,
-    "theoricus": 10,
-}
-
-PLAN_RECALL_MEMORY_DEPTH = {
-    # Recall mode can look deeper, but still avoids blindly sending unlimited history.
-    # Future work should replace this with targeted historical retrieval.
-    "anon": 3,
-    "pilgrim": 5,
-    "seeker": 10,
-    "magister": 20,
-    "sovereign": 40,
-    "philosophus": 60,
-    "theoricus": 80,
-}
+PLAN_LIMITS = dict(WEB_PLAN_QUERY_LIMITS)
+PLAN_MEMORY_DEPTH = dict(WEB_PLAN_MEMORY_DEPTH)
+PLAN_RECALL_MEMORY_DEPTH = dict(WEB_PLAN_RECALL_MEMORY_DEPTH)
 
 
 PLAN_REFLECTION_WORD_CAPS = {
@@ -2012,7 +2169,7 @@ def normalize_plan_code(plan_code: Optional[str]) -> str:
 
 
 def plan_has_unlimited_questions(plan_code: Optional[str]) -> bool:
-    return normalize_plan_code(plan_code) in {"philosophus", "theoricus"}
+    return normalize_plan_code(plan_code) in {"theoricus"}
 
 
 PLAN_RANKS = {
@@ -3223,6 +3380,7 @@ def get_admin_user_detail(target_user_id: str) -> dict:
         },
         "donations": donation_stats,
         "support": support,
+        "voice_access": get_voice_policy(effective_plan_code),
         "entitlement": {
             "raw_plan_code": entitlement["raw_plan_code"],
             "effective_plan_code": entitlement["effective_plan_code"],
@@ -3879,6 +4037,7 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
         "support_message": support["message"],
         "renewal_message": support["renewal_message"],
         "support": support,
+        "voice_access": get_voice_policy(plan_code),
         "entitlement": {
             "status": entitlement["entitlement_status"],
             "raw_plan_code": entitlement["raw_plan_code"],
@@ -3988,6 +4147,7 @@ def build_anonymous_me_response(session_id: str) -> dict:
         "support_message": support["message"],
         "renewal_message": support["renewal_message"],
         "support": support,
+        "voice_access": get_voice_policy("anon"),
         "continuity_nudges": continuity_nudges,
         "anonymous_upload_limit": ANONYMOUS_UPLOAD_LIMIT,
         "claim_required": session_scroll_count >= ANONYMOUS_UPLOAD_LIMIT,
@@ -4375,6 +4535,82 @@ async def xai_realtime_lab_page(request: Request):
     return templates.TemplateResponse("xai_realtime_lab.html", {"request": request})
 
 
+@app.get("/voice/realtime/access")
+async def voice_realtime_access_endpoint(request: Request):
+    deity = (request.query_params.get("voice") or request.query_params.get("deity") or "Hathor").strip() or "Hathor"
+    usage_context = get_voice_usage_context(request, deity)
+    user = get_current_user(request)
+    access = build_realtime_voice_access_payload(
+        usage_context,
+        is_admin=bool(user and user_has_admin_access(user)),
+    )
+    return access
+
+
+@app.post("/voice/realtime/turn")
+async def voice_realtime_turn_endpoint(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    deity = (body.get("voice") or body.get("deity") or "Hathor").strip() or "Hathor"
+    usage_context = get_voice_usage_context(request, deity)
+    user = get_current_user(request)
+    is_admin = bool(user and user_has_admin_access(user))
+
+    access_before = build_realtime_voice_access_payload(
+        usage_context,
+        is_admin=is_admin,
+    )
+
+    if not access_before.get("allowed"):
+        record_voice_usage_event(
+            **usage_context,
+            input_mode="realtime_voice",
+            deity=deity,
+            stage="realtime_turn",
+            status="denied",
+            total_ms=None,
+            metadata_json={
+                "phase": "11.6B",
+                "event_source": "voice_realtime_turn_endpoint",
+                "reason": access_before.get("reason"),
+                "access": access_before,
+                "client_payload": body,
+            },
+        )
+        return JSONResponse(status_code=403, content=access_before)
+
+    record_voice_usage_event(
+        **usage_context,
+        input_mode="realtime_voice",
+        deity=deity,
+        stage="realtime_turn",
+        status="ok",
+        total_ms=None,
+        metadata_json={
+            "phase": "11.6B",
+            "event_source": "voice_realtime_turn_endpoint",
+            "provider": body.get("provider") or "xai",
+            "realtime_voice": body.get("realtime_voice"),
+            "speech_turn": body.get("speech_turn"),
+            "turn_input_audio_seconds": body.get("turn_input_audio_seconds"),
+            "client_turn_commit_silence_ms": body.get("client_turn_commit_silence_ms"),
+            "preview_mode": body.get("preview_mode"),
+            "mode": body.get("mode"),
+            "access_before": access_before,
+        },
+    )
+
+    access_after = build_realtime_voice_access_payload(
+        usage_context,
+        is_admin=is_admin,
+    )
+    access_after["turn_recorded"] = True
+    return access_after
+
+
 @app.post("/voice/xai/realtime/session")
 async def voice_xai_realtime_session_endpoint(request: Request):
     import logging as _logging
@@ -4388,16 +4624,66 @@ async def voice_xai_realtime_session_endpoint(request: Request):
     deity = (body.get("voice") or body.get("deity") or "Hathor").strip() or "Hathor"
     voice_override = body.get("realtime_voice") or body.get("voice_name") or body.get("xai_voice")
 
+    usage_context = get_voice_usage_context(request, deity)
+    user = get_current_user(request)
+    access = build_realtime_voice_access_payload(
+        usage_context,
+        is_admin=bool(user and user_has_admin_access(user)),
+    )
+
+    if not access.get("allowed"):
+        record_voice_usage_event(
+            **usage_context,
+            input_mode="realtime_voice",
+            deity=deity,
+            stage="realtime_session",
+            status="denied",
+            total_ms=None,
+            metadata_json={
+                "phase": "11.6B",
+                "event_source": "voice_xai_realtime_session_endpoint",
+                "reason": access.get("reason"),
+                "provider": "xai",
+                "access": access,
+            },
+        )
+        return JSONResponse(status_code=403, content={
+            "error": access.get("message") or "Live realtime voice is not available for this access level.",
+            "voice_access": access,
+        })
+
     try:
         result = create_xai_realtime_session(deity, voice_override=voice_override)
+        result["voice_access"] = access
+
+        record_voice_usage_event(
+            **usage_context,
+            input_mode="realtime_voice",
+            deity=deity,
+            stage="realtime_session",
+            status="ok",
+            total_ms=result.get("total_ms"),
+            metadata_json={
+                "phase": "11.6B",
+                "event_source": "voice_xai_realtime_session_endpoint",
+                "provider": result.get("provider"),
+                "model": result.get("model"),
+                "transport": result.get("transport"),
+                "realtime_voice": result.get("realtime_voice"),
+                "access": access,
+            },
+        )
+
         _logging.info(
-            "XAI_REALTIME_SESSION_STAGE status=ok provider=%s model=%s deity=%s realtime_voice=%s total_ms=%s transport=%s",
+            "XAI_REALTIME_SESSION_STAGE status=ok provider=%s model=%s deity=%s realtime_voice=%s total_ms=%s transport=%s plan_code=%s access_reason=%s",
             result.get("provider"),
             result.get("model"),
             result.get("deity"),
             result.get("realtime_voice"),
             result.get("total_ms"),
             result.get("transport"),
+            access.get("plan_code"),
+            access.get("reason"),
         )
         return result
     except Exception as exc:

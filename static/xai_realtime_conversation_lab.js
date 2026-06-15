@@ -705,7 +705,68 @@
       }
     }
 
-    function commitConversationTurn(turnInputSeconds) {
+    async function reportRealtimeTurn(turnInputSeconds) {
+      try {
+        const response = await fetch("/voice/realtime/turn", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider: "xai",
+            mode: "client_commit_local_speech_gate",
+            preview_mode: previewMode,
+            voice: state.selectedDeity,
+            deity: state.selectedDeity,
+            realtime_voice: state.selectedRealtimeVoice,
+            speech_turn: state.speechTurnIndex,
+            turn_input_audio_seconds: Number(turnInputSeconds.toFixed(3)),
+            client_turn_commit_silence_ms: CLIENT_TURN_COMMIT_SILENCE_MS
+          })
+        });
+
+        let payload = {};
+        try {
+          payload = await response.json();
+        } catch (err) {
+          payload = { parse_error: err.message || String(err) };
+        }
+
+        log("CONVERSATION_TURN_REPORTED", {
+          ok: response.ok,
+          status: response.status,
+          voice_access: payload
+        });
+
+        if (!response.ok) {
+          return {
+            allowed: false,
+            status: response.status,
+            payload: payload
+          };
+        }
+
+        return {
+          allowed: true,
+          status: response.status,
+          payload: payload
+        };
+      } catch (err) {
+        log("CONVERSATION_TURN_REPORT_FAILED", {
+          error: err.message || String(err)
+        });
+
+        return {
+          allowed: false,
+          status: 0,
+          payload: {
+            error: "Could not verify live voice access.",
+            message: "Live realtime voice could not verify your access. Continue with regular Speak voice."
+          }
+        };
+      }
+    }
+
+    async function commitConversationTurn(turnInputSeconds) {
       if (state.turnCommitPending || state.assistantSpeaking || !state.active) {
         return;
       }
@@ -713,6 +774,26 @@
       state.turnCommitPending = true;
 
       try {
+        const turnAccess = await reportRealtimeTurn(turnInputSeconds);
+
+        if (!turnAccess.allowed) {
+          state.turnCommitPending = false;
+
+          const message =
+            (turnAccess.payload && (turnAccess.payload.message || turnAccess.payload.error)) ||
+            "Live realtime voice limit reached. Continue with regular Speak voice.";
+
+          log("CONVERSATION_TURN_DENIED_BEFORE_XAI_COMMIT", {
+            speech_turn: state.speechTurnIndex,
+            status: turnAccess.status,
+            voice_access: turnAccess.payload
+          });
+
+          setStatus(message);
+          endConversation("realtime_turn_denied");
+          return;
+        }
+
         sendJson({ type: "input_audio_buffer.commit" });
 
         log("CONVERSATION_INPUT_COMMITTED", {
