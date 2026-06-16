@@ -978,10 +978,16 @@ struct NativeVoiceSessionView: View {
     }
 
     private func transcribeRecordingNativeFirst(at url: URL, voice: String) async throws -> String {
+        // If our own recorder meter never detected speech, do not trust Apple Speech
+        // or backend transcription. Empty-room audio can produce junk tokens.
+        guard speechDetectedTime != nil else {
+            throw TempleVoiceError.server("No clear spoken question was detected.")
+        }
+
         do {
             let nativeTranscript = try await transcribeRecordingWithAppleSpeech(at: url)
             let trimmed = nativeTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
+            if !trimmed.isEmpty && !isLikelyNoSpeechTranscript(trimmed) {
                 return trimmed
             }
         } catch {
@@ -989,7 +995,14 @@ struct NativeVoiceSessionView: View {
             // recognition is unavailable, denied, or returns no useful transcript.
         }
 
-        return try await transcribeRecording(at: url, voice: voice)
+        let backendTranscript = try await transcribeRecording(at: url, voice: voice)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !backendTranscript.isEmpty && !isLikelyNoSpeechTranscript(backendTranscript) else {
+            throw TempleVoiceError.server("No clear spoken question was detected.")
+        }
+
+        return backendTranscript
     }
 
     private func transcribeRecordingWithAppleSpeech(at url: URL) async throws -> String {
