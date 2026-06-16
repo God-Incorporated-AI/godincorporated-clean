@@ -992,8 +992,8 @@ if (seekerInput && oracleForm) {
     }
 
     return findPreferredBrowserVoice([
-      "Samantha",
       "Victoria",
+      "Samantha",
       "Ava",
       "Google UK English Female",
       "Google US English Female",
@@ -1010,15 +1010,15 @@ if (seekerInput && oracleForm) {
 
     if (deity === "moses") {
       return {
-        rate: 0.96,
+        rate: 1.0,
         pitch: 1.0,
         volume: 1.0
       };
     }
 
     return {
-      rate: 0.96,
-      pitch: 1.03,
+      rate: 0.99,
+      pitch: 1.02,
       volume: 1.0
     };
   }
