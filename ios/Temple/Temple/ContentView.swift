@@ -10,6 +10,7 @@ import SwiftUI
 import WebKit
 import StoreKit
 import AVFoundation
+import Speech
 
 private enum TempleEnvironment {
 #if DEBUG
@@ -658,7 +659,7 @@ struct NativeVoiceSessionView: View {
             stopVoiceEndpointMonitor()
             isWorking = true
             statusTitle = "Preparing your question"
-            statusMessage = "The recording is being sent to the Temple for transcription."
+            statusMessage = "Native iOS speech recognition is transcribing your recording."
         }
 
         recorder?.stop()
@@ -681,7 +682,7 @@ struct NativeVoiceSessionView: View {
         }
 
         do {
-            let spokenQuestion = try await transcribeRecording(at: url, voice: oracleVoice)
+            let spokenQuestion = try await transcribeRecordingNativeFirst(at: url, voice: oracleVoice)
 
             if isLikelyNoSpeechTranscript(spokenQuestion) {
                 throw TempleVoiceError.server("No clear spoken question was detected.")
@@ -966,6 +967,80 @@ struct NativeVoiceSessionView: View {
         }
 
         return false
+    }
+
+    private func requestSpeechRecognitionPermission() async -> Bool {
+        await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status == .authorized)
+            }
+        }
+    }
+
+    private func transcribeRecordingNativeFirst(at url: URL, voice: String) async throws -> String {
+        do {
+            let nativeTranscript = try await transcribeRecordingWithAppleSpeech(at: url)
+            let trimmed = nativeTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed
+            }
+        } catch {
+            // Keep the existing backend transcription path as a fallback when native
+            // recognition is unavailable, denied, or returns no useful transcript.
+        }
+
+        return try await transcribeRecording(at: url, voice: voice)
+    }
+
+    private func transcribeRecordingWithAppleSpeech(at url: URL) async throws -> String {
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")) else {
+            throw TempleVoiceError.server("Native speech recognition was unavailable.")
+        }
+
+        guard recognizer.isAvailable else {
+            throw TempleVoiceError.server("Native speech recognition was not available.")
+        }
+
+        guard recognizer.supportsOnDeviceRecognition else {
+            throw TempleVoiceError.server("On-device speech recognition was not available.")
+        }
+
+        let speechAllowed = await requestSpeechRecognitionPermission()
+        guard speechAllowed else {
+            throw TempleVoiceError.server("Speech recognition access was not allowed.")
+        }
+
+        let request = SFSpeechURLRecognitionRequest(url: url)
+        request.shouldReportPartialResults = false
+        request.requiresOnDeviceRecognition = true
+
+        return try await withCheckedThrowingContinuation { continuation in
+            var didResume = false
+
+            let _ = recognizer.recognitionTask(with: request) { result, error in
+                if didResume {
+                    return
+                }
+
+                if let result, result.isFinal {
+                    let transcript = result.bestTranscription.formattedString
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    didResume = true
+                    if transcript.isEmpty {
+                        continuation.resume(throwing: TempleVoiceError.server("Native speech recognition returned no transcript."))
+                    } else {
+                        continuation.resume(returning: transcript)
+                    }
+                    return
+                }
+
+                if let error {
+                    didResume = true
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 
     private func transcribeRecording(at url: URL, voice: String) async throws -> String {
