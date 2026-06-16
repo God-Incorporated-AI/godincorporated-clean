@@ -948,10 +948,61 @@ if (seekerInput && oracleForm) {
     return typeof window !== "undefined" && "speechSynthesis" in window && typeof SpeechSynthesisUtterance !== "undefined";
   }
 
-  function pickBrowserVoice(selectedDeity) {
-    // Let the browser choose its default voice for regular Speak.
-    // Some named system voices sound slurred or warbled, especially when forced by gender/name.
+  function findPreferredBrowserVoice(preferredNames) {
+    if (!browserVoiceIsAvailable()) return null;
+
+    const voices = window.speechSynthesis.getVoices() || [];
+    if (!voices.length) return null;
+
+    const englishVoices = voices.filter((voice) => /^en[-_]/i.test(voice.lang || ""));
+    const searchVoices = englishVoices.length ? englishVoices : voices;
+
+    for (const preferredName of preferredNames) {
+      const exact = searchVoices.find((voice) =>
+        (voice.name || "").toLowerCase() === preferredName.toLowerCase()
+      );
+      if (exact) return exact;
+    }
+
+    for (const preferredName of preferredNames) {
+      const partial = searchVoices.find((voice) =>
+        (voice.name || "").toLowerCase().includes(preferredName.toLowerCase())
+      );
+      if (partial) return partial;
+    }
+
     return null;
+  }
+
+  function pickBrowserVoice(selectedDeity) {
+    const deity = (selectedDeity || "").trim().toLowerCase();
+
+    if (deity === "moses") {
+      return findPreferredBrowserVoice([
+        "Daniel",
+        "Alex",
+        "Google UK English Male",
+        "Google US English Male",
+        "Microsoft David",
+        "Microsoft Mark",
+        "Microsoft George",
+        "Fred",
+        "Tom"
+      ]);
+    }
+
+    return findPreferredBrowserVoice([
+      "Samantha",
+      "Victoria",
+      "Ava",
+      "Google UK English Female",
+      "Google US English Female",
+      "Microsoft Zira",
+      "Microsoft Aria",
+      "Microsoft Jenny",
+      "Microsoft Hazel",
+      "Microsoft Susan"
+    ]);
   }
 
   function getBrowserSpeechSettings(selectedDeity) {
@@ -959,15 +1010,15 @@ if (seekerInput && oracleForm) {
 
     if (deity === "moses") {
       return {
-        rate: 0.88,
+        rate: 0.96,
         pitch: 1.0,
         volume: 1.0
       };
     }
 
     return {
-      rate: 0.88,
-      pitch: 1.0,
+      rate: 0.96,
+      pitch: 1.03,
       volume: 1.0
     };
   }
@@ -1031,6 +1082,16 @@ if (seekerInput && oracleForm) {
 
       const chosenVoice = pickBrowserVoice(selectedDeity);
       const settings = getBrowserSpeechSettings(selectedDeity);
+
+      window.godIncLastBrowserVoice = {
+        deity: selectedDeity || "",
+        voiceName: chosenVoice ? chosenVoice.name : "browser-default",
+        voiceLang: chosenVoice ? chosenVoice.lang : "",
+        rate: settings.rate,
+        pitch: settings.pitch,
+        chunkCount: chunks.length
+      };
+
       let currentChunkIndex = 0;
       let hasStarted = false;
 
