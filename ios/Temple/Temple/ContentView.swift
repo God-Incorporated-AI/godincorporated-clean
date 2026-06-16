@@ -566,11 +566,11 @@ struct NativeVoiceSessionView: View {
         VStack(spacing: 10) {
             ZStack {
                 Circle()
-                    .fill(TemplePalette.paleGold.opacity(0.16))
+                    .fill(TemplePalette.warmGold.opacity(0.24))
                     .frame(width: 78, height: 78)
 
                 Circle()
-                    .stroke(TemplePalette.paleGold.opacity(0.48), lineWidth: 2)
+                    .stroke(TemplePalette.warmGold.opacity(0.72), lineWidth: 2)
                     .frame(width: 78, height: 78)
                     .scaleEffect(isRecording ? 1.16 : 1.0)
                     .opacity(isRecording ? 0.35 : 0.18)
@@ -583,7 +583,7 @@ struct NativeVoiceSessionView: View {
 
                 Image(systemName: "mic.fill")
                     .font(.system(size: 30, weight: .semibold))
-                    .foregroundStyle(TemplePalette.paleGold)
+                    .foregroundStyle(TemplePalette.warmGold)
             }
 
             Text(speechDetectedTime == nil ? "Listening for your question" : "Voice detected")
@@ -593,10 +593,10 @@ struct NativeVoiceSessionView: View {
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     Capsule()
-                        .fill(.white.opacity(0.14))
+                        .fill(TemplePalette.midnight.opacity(0.72))
 
                     Capsule()
-                        .fill(TemplePalette.paleGold.opacity(0.86))
+                        .fill(TemplePalette.warmGold)
                         .frame(width: max(10, geometry.size.width * currentListeningMeterLevel))
                 }
             }
@@ -611,7 +611,7 @@ struct NativeVoiceSessionView: View {
         .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(TemplePalette.paleGold.opacity(0.22), lineWidth: 1)
+                .stroke(TemplePalette.warmGold.opacity(0.42), lineWidth: 1)
         )
     }
 
