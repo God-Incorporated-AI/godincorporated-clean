@@ -24,7 +24,6 @@ private enum TempleEnvironment {
     static let termsURL = URL(string: "terms", relativeTo: baseAppURL)!
     static let voiceTranscribeURL = URL(string: "voice/transcribe", relativeTo: baseAppURL)!
     static let voiceAskURL = URL(string: "voice/ask", relativeTo: baseAppURL)!
-    static let voiceTTSURL = URL(string: "voice/tts", relativeTo: baseAppURL)!
     static let seekerMonthlyProductID = "ai.godincorporated.seeker.monthly"
 
     static func templeURL(voice: String?, entry: String? = nil, entryNonce: Int = 0) -> URL {
@@ -336,8 +335,8 @@ struct NativeVoiceSessionView: View {
     @State private var answer = ""
     @State private var recoveryMessage = ""
     @State private var showRecoveryActions = false
-    @State private var oracleAudioData: Data?
-    @State private var audioPlayer: AVAudioPlayer?
+    @State private var lastSpokenOracleAnswer = ""
+    @State private var speechSynthesizer = AVSpeechSynthesizer()
     @State private var isPlayingAudio = false
     @State private var voiceMonitorTask: Task<Void, Never>?
     @State private var recordingStartTime: Date?
@@ -434,11 +433,11 @@ struct NativeVoiceSessionView: View {
                                     )
                                 }
 
-                                if oracleAudioData != nil {
+                                if !lastSpokenOracleAnswer.isEmpty {
                                     Button {
-                                        playStoredOracleVoice()
+                                        speakOracleAnswer(lastSpokenOracleAnswer, deity: oracleVoice)
                                     } label: {
-                                        Text(isPlayingAudio ? "Oracle Voice Playing..." : "Replay Oracle Voice")
+                                        Text(isPlayingAudio ? "Oracle Voice Speaking..." : "Replay Oracle Voice")
                                             .frame(maxWidth: .infinity)
                                     }
                                     .buttonStyle(TempleSecondaryButtonStyle())
@@ -540,9 +539,8 @@ struct NativeVoiceSessionView: View {
     private func resetVoiceSession() {
         stopVoiceEndpointMonitor()
         recorder?.stop()
-        audioPlayer?.stop()
-        audioPlayer = nil
-        oracleAudioData = nil
+        speechSynthesizer.stopSpeaking(at: .immediate)
+        lastSpokenOracleAnswer = ""
         recorder = nil
         recordingURL = nil
         isRecording = false
@@ -574,9 +572,8 @@ struct NativeVoiceSessionView: View {
     private func startRecording() async {
         await MainActor.run {
             isWorking = true
-            audioPlayer?.stop()
-            audioPlayer = nil
-            oracleAudioData = nil
+            speechSynthesizer.stopSpeaking(at: .immediate)
+            lastSpokenOracleAnswer = ""
             isPlayingAudio = false
             recoveryMessage = ""
             showRecoveryActions = false
@@ -682,30 +679,13 @@ struct NativeVoiceSessionView: View {
             let oracleAnswer = try await askOracle(question: spokenQuestion, voice: oracleVoice)
             await MainActor.run {
                 answer = oracleAnswer
-                statusTitle = "Oracle answered"
-                statusMessage = "The written answer is ready. Preparing the spoken voice."
-            }
-
-            do {
-                let audioData = try await prepareOracleVoice(answer: oracleAnswer, voice: oracleVoice)
-                await MainActor.run {
-                    oracleAudioData = audioData
-                    isWorking = false
-                    showRecoveryActions = false
-                    recoveryMessage = ""
-                    statusTitle = "Oracle speaking"
-                    statusMessage = "The spoken response is playing. You may replay it when finished."
-                    playStoredOracleVoice()
-                }
-            } catch {
-                await MainActor.run {
-                    isWorking = false
-                    showRecoveryActions = false
-                    let friendly = classifyVoiceFailure(error)
-                    statusTitle = "Oracle answered"
-                    statusMessage = "The written answer is ready, but the spoken voice could not be prepared."
-                    recoveryMessage = friendly.recovery
-                }
+                lastSpokenOracleAnswer = oracleAnswer
+                isWorking = false
+                showRecoveryActions = false
+                recoveryMessage = ""
+                statusTitle = "Oracle speaking"
+                statusMessage = "The written answer is ready. Native iOS voice is speaking the response."
+                speakOracleAnswer(oracleAnswer, deity: oracleVoice)
             }
         } catch {
             await MainActor.run {
@@ -1030,40 +1010,9 @@ struct NativeVoiceSessionView: View {
         return result
     }
 
-    private func prepareOracleVoice(answer: String, voice: String) async throws -> Data {
-        var request = await authenticatedVoiceRequest(url: TempleEnvironment.voiceTTSURL, method: "POST")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(VoiceTTSPayload(answer: answer, voice: voice))
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        try validateHTTP(response: response, data: data)
-
-        let decoded = try JSONDecoder().decode(VoiceTTSResponse.self, from: data)
-
-        if let error = decoded.error, !error.isEmpty {
-            throw TempleVoiceError.server(error)
-        }
-
-        guard let audioURLString = decoded.audioURL, !audioURLString.isEmpty else {
-            throw TempleVoiceError.server("No Oracle voice audio was returned.")
-        }
-
-        guard let audioURL = URL(string: audioURLString, relativeTo: TempleEnvironment.baseAppURL) else {
-            throw TempleVoiceError.server("Oracle voice audio URL was invalid.")
-        }
-
-        let (audioData, audioResponse) = try await URLSession.shared.data(from: audioURL)
-        try validateHTTP(response: audioResponse, data: audioData)
-
-        if audioData.isEmpty {
-            throw TempleVoiceError.server("Oracle voice audio was empty.")
-        }
-
-        return audioData
-    }
-
-    private func playStoredOracleVoice() {
-        guard let audioData = oracleAudioData else {
+    private func speakOracleAnswer(_ spokenText: String, deity: String) {
+        let textToSpeak = spokenText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !textToSpeak.isEmpty else {
             return
         }
 
@@ -1071,26 +1020,78 @@ struct NativeVoiceSessionView: View {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .spokenAudio)
             try session.setActive(true)
-
-            let player = try AVAudioPlayer(data: audioData)
-            player.prepareToPlay()
-            player.play()
-
-            audioPlayer = player
-            isPlayingAudio = true
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + player.duration + 0.4) {
-                isPlayingAudio = false
-                if statusTitle == "Oracle speaking" {
-                    statusTitle = "Oracle answered"
-                    statusMessage = "You may ask another question, replay the voice, or continue by text."
-                }
-            }
         } catch {
-            isPlayingAudio = false
             statusTitle = "Voice playback unavailable"
-            statusMessage = "The written answer is ready, but the spoken response could not play."
+            statusMessage = "The written answer is ready, but iOS voice playback could not start."
             recoveryMessage = "You can read the answer above, replay if available, ask another question, or switch to text entry."
+            isPlayingAudio = false
+            return
+        }
+
+        if speechSynthesizer.isSpeaking {
+            speechSynthesizer.stopSpeaking(at: .immediate)
+        }
+
+        let utterance = AVSpeechUtterance(string: textToSpeak)
+        utterance.voice = preferredSpeechVoice(for: deity)
+
+        if deity.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "moses" {
+            utterance.rate = 0.47
+            utterance.pitchMultiplier = 0.92
+        } else {
+            utterance.rate = 0.46
+            utterance.pitchMultiplier = 1.02
+        }
+
+        utterance.volume = 1.0
+
+        speechSynthesizer.speak(utterance)
+        isPlayingAudio = true
+
+        monitorNativeSpeechCompletion(synthesizer: speechSynthesizer)
+    }
+
+    private func preferredSpeechVoice(for deity: String) -> AVSpeechSynthesisVoice? {
+        let normalized = deity.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        let preferredIdentifiers: [String]
+        if normalized == "moses" {
+            preferredIdentifiers = [
+                "com.apple.voice.enhanced.en-GB.Daniel",
+                "com.apple.voice.compact.en-GB.Daniel",
+                "com.apple.voice.enhanced.en-US.Alex",
+                "com.apple.voice.compact.en-US.Alex"
+            ]
+        } else {
+            preferredIdentifiers = [
+                "com.apple.voice.enhanced.en-US.Samantha",
+                "com.apple.voice.compact.en-US.Samantha",
+                "com.apple.voice.enhanced.en-US.Victoria",
+                "com.apple.voice.compact.en-US.Victoria"
+            ]
+        }
+
+        for identifier in preferredIdentifiers {
+            if let voice = AVSpeechSynthesisVoice(identifier: identifier) {
+                return voice
+            }
+        }
+
+        return AVSpeechSynthesisVoice(language: "en-US")
+    }
+
+    private func monitorNativeSpeechCompletion(synthesizer: AVSpeechSynthesizer) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if synthesizer.isSpeaking {
+                monitorNativeSpeechCompletion(synthesizer: synthesizer)
+                return
+            }
+
+            isPlayingAudio = false
+            if statusTitle == "Oracle speaking" {
+                statusTitle = "Oracle answered"
+                statusMessage = "You may ask another question, replay the native iOS voice, or continue by text."
+            }
         }
     }
 
@@ -1156,21 +1157,6 @@ struct VoiceAskResponse: Decodable {
     let answer: String?
     let error: String?
     let oracle_message: String?
-}
-
-struct VoiceTTSPayload: Encodable {
-    let answer: String
-    let voice: String
-}
-
-struct VoiceTTSResponse: Decodable {
-    let audioURL: String?
-    let error: String?
-
-    enum CodingKeys: String, CodingKey {
-        case audioURL = "audio_url"
-        case error
-    }
 }
 
 enum TempleVoiceError: LocalizedError {
