@@ -64,6 +64,23 @@ private enum TempleEnvironment {
     }
 }
 
+private enum NativeAnonymousIdentity {
+    private static let storageKey = "godinc_anon_id"
+
+    static var currentID: String {
+        let defaults = UserDefaults.standard
+
+        if let existing = defaults.string(forKey: storageKey),
+           UUID(uuidString: existing) != nil {
+            return existing.lowercased()
+        }
+
+        let created = UUID().uuidString.lowercased()
+        defaults.set(created, forKey: storageKey)
+        return created
+    }
+}
+
 private enum TemplePalette {
     static let midnight = Color(hex: 0x061A2E)
     static let deepBlue = Color(hex: 0x0A3A68)
@@ -990,9 +1007,17 @@ struct NativeVoiceSessionView: View {
     }
 
     private func askOracle(question: String, voice: String) async throws -> String {
+        let nativeAnonymousUserID = NativeAnonymousIdentity.currentID
         var request = await authenticatedVoiceRequest(url: TempleEnvironment.voiceAskURL, method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(VoiceAskPayload(question: question, voice: voice))
+        request.httpBody = try JSONEncoder().encode(
+            VoiceAskPayload(
+                question: question,
+                deity: voice,
+                anonymous_user_id: nativeAnonymousUserID,
+                seeker_id: nil
+            )
+        )
 
         let (data, response) = try await URLSession.shared.data(for: request)
         try validateHTTP(response: response, data: data)
@@ -1099,6 +1124,7 @@ struct NativeVoiceSessionView: View {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("GodIncorporatedIOSApp/1.0", forHTTPHeaderField: "User-Agent")
+        request.setValue(NativeAnonymousIdentity.currentID, forHTTPHeaderField: "X-Anonymous-User-Id")
 
         let cookies = await sharedWebCookies(for: url)
         if !cookies.isEmpty {
@@ -1150,7 +1176,9 @@ struct VoiceTranscribeResponse: Decodable {
 
 struct VoiceAskPayload: Encodable {
     let question: String
-    let voice: String
+    let deity: String
+    let anonymous_user_id: String
+    let seeker_id: String?
 }
 
 struct VoiceAskResponse: Decodable {
