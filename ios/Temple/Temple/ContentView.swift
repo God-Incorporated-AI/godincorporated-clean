@@ -364,6 +364,7 @@ struct NativeVoiceSessionView: View {
     @State private var quietTickCount = 0
     @State private var speechCandidateTickCount = 0
     @State private var strongestSpeechPowerDB: Float = -160.0
+    @State private var currentSpeechPowerDB: Float = -160.0
 
     private let noSpeechTimeoutSeconds: TimeInterval = 8.0
     private let silenceSubmitSeconds: TimeInterval = 4.0
@@ -501,6 +502,8 @@ struct NativeVoiceSessionView: View {
                                     .buttonStyle(TempleSecondaryButtonStyle())
                                     .disabled(isWorking || isRecording)
                                 } else if isRecording {
+                                    listeningIndicator
+
                                     Button {
                                         Task {
                                             await stopAndSubmitRecording()
@@ -554,6 +557,64 @@ struct NativeVoiceSessionView: View {
         }
     }
 
+    private var currentListeningMeterLevel: CGFloat {
+        let clippedPower = min(max(Double(currentSpeechPowerDB), -60.0), -20.0)
+        return CGFloat((clippedPower + 60.0) / 40.0)
+    }
+
+    private var listeningIndicator: some View {
+        VStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(TemplePalette.paleGold.opacity(0.16))
+                    .frame(width: 78, height: 78)
+
+                Circle()
+                    .stroke(TemplePalette.paleGold.opacity(0.48), lineWidth: 2)
+                    .frame(width: 78, height: 78)
+                    .scaleEffect(isRecording ? 1.16 : 1.0)
+                    .opacity(isRecording ? 0.35 : 0.18)
+                    .animation(
+                        isRecording
+                            ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                            : .default,
+                        value: isRecording
+                    )
+
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(TemplePalette.paleGold)
+            }
+
+            Text(speechDetectedTime == nil ? "Listening for your question" : "Voice detected")
+                .font(.headline)
+                .foregroundStyle(TemplePalette.paleGold)
+
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(.white.opacity(0.14))
+
+                    Capsule()
+                        .fill(TemplePalette.paleGold.opacity(0.86))
+                        .frame(width: max(10, geometry.size.width * currentListeningMeterLevel))
+                }
+            }
+            .frame(height: 8)
+
+            Text("Mic is open. Speak naturally, then pause.")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.72))
+                .multilineTextAlignment(.center)
+        }
+        .padding(16)
+        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(TemplePalette.paleGold.opacity(0.22), lineWidth: 1)
+        )
+    }
+
     private func resetVoiceSession() {
         stopVoiceEndpointMonitor()
         recorder?.stop()
@@ -571,6 +632,7 @@ struct NativeVoiceSessionView: View {
         quietTickCount = 0
         speechCandidateTickCount = 0
         strongestSpeechPowerDB = -160.0
+        currentSpeechPowerDB = -160.0
         transcript = ""
         answer = ""
         recoveryMessage = ""
@@ -726,6 +788,7 @@ struct NativeVoiceSessionView: View {
         quietTickCount = 0
         speechCandidateTickCount = 0
         strongestSpeechPowerDB = -160.0
+        currentSpeechPowerDB = -160.0
         isAutoSubmittingRecording = false
 
         voiceMonitorTask = Task {
@@ -754,6 +817,7 @@ struct NativeVoiceSessionView: View {
         let now = Date()
         let elapsed = now.timeIntervalSince(started)
         let averagePower = activeRecorder.averagePower(forChannel: 0)
+        currentSpeechPowerDB = averagePower.isFinite ? averagePower : -160.0
         let peakPower = activeRecorder.peakPower(forChannel: 0)
         let absoluteSpeechIsPresent = averagePower > speechPowerThresholdDB || peakPower > (speechPowerThresholdDB + 8.0)
 
@@ -865,6 +929,7 @@ struct NativeVoiceSessionView: View {
         quietTickCount = 0
         speechCandidateTickCount = 0
         strongestSpeechPowerDB = -160.0
+        currentSpeechPowerDB = -160.0
         statusTitle = title
         statusMessage = status
         recoveryMessage = recovery
