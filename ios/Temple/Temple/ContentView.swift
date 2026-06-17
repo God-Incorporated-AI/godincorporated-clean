@@ -334,10 +334,6 @@ struct TempleGateView: View {
                 homeOracleVoiceOption("Hathor", subtitle: "Reflective")
                 homeOracleVoiceOption("Moses", subtitle: "Canonical")
             }
-
-            Text("Choose before speaking or continuing with text.")
-                .font(.caption)
-                .foregroundStyle(TemplePalette.ink.opacity(0.64))
         }
         .padding(12)
         .background(TemplePalette.parchment.opacity(0.74), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
