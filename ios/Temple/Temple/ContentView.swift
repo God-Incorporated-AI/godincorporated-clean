@@ -258,6 +258,8 @@ struct TempleGateView: View {
                                         .foregroundStyle(TemplePalette.ink.opacity(0.72))
                                         .multilineTextAlignment(.center)
 
+                                    homeOracleVoiceSelector
+
                                     Button {
                                         beginNativeVoice(with: lastOracleVoice)
                                     } label: {
@@ -320,6 +322,80 @@ struct TempleGateView: View {
             .navigationTitle("Temple Gate")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    private var homeOracleVoiceSelector: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Choose Oracle voice")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(TemplePalette.ink)
+
+            HStack(spacing: 10) {
+                homeOracleVoiceOption("Hathor", subtitle: "Reflective")
+                homeOracleVoiceOption("Moses", subtitle: "Canonical")
+            }
+
+            Text("Choose before speaking or continuing with text.")
+                .font(.caption)
+                .foregroundStyle(TemplePalette.ink.opacity(0.64))
+        }
+        .padding(12)
+        .background(TemplePalette.parchment.opacity(0.74), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(TemplePalette.warmGold.opacity(0.42), lineWidth: 1)
+        )
+    }
+
+    private func homeOracleVoiceOption(_ voice: String, subtitle: String) -> some View {
+        let isSelected = lastOracleVoice.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == voice.lowercased()
+
+        return Button {
+            lastOracleVoice = voice
+            activeOracleVoice = voice
+        } label: {
+            VStack(spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(voice)
+                        .font(.headline)
+                        .foregroundStyle(isSelected ? TemplePalette.ink : TemplePalette.paleGold)
+
+                    if isSelected {
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(TemplePalette.ink)
+                    }
+                }
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(isSelected ? TemplePalette.ink.opacity(0.72) : TemplePalette.parchment.opacity(0.86))
+
+                if isSelected {
+                    Text("SELECTED")
+                        .font(.caption2.weight(.bold))
+                        .tracking(0.7)
+                        .foregroundStyle(TemplePalette.paleGold)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(TemplePalette.deepBlue.opacity(0.92), in: Capsule())
+                        .accessibilityHidden(true)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(
+                isSelected
+                    ? TemplePalette.warmGold
+                    : TemplePalette.deepBlue.opacity(0.92),
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(isSelected ? TemplePalette.paleGold.opacity(0.72) : TemplePalette.warmGold.opacity(0.5), lineWidth: 1.25)
+            )
+        }
+        .buttonStyle(.plain)
     }
 
     private func beginNativeVoice(with voice: String) {
@@ -527,6 +603,7 @@ struct NativeVoiceSessionView: View {
                                             await startRecording()
                                         }
                                     } label: {
+
                                         if isWorking {
                                             ProgressView()
                                                 .frame(maxWidth: .infinity)
@@ -601,25 +678,44 @@ struct NativeVoiceSessionView: View {
             changeOracleVoice(to: voice)
         } label: {
             VStack(spacing: 4) {
-                Text(voice)
-                    .font(.headline)
-                    .foregroundStyle(isSelected ? TemplePalette.ink : .white)
+                HStack(spacing: 6) {
+                    Text(voice)
+                        .font(.headline)
+                        .foregroundStyle(isSelected ? TemplePalette.ink : TemplePalette.paleGold)
+
+                    if isSelected {
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(TemplePalette.ink)
+                    }
+                }
 
                 Text(subtitle)
                     .font(.caption)
-                    .foregroundStyle(isSelected ? TemplePalette.ink.opacity(0.72) : .white.opacity(0.68))
+                    .foregroundStyle(isSelected ? TemplePalette.ink.opacity(0.72) : TemplePalette.parchment.opacity(0.86))
+
+                if isSelected {
+                    Text("SELECTED")
+                        .font(.caption2.weight(.bold))
+                        .tracking(0.7)
+                        .foregroundStyle(TemplePalette.paleGold)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(TemplePalette.deepBlue.opacity(0.92), in: Capsule())
+                        .accessibilityHidden(true)
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)
             .background(
                 isSelected
                     ? TemplePalette.warmGold
-                    : .white.opacity(0.08),
+                    : TemplePalette.deepBlue.opacity(0.86),
                 in: RoundedRectangle(cornerRadius: 14, style: .continuous)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(isSelected ? TemplePalette.paleGold.opacity(0.65) : .white.opacity(0.14), lineWidth: 1)
+                    .stroke(isSelected ? TemplePalette.paleGold.opacity(0.72) : TemplePalette.warmGold.opacity(0.46), lineWidth: 1.25)
             )
         }
         .buttonStyle(.plain)
