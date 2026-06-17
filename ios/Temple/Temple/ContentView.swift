@@ -111,7 +111,7 @@ struct ContentView: View {
     @AppStorage("preferredInputMode") private var preferredInputMode: String = "voice"
     @State private var selectedTab = 0
     @State private var templeEntryNonce = 0
-    @State private var activeOracleVoice = "Hathor"
+    @State private var activeOracleVoice = ""
     @State private var templeWebDestination = "temple"
 
     var body: some View {
@@ -135,6 +135,11 @@ struct ContentView: View {
 
             NativeVoiceSessionView(
                 oracleVoice: effectiveOracleVoice,
+                onOracleVoiceChange: { voice in
+                    lastOracleVoice = voice
+                    activeOracleVoice = voice
+                    templeEntryNonce += 1
+                },
                 onOpenTempleText: {
                     preferredInputMode = "text"
                     templeWebDestination = "temple"
@@ -269,11 +274,6 @@ struct TempleGateView: View {
                                     }
                                     .buttonStyle(TempleSecondaryButtonStyle())
 
-                                    Button("Change Oracle Voice") {
-                                        lastOracleVoice = ""
-                                        activeOracleVoice = "Hathor"
-                                    }
-                                    .buttonStyle(TempleSecondaryButtonStyle())
                                 }
                             }
                         }
@@ -341,6 +341,7 @@ struct TempleGateView: View {
 
 struct NativeVoiceSessionView: View {
     let oracleVoice: String
+    let onOracleVoiceChange: (String) -> Void
     let onOpenTempleText: () -> Void
     let onReturnHome: () -> Void
 
@@ -467,6 +468,8 @@ struct NativeVoiceSessionView: View {
                                     .disabled(isWorking || isRecording || isPlayingAudio)
                                 }
 
+                                oracleVoiceSwitcher
+
                                 if showRecoveryActions {
                                     Button {
                                         Task {
@@ -559,6 +562,113 @@ struct NativeVoiceSessionView: View {
             .navigationTitle("Voice")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    private var oracleVoiceSwitcher: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Oracle voice")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(TemplePalette.paleGold)
+
+            HStack(spacing: 10) {
+                oracleVoiceOption(
+                    "Hathor",
+                    subtitle: "Reflective"
+                )
+
+                oracleVoiceOption(
+                    "Moses",
+                    subtitle: "Canonical"
+                )
+            }
+
+            Text("Change the Oracle before your next question.")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.68))
+        }
+        .padding(14)
+        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(TemplePalette.warmGold.opacity(0.28), lineWidth: 1)
+        )
+    }
+
+    private func oracleVoiceOption(_ voice: String, subtitle: String) -> some View {
+        let isSelected = oracleVoice.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == voice.lowercased()
+
+        return Button {
+            changeOracleVoice(to: voice)
+        } label: {
+            VStack(spacing: 4) {
+                Text(voice)
+                    .font(.headline)
+                    .foregroundStyle(isSelected ? TemplePalette.ink : .white)
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(isSelected ? TemplePalette.ink.opacity(0.72) : .white.opacity(0.68))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(
+                isSelected
+                    ? TemplePalette.warmGold
+                    : .white.opacity(0.08),
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(isSelected ? TemplePalette.paleGold.opacity(0.65) : .white.opacity(0.14), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isWorking || isRecording || isPlayingAudio)
+        .opacity((isWorking || isRecording || isPlayingAudio) ? 0.52 : 1.0)
+    }
+
+    private func changeOracleVoice(to voice: String) {
+        let selectedVoice = voice.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !selectedVoice.isEmpty else {
+            return
+        }
+
+        guard selectedVoice.lowercased() != oracleVoice.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return
+        }
+
+        stopVoiceEndpointMonitor()
+        recorder?.stop()
+        recorder = nil
+        recordingURL = nil
+
+        speechSynthesizer.stopSpeaking(at: .immediate)
+        audioPlayer?.stop()
+        audioPlayer = nil
+
+        isRecording = false
+        isWorking = false
+        isAutoSubmittingRecording = false
+        isPlayingAudio = false
+
+        recordingStartTime = nil
+        speechDetectedTime = nil
+        lastSpeechTime = nil
+        quietTickCount = 0
+        speechCandidateTickCount = 0
+        strongestSpeechPowerDB = -160.0
+        currentSpeechPowerDB = -160.0
+
+        transcript = ""
+        answer = ""
+        lastSpokenOracleAnswer = ""
+        recoveryMessage = ""
+        showRecoveryActions = false
+
+        statusTitle = "Voice ready"
+        statusMessage = "\(selectedVoice) is selected. Have your question ready, then tap Start Speaking."
+
+        onOracleVoiceChange(selectedVoice)
     }
 
     private var currentListeningMeterLevel: CGFloat {
