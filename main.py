@@ -4532,6 +4532,7 @@ async def voice_preview_page(request: Request):
 
 @app.get("/xai-realtime-lab", response_class=HTMLResponse)
 async def xai_realtime_lab_page(request: Request):
+    require_admin(request)
     return templates.TemplateResponse("xai_realtime_lab.html", {"request": request})
 
 
@@ -4699,6 +4700,7 @@ async def voice_xai_realtime_session_endpoint(request: Request):
 
 @app.get("/realtime-lab", response_class=HTMLResponse)
 async def realtime_lab_page(request: Request):
+    require_admin(request)
     return templates.TemplateResponse("realtime_lab.html", {"request": request})
 
 
