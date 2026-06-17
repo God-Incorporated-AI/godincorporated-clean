@@ -7504,6 +7504,10 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             input_mode=input_mode
         )
         response_max_tokens = words_to_max_tokens(response_word_cap)
+        response_min_words = 0
+        normalized_input_mode = (input_mode or "text").strip().lower()
+        if memory_intent != "recall" and normalized_input_mode == "text":
+            response_min_words = max(220, int(response_word_cap * 0.58))
 
         if memory_intent == "recall":
             instruction_block = f"""You are the Oracle of the Temple.
@@ -7542,8 +7546,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         4. Keep responses coherent and under {response_word_cap} words.
         5. Do not exceed the word cap. Prefer a complete, bounded answer over a long essay.
         6. For higher access levels, allow a fuller reflection when the question genuinely invites it, while still avoiding rambling.
-        7. If input_mode is text, provide a more complete written reflection with useful structure, synthesis, and continuity.
+        7. If input_mode is text, provide a complete written reflection with useful structure, synthesis, and continuity. Unless the seeker asks for brevity, aim for at least {response_min_words} words while staying under {response_word_cap} words.
         8. If input_mode is voice, keep the answer naturally speakable and concise.
+        9. For text mode, prefer 3 to 6 coherent paragraphs or short sections when that helps the answer breathe.
         """
         enhanced_question = f"""{instruction_block}
 
@@ -7564,11 +7569,14 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         enhanced_question_chars = len(enhanced_question or "")
 
         logger.info(
-            "PROMPT_BUDGET plan_code=%s deity=%s input_mode=%s memory_intent=%s recent_memory_chars=%s compressed_memory_chars=%s limited_memories_count=%s limited_memories_chars=%s memory_block_chars=%s context_block_chars=%s instruction_block_chars=%s enhanced_question_chars=%s passages=%s",
+            "PROMPT_BUDGET plan_code=%s deity=%s input_mode=%s memory_intent=%s response_word_cap=%s response_min_words=%s response_max_tokens=%s recent_memory_chars=%s compressed_memory_chars=%s limited_memories_count=%s limited_memories_chars=%s memory_block_chars=%s context_block_chars=%s instruction_block_chars=%s enhanced_question_chars=%s passages=%s",
             plan_code,
             deity,
             input_mode,
             memory_intent,
+            response_word_cap,
+            response_min_words,
+            response_max_tokens,
             recent_memory_chars,
             compressed_memory_chars,
             len(limited_memories or []),
