@@ -1308,26 +1308,27 @@ if (seekerInput && oracleForm) {
   }
 
   function addNativeIOSHomeVoiceLink() {
-    if (!shouldUseNativeIOSVoicePath() || !voiceStatusMessage) {
+    if (!shouldUseNativeIOSVoicePath() || !askButton) {
       return;
     }
 
-    if (voiceStatusMessage.querySelector("[data-native-ios-home-link='true']")) {
-      return;
+    const existingLink = document.querySelector("[data-native-ios-home-link='true']");
+    if (existingLink) {
+      existingLink.remove();
     }
 
     ensureNativeIOSHomeLinkStyles();
 
     const homeLink = document.createElement("button");
     homeLink.type = "button";
-    homeLink.className = "native-ios-home-link";
+    homeLink.className = "native-ios-home-link native-ios-return-voice-link";
     homeLink.dataset.nativeIosHomeLink = "true";
-    homeLink.textContent = "Return to voice input";
+    homeLink.textContent = "Return to Voice";
     homeLink.addEventListener("click", function () {
       openNativeIOSHomeForVoice();
     });
 
-    voiceStatusMessage.appendChild(homeLink);
+    askButton.insertAdjacentElement("afterend", homeLink);
   }
 
   function applyNativeIOSWebVoiceSuppression() {
@@ -1343,13 +1344,13 @@ if (seekerInput && oracleForm) {
       speakButton.setAttribute("data-native-ios-disabled", "true");
     }
 
-    setVoiceStatus(
-      "Voice available from Home",
-      "",
-      "ready"
-    );
-    addNativeIOSHomeVoiceLink();
+    if (voiceStatusPanel) {
+      voiceStatusPanel.hidden = true;
+      voiceStatusPanel.style.display = "none";
+    }
+
     positionNativeIOSTextPageFlow();
+    addNativeIOSHomeVoiceLink();
 
     return true;
   }
@@ -1494,21 +1495,23 @@ if (seekerInput && oracleForm) {
   }
 
   function applyNativeTextEntryMode() {
-    setVoiceStatus(
-      "Text entry ready",
-      shouldUseNativeIOSVoicePath()
-        ? "The Oracle responds here."
-        : "Type your question below. You can tap Speak whenever you want to return to voice.",
-      "ready"
-    );
-    oracleAnswer.textContent = shouldUseNativeIOSVoicePath()
-      ? "The Oracle responds here."
-      : "Text entry is ready. Type your question below, or tap Speak to ask aloud.";
-
     if (shouldUseNativeIOSVoicePath()) {
+      if (voiceStatusPanel) {
+        voiceStatusPanel.hidden = true;
+        voiceStatusPanel.style.display = "none";
+      }
+      oracleAnswer.textContent = "The Oracle responds here.";
+      positionNativeIOSTextPageFlow();
       addNativeIOSHomeVoiceLink();
-    positionNativeIOSTextPageFlow();
+    } else {
+      setVoiceStatus(
+        "Text entry ready",
+        "Type your question below. You can tap Speak whenever you want to return to voice.",
+        "ready"
+      );
+      oracleAnswer.textContent = "Text entry is ready. Type your question below, or tap Speak to ask aloud.";
     }
+
     if (seekerInput && typeof seekerInput.focus === "function") {
       seekerInput.focus();
     }
