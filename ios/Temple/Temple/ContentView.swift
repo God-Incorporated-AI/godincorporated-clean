@@ -359,12 +359,6 @@ struct TempleGateView: View {
                     Text(voice)
                         .font(.headline)
                         .foregroundStyle(isSelected ? TemplePalette.ink : TemplePalette.paleGold)
-
-                    if isSelected {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(TemplePalette.ink)
-                    }
                 }
 
                 Text(subtitle)
@@ -682,12 +676,6 @@ struct NativeVoiceSessionView: View {
                     Text(voice)
                         .font(.headline)
                         .foregroundStyle(isSelected ? TemplePalette.ink : TemplePalette.paleGold)
-
-                    if isSelected {
-                        Image(systemName: "checkmark.seal.fill")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(TemplePalette.ink)
-                    }
                 }
 
                 Text(subtitle)
