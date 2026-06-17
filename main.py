@@ -2097,12 +2097,12 @@ def get_response_word_cap(
     # Ordered access levels:
     # anon -> pilgrim -> seeker -> magister -> sovereign -> theoricus
     text_ranges = {
-        "anon": (90, 145),
-        "pilgrim": (135, 200),
-        "seeker": (180, 260),
-        "magister": (230, 320),
-        "sovereign": (280, 380),
-        "theoricus": (320, 420),
+        "anon": (120, 190),
+        "pilgrim": (180, 280),
+        "seeker": (260, 400),
+        "magister": (360, 540),
+        "sovereign": (470, 650),
+        "theoricus": (560, 780),
     }
 
     voice_ranges = {
@@ -2119,7 +2119,7 @@ def get_response_word_cap(
 
     # Recall should stay concise even for high tiers.
     if memory_intent == "recall":
-        high = min(high, 180 if normalized_input == "voice" else 260)
+        high = min(high, 180 if normalized_input == "voice" else 320)
         low = min(low, high)
 
     # Moses is more direct; Hathor is warmer but still bounded.
@@ -7542,6 +7542,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         4. Keep responses coherent and under {response_word_cap} words.
         5. Do not exceed the word cap. Prefer a complete, bounded answer over a long essay.
         6. For higher access levels, allow a fuller reflection when the question genuinely invites it, while still avoiding rambling.
+        7. If input_mode is text, provide a more complete written reflection with useful structure, synthesis, and continuity.
+        8. If input_mode is voice, keep the answer naturally speakable and concise.
         """
         enhanced_question = f"""{instruction_block}
 
