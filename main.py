@@ -2049,6 +2049,220 @@ def retrieve_context(
 
     return personal + canonical + community
 
+
+def create_ingestion_job(
+    *,
+    scroll_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    job_type: str = "scroll_upload",
+    status: str = "queued",
+    original_filename: Optional[str] = None,
+    storage_ref: Optional[str] = None,
+    mime_type: Optional[str] = None,
+    corpus_layer: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Create a durable ingestion job record.
+
+    This helper is intentionally not wired into /upload_scroll yet.
+    Phase 11.8C.2 only establishes safe queue primitives.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ingestion_jobs (
+                    scroll_id,
+                    session_id,
+                    user_id,
+                    job_type,
+                    status,
+                    original_filename,
+                    storage_ref,
+                    mime_type,
+                    corpus_layer
+                )
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id;
+                """,
+                (
+                    scroll_id,
+                    session_id,
+                    user_id,
+                    job_type,
+                    status,
+                    original_filename,
+                    storage_ref,
+                    mime_type,
+                    corpus_layer,
+                )
+            )
+            row = cur.fetchone()
+
+        conn.commit()
+        job_id = str(row["id"]) if row and row.get("id") else None
+        logger.info(
+            "INGESTION_JOB_CREATED job_id=%s scroll_id=%s user_id_present=%s session_id_present=%s status=%s storage_ref_present=%s",
+            job_id,
+            scroll_id,
+            bool(user_id),
+            bool(session_id),
+            status,
+            bool(storage_ref),
+        )
+        return job_id
+
+    except Exception as e:
+        conn.rollback()
+        logger.error("INGESTION_JOB_CREATE_FAILED error=%s", e)
+        raise
+
+    finally:
+        conn.close()
+
+
+def update_ingestion_job_status(
+    job_id: str,
+    status: str,
+    *,
+    scroll_id: Optional[str] = None,
+    error_message: Optional[str] = None,
+    increment_attempts: bool = False,
+) -> Optional[dict]:
+    """
+    Update ingestion job status and timestamps.
+
+    Supported status values are deliberately open text for now so the migration
+    remains lightweight. The intended lifecycle is queued, processing, ready,
+    failed, and needs_ocr.
+    """
+    status_key = (status or "").strip().lower()
+    if not status_key:
+        raise ValueError("status is required")
+
+    started_at_sql = "started_at = COALESCE(started_at, NOW())," if status_key == "processing" else ""
+    finished_at_sql = "finished_at = COALESCE(finished_at, NOW())," if status_key in {"ready", "failed", "needs_ocr"} else ""
+    attempts_sql = "attempts = attempts + 1," if increment_attempts else ""
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE ingestion_jobs
+                SET
+                    status = %s,
+                    scroll_id = COALESCE(%s, scroll_id),
+                    error_message = %s,
+                    {started_at_sql}
+                    {finished_at_sql}
+                    {attempts_sql}
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING *;
+                """,
+                (status_key, scroll_id, error_message, job_id)
+            )
+            row = cur.fetchone()
+
+        conn.commit()
+        if row:
+            logger.info(
+                "INGESTION_JOB_UPDATED job_id=%s status=%s scroll_id=%s attempts=%s",
+                job_id,
+                row.get("status"),
+                row.get("scroll_id"),
+                row.get("attempts"),
+            )
+        else:
+            logger.warning("INGESTION_JOB_UPDATE_MISSING job_id=%s status=%s", job_id, status_key)
+
+        return row
+
+    except Exception as e:
+        conn.rollback()
+        logger.error("INGESTION_JOB_UPDATE_FAILED job_id=%s status=%s error=%s", job_id, status_key, e)
+        raise
+
+    finally:
+        conn.close()
+
+
+def get_ingestion_job(job_id: str) -> Optional[dict]:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM ingestion_jobs
+                WHERE id = %s
+                LIMIT 1;
+                """,
+                (job_id,)
+            )
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def get_next_queued_ingestion_job(job_type: str = "scroll_upload") -> Optional[dict]:
+    """
+    Claim the next queued ingestion job for one worker process.
+
+    This uses SKIP LOCKED so future workers can safely run in parallel.
+    It is not wired into a worker loop yet.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH next_job AS (
+                    SELECT id
+                    FROM ingestion_jobs
+                    WHERE job_type = %s
+                      AND status = 'queued'
+                    ORDER BY created_at ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                )
+                UPDATE ingestion_jobs j
+                SET
+                    status = 'processing',
+                    started_at = COALESCE(started_at, NOW()),
+                    attempts = attempts + 1,
+                    updated_at = NOW()
+                FROM next_job
+                WHERE j.id = next_job.id
+                RETURNING j.*;
+                """,
+                (job_type,)
+            )
+            row = cur.fetchone()
+
+        conn.commit()
+        if row:
+            logger.info(
+                "INGESTION_JOB_CLAIMED job_id=%s job_type=%s attempts=%s",
+                row.get("id"),
+                row.get("job_type"),
+                row.get("attempts"),
+            )
+        return row
+
+    except Exception as e:
+        conn.rollback()
+        logger.error("INGESTION_JOB_CLAIM_FAILED job_type=%s error=%s", job_type, e)
+        raise
+
+    finally:
+        conn.close()
+
+
+
 def extract_text_from_scroll(file_path):
     text = ""
     ext = os.path.splitext(file_path)[1].lower()
