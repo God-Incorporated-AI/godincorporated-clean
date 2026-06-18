@@ -99,9 +99,36 @@
       flex-wrap: wrap;
     }
 
-</style>
+
+    .voice-lab-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      justify-content: center;
+      max-width: 980px;
+      margin: 0 auto 1.25rem;
+      padding: 0.75rem 1rem;
+      border: 1px solid rgba(184, 139, 74, 0.35);
+      border-radius: 14px;
+      background: rgba(255, 248, 232, 0.78);
+    }
+
+    .voice-lab-nav a {
+      font-weight: 700;
+      color: inherit;
+    }
+
+  </style>
 </head>
 <body>
+  <nav class="voice-lab-nav" aria-label="Voice lab navigation">
+    <a href="/temple">godincorporated.ai</a>
+    <a href="/admin">Admin Console</a>
+    <a href="/voice-preview">Voice Preview</a>
+  </nav>
+
+
   <main>
     <h1>Realtime Oracle Voice Lab</h1>
 
