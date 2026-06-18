@@ -1297,6 +1297,7 @@ def search_canonical_scrolls(question: str, limit: int = 6):
                 FROM scroll_chunks c
                 JOIN scrolls s ON c.scroll_id = s.id
                 WHERE s.corpus_layer = 'canonical'
+                AND COALESCE(s.status, 'active') = 'active'
                 AND to_tsvector('english', c.chunk_text)
                 @@ websearch_to_tsquery('english', %s)
                 LIMIT %s
@@ -1332,6 +1333,7 @@ def search_community_scrolls(question: str, limit: int = 2):
                 FROM scroll_chunks c
                 JOIN scrolls s ON c.scroll_id = s.id
                 WHERE s.corpus_layer = 'community'
+                AND COALESCE(s.status, 'active') = 'active'
                 AND to_tsvector('english', c.chunk_text)
                 @@ websearch_to_tsquery('english', %s)
                 LIMIT %s
@@ -1369,13 +1371,22 @@ def search_personal_scrolls(user_id: str, question: str, limit: int = 4):
                 SELECT s.original_filename, c.chunk_text
                 FROM scroll_chunks c
                 JOIN scrolls s ON c.scroll_id = s.id
-                WHERE s.user_id = %s
-                AND s.corpus_layer = 'personal'
+                WHERE s.corpus_layer = 'personal'
+                AND COALESCE(s.status, 'active') = 'active'
+                AND (
+                    s.user_id = %s
+                    OR EXISTS (
+                        SELECT 1
+                        FROM scroll_associations sa
+                        WHERE sa.scroll_id = s.id
+                          AND sa.user_id = %s
+                    )
+                )
                 AND to_tsvector('english', c.chunk_text)
                 @@ websearch_to_tsquery('english', %s)
                 LIMIT %s
                 """,
-                (user_id, question, limit)
+                (user_id, user_id, question, limit)
             )
 
             rows = cur.fetchall()
@@ -1416,12 +1427,26 @@ def fetch_scroll_chunk_candidates(
                     SELECT s.original_filename, s.corpus_layer, c.chunk_text
                     FROM scroll_chunks c
                     JOIN scrolls s ON c.scroll_id = s.id
-                    WHERE s.user_id = %s
-                       OR s.corpus_layer IN ('canonical', 'community')
+                    WHERE COALESCE(s.status, 'active') = 'active'
+                      AND (
+                          (
+                              s.corpus_layer = 'personal'
+                              AND (
+                                  s.user_id = %s
+                                  OR EXISTS (
+                                      SELECT 1
+                                      FROM scroll_associations sa
+                                      WHERE sa.scroll_id = s.id
+                                        AND sa.user_id = %s
+                                  )
+                              )
+                          )
+                          OR s.corpus_layer IN ('canonical', 'community')
+                      )
                     ORDER BY s.created_at DESC NULLS LAST, c.id DESC
                     LIMIT %s OFFSET %s
                     """,
-                    (user_id, limit, offset)
+                    (user_id, user_id, limit, offset)
                 )
             else:
                 cur.execute(
@@ -1429,7 +1454,8 @@ def fetch_scroll_chunk_candidates(
                     SELECT s.original_filename, s.corpus_layer, c.chunk_text
                     FROM scroll_chunks c
                     JOIN scrolls s ON c.scroll_id = s.id
-                    WHERE s.corpus_layer IN ('canonical', 'community')
+                    WHERE COALESCE(s.status, 'active') = 'active'
+                      AND s.corpus_layer IN ('canonical', 'community')
                     ORDER BY s.created_at DESC NULLS LAST, c.id DESC
                     LIMIT %s OFFSET %s
                     """,
@@ -1758,10 +1784,20 @@ def retrieve_context_pgvector(
                     JOIN scrolls s ON c.scroll_id = s.id
                     WHERE c.embedding IS NOT NULL
                       AND s.corpus_layer = 'personal'
+                      AND COALESCE(s.status, 'active') = 'active'
+                      AND (
+                          s.user_id = %s
+                          OR EXISTS (
+                              SELECT 1
+                              FROM scroll_associations sa
+                              WHERE sa.scroll_id = s.id
+                                AND sa.user_id = %s
+                          )
+                      )
                     ORDER BY c.embedding <=> %s::vector
                     LIMIT %s;
                     """,
-                    (vector, vector, personal_limit)
+                    (vector, user_id, user_id, vector, personal_limit)
                 )
                 personal_rows = cur.fetchall()
 
@@ -1778,6 +1814,7 @@ def retrieve_context_pgvector(
                     JOIN scrolls s ON c.scroll_id = s.id
                     WHERE c.embedding IS NOT NULL
                       AND s.corpus_layer = 'canonical'
+                      AND COALESCE(s.status, 'active') = 'active'
                     ORDER BY c.embedding <=> %s::vector
                     LIMIT %s;
                     """,
