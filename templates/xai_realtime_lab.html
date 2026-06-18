@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>xAI Voice Lab — Text In / Voice Out</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/static/style.css?v=20260514-footer1" />
   <style>
     body {
       margin: 0;
@@ -92,34 +93,44 @@
       border-radius: 0.75rem;
       background: rgba(45, 29, 17, 0.08);
     }
-  
-    .voice-lab-nav {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.75rem;
-      align-items: center;
-      justify-content: center;
+
+
+    .voice-lab-header {
       max-width: 980px;
       margin: 0 auto 1.25rem;
-      padding: 0.75rem 1rem;
-      border: 1px solid rgba(184, 139, 74, 0.35);
-      border-radius: 14px;
-      background: rgba(255, 248, 232, 0.78);
+      text-align: center;
     }
 
-    .voice-lab-nav a {
+    .voice-lab-links {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 0.85rem;
+      font-size: 0.95rem;
+    }
+
+    .voice-lab-links a {
       font-weight: 700;
       color: inherit;
     }
 
   </style>
 </head>
-<body>
-  <nav class="voice-lab-nav" aria-label="Voice lab navigation">
-    <a href="/temple">godincorporated.ai</a>
-    <a href="/admin">Admin Console</a>
-    <a href="/voice-preview">Voice Preview</a>
-  </nav>
+<body class="temple-backdrop-page">
+  <header class="voice-lab-header">
+    <a class="brand-name brand-home-link brand-lockup" href="/temple" aria-label="Return to the Temple">
+      <span class="godinc-wordmark">godincorporated.ai</span>
+    </a>
+    <div class="nav-cross temple-back-cross brand-mark-divider" aria-hidden="true"><span></span><strong><img class="godinc-divider-mark" src="/static/img/godinc-mark.svg?v=20260514-brand2" alt="" aria-hidden="true"></strong><span></span></div>
+    <nav class="voice-lab-links" aria-label="Admin voice lab links">
+      <a href="/admin">Admin Console</a>
+      <a href="/voice-preview">Voice Preview</a>
+    </nav>
+  </header>
+
+
 
 
   <main>
