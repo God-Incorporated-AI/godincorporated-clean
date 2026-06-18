@@ -1708,37 +1708,107 @@ def get_retrieval_backend() -> str:
     return backend
 
 
-def get_pgvector_blend_limits(plan_code: Optional[str], user_id: Optional[str], top_k: Optional[int] = None) -> dict:
+def get_scroll_retrieval_policy(
+    deity: Optional[str],
+    memory_intent: Optional[str],
+    plan_code: Optional[str],
+    user_id: Optional[str],
+    top_k: Optional[int] = None,
+) -> dict:
     """
-    Phase 10.1 controlled pgvector blend.
+    Phase 11.8B smart retrieval blend.
 
-    Personal scrolls are only used for registered users with higher access tiers.
-    Lower tiers stay canonical-only to preserve speed, cost control, and clean first-contact behavior.
+    Retrieval remains privacy-first:
+    - anonymous and lower first-contact tiers stay canonical-only
+    - personal scrolls require a registered user and the 11.8A ownership filters
+    - community is disabled for pgvector until opt-in/community rules are finalized
+
+    Hathor receives a wider symbolic/personal blend.
+    Moses receives a more canonical/law-giving blend.
     """
     plan = normalize_plan_code(plan_code)
-    fallback_limit = top_k or PGVECTOR_RETRIEVAL_LIMIT
+    deity_key = (deity or "").strip().lower()
+    intent_key = (memory_intent or "reflection").strip().lower()
+    fallback_limit = int(top_k or PGVECTOR_RETRIEVAL_LIMIT or 8)
 
-    blend = {
-        "anon": {"personal": 0, "canonical": fallback_limit},
-        "pilgrim": {"personal": 0, "canonical": fallback_limit},
-        "seeker": {"personal": 1, "canonical": 4},
-        "magister": {"personal": 2, "canonical": 4},
-        "sovereign": {"personal": 2, "canonical": 4},
-        "philosophus": {"personal": 2, "canonical": 5},
-        "theoricus": {"personal": 3, "canonical": 5},
-    }.get(plan, {"personal": 0, "canonical": fallback_limit})
+    if not user_id or plan in {"anon", "pilgrim"}:
+        return {
+            "personal": 0,
+            "canonical": fallback_limit,
+            "community": 0,
+            "policy": f"{deity_key or 'default'}:{intent_key}:canonical_only",
+        }
 
-    if not user_id:
-        return {"personal": 0, "canonical": fallback_limit}
+    tier_totals = {
+        "seeker": 5,
+        "magister": 6,
+        "sovereign": 6,
+        "philosophus": 7,
+        "theoricus": 8,
+    }
+    total_limit = min(tier_totals.get(plan, fallback_limit), fallback_limit)
+    total_limit = max(1, int(total_limit))
 
-    return blend
+    if deity_key == "moses":
+        ratios = {
+            "recall": 0.55,
+            "research": 0.05,
+            "reflection": 0.15,
+        }
+        default_ratio = 0.15
+    elif deity_key == "hathor":
+        ratios = {
+            "recall": 0.70,
+            "research": 0.15,
+            "reflection": 0.40,
+        }
+        default_ratio = 0.40
+    else:
+        ratios = {
+            "recall": 0.60,
+            "research": 0.10,
+            "reflection": 0.30,
+        }
+        default_ratio = 0.30
+
+    personal_ratio = ratios.get(intent_key, default_ratio)
+    personal_limit = int((total_limit * personal_ratio) + 0.5)
+
+    if personal_ratio > 0 and personal_limit == 0 and total_limit > 1:
+        personal_limit = 1
+
+    personal_limit = max(0, min(personal_limit, total_limit))
+    canonical_limit = max(0, total_limit - personal_limit)
+
+    return {
+        "personal": personal_limit,
+        "canonical": canonical_limit,
+        "community": 0,
+        "policy": f"{deity_key or 'default'}:{intent_key}:{plan}",
+    }
+
+
+def get_pgvector_blend_limits(plan_code: Optional[str], user_id: Optional[str], top_k: Optional[int] = None) -> dict:
+    """
+    Backward-compatible wrapper for older callers.
+    Prefer get_scroll_retrieval_policy() for deity-aware retrieval.
+    """
+    return get_scroll_retrieval_policy(
+        deity=None,
+        memory_intent="reflection",
+        plan_code=plan_code,
+        user_id=user_id,
+        top_k=top_k,
+    )
 
 
 def retrieve_context_pgvector(
     question: str,
     user_id: Optional[str],
     top_k: Optional[int] = None,
-    plan_code: Optional[str] = None
+    plan_code: Optional[str] = None,
+    deity: Optional[str] = None,
+    memory_intent: Optional[str] = None,
 ):
     """
     Phase 10.1 pgvector retrieval path.
@@ -1747,9 +1817,17 @@ def retrieve_context_pgvector(
     Personal retrieval is available only for registered users and only after personal embeddings exist.
     """
     limit = top_k or PGVECTOR_RETRIEVAL_LIMIT
-    blend_limits = get_pgvector_blend_limits(plan_code, user_id, top_k=limit)
+    blend_limits = get_scroll_retrieval_policy(
+        deity=deity,
+        memory_intent=memory_intent,
+        plan_code=plan_code,
+        user_id=user_id,
+        top_k=limit,
+    )
     personal_limit = int(blend_limits.get("personal", 0) or 0)
     canonical_limit = int(blend_limits.get("canonical", limit) or 0)
+    community_limit = int(blend_limits.get("community", 0) or 0)
+    retrieval_policy = blend_limits.get("policy", "default")
 
     total_started = time.time()
 
@@ -1831,12 +1909,16 @@ def retrieve_context_pgvector(
     total_ms = round((time.time() - total_started) * 1000, 2)
 
     logger.info(
-        "PGVECTOR_RETRIEVAL backend=pgvector user_id_present=%s plan_code=%s limit=%s personal_limit=%s canonical_limit=%s personal_rows=%s canonical_rows=%s rows=%s embed_ms=%s sql_ms=%s total_ms=%s",
+        "PGVECTOR_RETRIEVAL backend=pgvector user_id_present=%s plan_code=%s deity=%s memory_intent=%s policy=%s limit=%s personal_limit=%s canonical_limit=%s community_limit=%s personal_rows=%s canonical_rows=%s rows=%s embed_ms=%s sql_ms=%s total_ms=%s",
         bool(user_id),
         normalize_plan_code(plan_code),
+        deity,
+        memory_intent,
+        retrieval_policy,
         limit,
         personal_limit,
         canonical_limit,
+        community_limit,
         len(personal_rows),
         len(canonical_rows),
         len(rows),
@@ -1860,7 +1942,13 @@ def retrieve_context_pgvector(
 
     return passages
 
-def retrieve_context_embeddings(question: str, user_id: Optional[str]):
+def retrieve_context_embeddings(
+    question: str,
+    user_id: Optional[str],
+    plan_code: Optional[str] = None,
+    deity: Optional[str] = None,
+    memory_intent: Optional[str] = None,
+):
     """
     Phase 6.2 embedding retrieval path.
 
@@ -1877,50 +1965,78 @@ def retrieve_context_embeddings(question: str, user_id: Optional[str]):
     if ranked_passages:
         return ranked_passages
 
-    personal = search_personal_scrolls(user_id, question, limit=4)
-    canonical = search_canonical_scrolls(question, limit=6)
-    community = search_community_scrolls(question, limit=2)
+    policy = get_scroll_retrieval_policy(
+        deity=deity,
+        memory_intent=memory_intent,
+        plan_code=plan_code,
+        user_id=user_id,
+        top_k=8,
+    )
+    personal = search_personal_scrolls(user_id, question, limit=int(policy.get("personal", 0) or 0))
+    canonical = search_canonical_scrolls(question, limit=int(policy.get("canonical", 6) or 0))
+    community = search_community_scrolls(question, limit=int(policy.get("community", 0) or 0))
 
     return personal + canonical + community
 
-def retrieve_context(question: str, user_id: Optional[str]):
+def retrieve_context(
+    question: str,
+    user_id: Optional[str],
+    plan_code: Optional[str] = None,
+    deity: Optional[str] = None,
+    memory_intent: Optional[str] = None,
+):
 
     backend = get_retrieval_backend()
+    policy = get_scroll_retrieval_policy(
+        deity=deity,
+        memory_intent=memory_intent,
+        plan_code=plan_code,
+        user_id=user_id,
+        top_k=PGVECTOR_RETRIEVAL_LIMIT,
+    )
 
     if backend == "pgvector":
         passages = retrieve_context_pgvector(
             question,
             user_id,
             top_k=PGVECTOR_RETRIEVAL_LIMIT,
-            plan_code=getattr(retrieve_context, "_plan_code", None)
+            plan_code=plan_code,
+            deity=deity,
+            memory_intent=memory_intent,
         )
         if passages:
             return passages
 
         logger.warning("PGVECTOR_RETRIEVAL returned no passages; falling back to FTS retrieval")
 
-        personal = search_personal_scrolls(user_id, question, limit=4)
-        canonical = search_canonical_scrolls(question, limit=6)
-        community = search_community_scrolls(question, limit=2)
+        personal = search_personal_scrolls(user_id, question, limit=int(policy.get("personal", 0) or 0))
+        canonical = search_canonical_scrolls(question, limit=int(policy.get("canonical", 6) or 0))
+        community = search_community_scrolls(question, limit=int(policy.get("community", 0) or 0))
 
         return personal + canonical + community
 
     if backend == "fts":
-        personal = search_personal_scrolls(user_id, question, limit=4)
-        canonical = search_canonical_scrolls(question, limit=6)
-        community = search_community_scrolls(question, limit=2)
+        personal = search_personal_scrolls(user_id, question, limit=int(policy.get("personal", 0) or 0))
+        canonical = search_canonical_scrolls(question, limit=int(policy.get("canonical", 6) or 0))
+        community = search_community_scrolls(question, limit=int(policy.get("community", 0) or 0))
 
         return personal + canonical + community
 
     if should_use_embeddings():
-        return retrieve_context_embeddings(question, user_id)
+        return retrieve_context_embeddings(
+            question,
+            user_id,
+            plan_code=plan_code,
+            deity=deity,
+            memory_intent=memory_intent,
+        )
 
-    personal = search_personal_scrolls(user_id, question, limit=4)
-    canonical = search_canonical_scrolls(question, limit=6)
-    community = search_community_scrolls(question, limit=2)
+    personal = search_personal_scrolls(user_id, question, limit=int(policy.get("personal", 0) or 0))
+    canonical = search_canonical_scrolls(question, limit=int(policy.get("canonical", 6) or 0))
+    community = search_community_scrolls(question, limit=int(policy.get("community", 0) or 0))
 
     return personal + canonical + community
-    
+
 def extract_text_from_scroll(file_path):
     text = ""
     ext = os.path.splitext(file_path)[1].lower()
@@ -7416,10 +7532,14 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         if memory_intent != "recall":
             retrieval_started_at = datetime.datetime.now()
-            retrieve_context._plan_code = plan_code
-            passages = retrieve_context(question, user_id)
+            passages = retrieve_context(
+                question,
+                user_id,
+                plan_code=plan_code,
+                deity=deity,
+                memory_intent=memory_intent
+            )
             passages = rank_passages(passages, question)
-            retrieve_context._plan_code = None
             retrieval_finished_at = datetime.datetime.now()
 
 
@@ -7442,10 +7562,14 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         # --— fallback retrieval if recall requested but memory is empty ---
         if memory_intent == "recall" and not memory_block.strip():
             retrieval_started_at = datetime.datetime.now()
-            retrieve_context._plan_code = plan_code
-            passages = retrieve_context(question, user_id)
+            passages = retrieve_context(
+                question,
+                user_id,
+                plan_code=plan_code,
+                deity=deity,
+                memory_intent=memory_intent
+            )
             passages = rank_passages(passages, question, max_items=2)
-            retrieve_context._plan_code = None
             retrieval_finished_at = datetime.datetime.now()
 
         passages_before_llama = list(passages or [])
