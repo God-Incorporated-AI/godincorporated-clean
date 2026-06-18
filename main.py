@@ -1994,6 +1994,18 @@ def retrieve_context(
         user_id=user_id,
         top_k=PGVECTOR_RETRIEVAL_LIMIT,
     )
+    logger.info(
+        "RETRIEVAL_POLICY backend=%s user_id_present=%s plan_code=%s deity=%s memory_intent=%s policy=%s personal_limit=%s canonical_limit=%s community_limit=%s",
+        backend,
+        bool(user_id),
+        normalize_plan_code(plan_code),
+        deity,
+        memory_intent,
+        policy.get("policy", "default"),
+        int(policy.get("personal", 0) or 0),
+        int(policy.get("canonical", 0) or 0),
+        int(policy.get("community", 0) or 0),
+    )
 
     if backend == "pgvector":
         passages = retrieve_context_pgvector(
