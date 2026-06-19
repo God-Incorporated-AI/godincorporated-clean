@@ -1,87 +1,153 @@
-# God Incorporated — Phase 11.8D Reporting, Alerting, Notifications, Backup, and Fallback Plan
+# Phase 11.8 Reporting, Alerting, Backup, and Restore Runbook
 
-This runbook records the Phase 11.8D plan for business reporting, red-flag alerts, production-only notifications, backup discipline, and emergency fallback.
+This runbook records the Phase 11.8 operating plan for business reporting, red-flag alerts, backup discipline, restore confidence, and emergency fallback.
 
-## Operating Principle
+Status: local development baseline. Do not treat this document as evidence that staging or production has been migrated until each environment has been manually verified.
 
-Reports tell us what happened.
+## 1. Operating Principles
 
-Red flags tell us what needs attention.
+God Incorporated has three independent lanes: local development, Render staging, and production.
 
-Notifications tell the right person at the right interval.
+Database migrations do not automatically propagate between environments. Each database must be migrated and verified independently.
 
-## Environment Rules
+Deployment discipline remains: feature/dev branch, staging branch and Render staging deploy, staging acceptance, then production promotion through beta_launch_prod_cutover.
 
-Production is business truth.
+## 2. Backup Scope
 
-Staging is test truth and must be muted.
+A complete operational backup must cover more than code.
 
-Development is local truth and must be log-only unless deliberately overridden.
+Required backup surfaces include the Git repository and branch/tag state, PostgreSQL database, uploaded scroll/source files, reporting and alert tables, environment variable inventory without exposing secrets, Render service configuration, Stripe/customer/payment state when payment work is in scope, and Apple/iOS release state when mobile release work is in scope.
 
-## Notification Policy
+The code repository alone is not a full backup.
 
-Production may send critical alert emails and scheduled digests.
+## 3. PostgreSQL Backup Baseline
 
-Staging may create alert records and muted notification records, but must not send real email.
+Use pg_dump for logical database backups.
 
-Development may create local alert records/logs, but must not send external emails.
+Recommended local pattern:
 
-## Safety Gates
+    mkdir -p local_backups/db
 
-Do not email raw private scroll text.
+    pg_dump --format=custom --no-owner --no-acl \
+      --file="local_backups/db/godinc_dev_$(date +%Y%m%d-%H%M%S).dump" \
+      "$DATABASE_URL"
 
-Do not email raw seeker conversations.
+For staging and production, take backups from the correct environment or provider console. Never assume the local database matches staging or production.
 
-Do not email secrets, API keys, tokens, or payment credentials.
+Before applying migrations in staging or production: confirm the target environment, confirm the current Git SHA, confirm the target database through safe metadata without exposing credentials, take or confirm a current backup, apply migrations, verify table/index existence and row counts, and run smoke tests.
 
-Do not enable production email until staging has proven muted delivery.
+## 4. Restore Baseline
 
-## Core Reports
+Restores should be rehearsed before they are needed.
 
-- Daily business snapshot
-- User and tier report
-- Login and identity report
-- Payment status report
-- Collective payments / financial close report
-- Usage and cost report
-- Oracle quality / dialogue baseline report
-- Scroll / corpus health report
-- Ingestion job report
-- Retrieval performance report
-- Admin action / governance report
-- Data safety / privacy report
-- Deploy report
+Recommended local restore rehearsal pattern:
 
-## Core Alert Areas
+    createdb godinc_restore_test
 
-- Payment failures
-- Provider/cost spikes
-- Scroll ingestion failures
-- Retrieval/privacy mismatches
-- Security and admin events
-- Voice failures
-- Deployment and migration failures
-- Backup and restore failures
+    pg_restore --dbname=godinc_restore_test --no-owner --no-acl \
+      local_backups/db/<backup_file>.dump
 
-## Backup and Fallback
+After restore, verify row counts for users, scrolls, scroll_chunks, ingestion_jobs, report_artifacts, report_runs, alert_events, and notification_deliveries.
 
-The emergency fallback candidate is the dev machine.
+A backup is not considered proven until at least one restore rehearsal has completed successfully.
 
-A useful fallback requires:
+## 5. Uploaded Scroll File Backup
 
-1. Postgres database backup
-2. Uploaded/corpus file backup
-3. Environment/secrets restore path
+Uploaded files are part of the seeker corpus and must be backed up alongside the database.
 
-Database alone is not enough because scroll records point to stored files.
+Minimum checks: confirm upload directory path for each environment, confirm file count, confirm total size, confirm that scrolls.storage_ref values point to real files where applicable, and confirm unreadable queued PDFs marked needs_ocr still retain source files.
 
-## Implementation Order
+Do not delete uploaded source files unless the database row and intended lifecycle are understood.
 
-11.8D.1 — reporting / alerting / backup runbook  
-11.8D.2 — report and alert tables migration  
-11.8D.3 — report/alert helper functions  
-11.8D.4 — muted staging notification delivery  
-11.8D.5 — production critical email delivery  
-11.8D.6 — daily business snapshot job  
+## 6. Ingestion Queue Backup Notes
 
-No staging push until the batch is deliberately chosen.
+Phase 11.8 introduced an ingestion queue lane.
+
+Relevant table: ingestion_jobs.
+
+Important statuses: queued, processing, ready, failed, needs_ocr.
+
+The queue path is conservative: queue mode is off by default, large-file queue mode only activates when explicitly enabled, small files remain synchronous by default, and queued unreadable PDFs preserve the original file and become needs_ocr.
+
+Operational check:
+
+    SELECT status, COUNT(*)
+    FROM ingestion_jobs
+    GROUP BY status
+    ORDER BY status;
+
+A large number of queued or processing rows means ingestion is falling behind. A large number of needs_ocr rows means the OCR/admin handling lane needs attention.
+
+## 7. Reporting and Alert Tables
+
+Phase 11.8 reporting/alerting tables: report_artifacts, report_runs, alert_events, and notification_deliveries.
+
+Admin diagnostic route: GET /admin/reports/reporting-diagnostics.
+
+Daily business snapshot route: POST /admin/reports/daily-business-snapshot.
+
+Reporting tables are operational records. They should be backed up with the database, but they should not contain private seeker conversation payloads unless explicitly designed and reviewed.
+
+## 8. Notification Safety
+
+Default rule: development is muted/log-only, staging is muted/log-only, and production is critical-only email when explicitly enabled.
+
+Suggested environment controls: ALERTS_ENABLED, ALERT_EMAILS_ENABLED, ALERT_EMAIL_MODE, ADMIN_ALERT_EMAILS, REPORTS_FROM_EMAIL, ALERTS_FROM_EMAIL, and ALLOW_EXTERNAL_EMAILS.
+
+Do not enable broad external notification behavior in staging or development.
+
+## 9. Red-Flag Alert Categories
+
+Critical alert candidates include payment webhook failure, subscription/entitlement mismatch, database write failure, upload/ingestion failure spike, repeated queued-job failures, backup failure, restore rehearsal failure, admin route authorization anomaly, excessive API usage/cost spike, and privacy/security anomaly.
+
+Warnings should usually remain dashboard/report items unless repeated or severe.
+
+## 10. Emergency Fallback
+
+If staging or production breaks after deployment: stop and identify current Git SHA, confirm whether the issue is code/database/environment/external provider, avoid additional migrations until the failure class is known, roll back code-only failures to the last accepted SHA, handle migration-related failures with backup/restore or forward fix after review, preserve logs and failing request examples, and record the incident in the reporting/alerting lane.
+
+Production fallback must favor data preservation over speed.
+
+## 11. Pre-Staging Checklist for Phase 11.8 Batch
+
+Before pushing the local Phase 11.8 stack to staging:
+
+1. Confirm clean working tree.
+2. Confirm local HEAD.
+3. Confirm migrations present:
+   - 2026_06_18_phase11_8_ingestion_jobs.sql
+   - 2026_06_18_phase11_8_reporting_alerts.sql
+4. Confirm local migrations applied.
+5. Confirm main.py compiles.
+6. Confirm upload queue defaults off.
+7. Confirm no real external email is enabled.
+8. Confirm staging backup exists or can be taken.
+9. Push feature branch.
+10. Promote to staging branch only after review.
+11. Apply staging migrations manually.
+12. Deploy staging.
+13. Run smoke tests.
+14. Accept staging before production promotion.
+
+## 12. Current Phase 11.8 Local Status
+
+Completed locally above current staging:
+
+1. Deity-aware retrieval policy
+2. Retrieval policy logging
+3. Ingestion job migration
+4. Ingestion job helpers
+5. Reporting/alert table migration
+6. Reporting/alert helpers
+7. Muted notification helpers
+8. Admin reporting diagnostics endpoint
+9. Daily business snapshot generator
+10. Saved-scroll ingestion helper
+11. One-job queued scroll processor
+12. Admin manual queue processor endpoint
+13. Queued unreadable PDF preservation
+14. Optional large-file queued upload mode, off by default
+
+Staging has not yet received this full batch.
+
+Production has not yet received this full batch.
