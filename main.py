@@ -6673,6 +6673,8 @@ def admin_reporting_diagnostics(request: Request):
                 SELECT 'alert_events' AS table_name, COUNT(*) AS total FROM alert_events
                 UNION ALL
                 SELECT 'notification_deliveries' AS table_name, COUNT(*) AS total FROM notification_deliveries
+                UNION ALL
+                SELECT 'ingestion_jobs' AS table_name, COUNT(*) AS total FROM ingestion_jobs
                 ORDER BY table_name
                 """
             )
@@ -6707,6 +6709,16 @@ def admin_reporting_diagnostics(request: Request):
                 """
             )
             notification_deliveries_by_status = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT status, COUNT(*) AS total
+                FROM ingestion_jobs
+                GROUP BY status
+                ORDER BY status
+                """
+            )
+            ingestion_jobs_by_status = cur.fetchall()
 
             cur.execute(
                 """
@@ -6772,6 +6784,7 @@ def admin_reporting_diagnostics(request: Request):
             "ok": True,
             "requested_by": admin_user["user_id"],
             "environment": get_app_environment(),
+            "upload_queue_settings": get_scroll_upload_queue_settings(),
             "email_settings": safe_email_settings,
             "delivery_modes": {
                 "info_email": get_notification_delivery_mode(severity="INFO", channel="email"),
@@ -6782,6 +6795,7 @@ def admin_reporting_diagnostics(request: Request):
             "report_runs_by_status": _admin_report_rows(report_runs_by_status),
             "alert_events_by_status": _admin_report_rows(alert_events_by_status),
             "notification_deliveries_by_status": _admin_report_rows(notification_deliveries_by_status),
+            "ingestion_jobs_by_status": _admin_report_rows(ingestion_jobs_by_status),
             "open_alerts": _admin_report_rows(open_alerts),
             "recent_report_runs": _admin_report_rows(recent_report_runs),
         }
