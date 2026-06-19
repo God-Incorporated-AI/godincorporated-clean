@@ -2807,6 +2807,37 @@ def record_notification_delivery(
 
 
 
+
+def normalize_ingestion_result_payload(result) -> dict:
+    """
+    Normalize ingestion helper results for queued processing.
+
+    ingest_saved_scroll_file may return either a dict or a JSONResponse,
+    especially on duplicate-scroll handling. Queue processing must treat both
+    as valid outcomes instead of failing on result.get().
+    """
+    if isinstance(result, JSONResponse):
+        try:
+            raw_body = result.body.decode("utf-8") if isinstance(result.body, bytes) else result.body
+            payload = json.loads(raw_body) if raw_body else {}
+        except Exception:
+            payload = {
+                "message": "Ingestion returned a JSONResponse that could not be decoded.",
+                "status_code": result.status_code,
+            }
+
+        payload["_response_status_code"] = result.status_code
+        return payload
+
+    if isinstance(result, dict):
+        return result
+
+    return {
+        "message": "Ingestion returned an unexpected result type.",
+        "result_type": type(result).__name__,
+    }
+
+
 def process_one_queued_scroll_ingestion_job() -> dict:
     """
     Claim and process one queued scroll_upload ingestion job.
@@ -2884,7 +2915,8 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             preserve_unreadable_file=True,
         )
 
-        scroll_id = str(result.get("scroll_id")) if result and result.get("scroll_id") else None
+        result_payload = normalize_ingestion_result_payload(result)
+        scroll_id = str(result_payload.get("scroll_id")) if result_payload.get("scroll_id") else None
 
         update_ingestion_job_status(
             job_id,
@@ -2899,7 +2931,7 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             "job_id": job_id,
             "status": "ready",
             "scroll_id": scroll_id,
-            "result": result,
+            "result": result_payload,
         }
 
     except HTTPException as exc:
