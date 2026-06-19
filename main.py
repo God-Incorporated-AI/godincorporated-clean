@@ -2881,6 +2881,7 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             mime_type=mime_type,
             anonymous_user_id=session_id,
             authenticated_user_id=user_id,
+            preserve_unreadable_file=True,
         )
 
         scroll_id = str(result.get("scroll_id")) if result and result.get("scroll_id") else None
@@ -7015,6 +7016,7 @@ def ingest_saved_scroll_file(
     mime_type: Optional[str],
     anonymous_user_id: str,
     authenticated_user_id: Optional[str],
+        preserve_unreadable_file: bool = False,
 ):
     """
     Ingest an already-saved scroll file using the current synchronous behavior.
@@ -7029,7 +7031,8 @@ def ingest_saved_scroll_file(
     extracted_text = extract_text_from_scroll(file_path)
 
     if not extracted_text.strip():
-        remove_uploaded_file(file_path)
+        if not preserve_unreadable_file:
+            remove_uploaded_file(file_path)
         if file_ext == ".pdf":
             raise HTTPException(
                 status_code=422,
