@@ -7016,7 +7016,7 @@ def ingest_saved_scroll_file(
     mime_type: Optional[str],
     anonymous_user_id: str,
     authenticated_user_id: Optional[str],
-        preserve_unreadable_file: bool = False,
+    preserve_unreadable_file: bool = False,
 ):
     """
     Ingest an already-saved scroll file using the current synchronous behavior.
@@ -7231,6 +7231,30 @@ def ingest_saved_scroll_file(
     return response_payload
 
 
+
+def get_scroll_upload_queue_settings() -> dict:
+    """
+    Return upload queue settings.
+
+    Queue mode is intentionally off by default. When enabled, only files at or
+    above the byte threshold are queued; smaller files keep the existing
+    synchronous seeker experience.
+    """
+    enabled = _env_flag("SCROLL_UPLOAD_QUEUE_ENABLED", default=False)
+
+    try:
+        min_bytes = int(os.getenv("SCROLL_UPLOAD_QUEUE_MIN_BYTES", "500000"))
+    except (TypeError, ValueError):
+        min_bytes = 500000
+
+    min_bytes = max(1, min_bytes)
+
+    return {
+        "enabled": enabled,
+        "min_bytes": min_bytes,
+    }
+
+
 @app.post("/upload_scroll")
 async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
     anonymous_user_id = anonymous_user_id or get_or_create_session_id(request)
@@ -7293,6 +7317,44 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
     file_path = os.path.join(UPLOAD_DIR, safe_name)
     with open(file_path, "wb") as f:
         shutil.copyfileobj(scroll.file, f)
+
+    queue_settings = get_scroll_upload_queue_settings()
+    file_size_bytes = os.path.getsize(file_path)
+
+    if queue_settings["enabled"] and file_size_bytes >= queue_settings["min_bytes"]:
+        corpus_layer = "personal" if authenticated_user_id else "community"
+        job_id = create_ingestion_job(
+            session_id=anonymous_user_id,
+            user_id=authenticated_user_id,
+            job_type="scroll_upload",
+            status="queued",
+            original_filename=scroll.filename,
+            storage_ref=safe_name,
+            mime_type=scroll.content_type,
+            corpus_layer=corpus_layer,
+        )
+
+        logger.info(
+            "SCROLL_UPLOAD_QUEUED anonymous_user_id=%s authenticated_user_present=%s filename=%s size_bytes=%s job_id=%s",
+            anonymous_user_id,
+            bool(authenticated_user_id),
+            scroll.filename,
+            file_size_bytes,
+            job_id,
+        )
+
+        return JSONResponse(
+            content={
+                "message": "Scroll received. The Temple is reading it in the background.",
+                "queued": True,
+                "status": "queued",
+                "job_id": str(job_id),
+                "filename": scroll.filename,
+                "file_size_bytes": file_size_bytes,
+                "queue_min_bytes": queue_settings["min_bytes"],
+            },
+            status_code=202,
+        )
 
     return ingest_saved_scroll_file(
         file_path=file_path,
