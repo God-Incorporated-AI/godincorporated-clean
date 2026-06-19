@@ -325,7 +325,7 @@ def get_llama_observation(question: str, oracle_used: str, answer: str, scrolls:
         suggested_oracle = "none"
         confidence = 0.5
         reason = "No strong stylistic indicators detected"
-    
+
     return {
         "suggested_oracle": suggested_oracle,
         "confidence": confidence,
@@ -1069,8 +1069,8 @@ async def get_oracle_response(
         Do not use **bold**, headings, bullet lists, numbered lists, or decorative symbols unless the seeker explicitly asks for structure.
         End with a complete sentence.
         """
-        
-        
+
+
         hathor_provider, hathor_route_reason = choose_hathor_provider(
             plan_code=plan_code,
             input_mode=input_mode
@@ -1212,7 +1212,7 @@ async def get_oracle_response(
 
         Use the background wisdom provided, but do not cite it explicitly.
         """
-        
+
         response = client.chat.completions.create(
             model=moses_model,  # Updated model
             messages=[
@@ -1255,7 +1255,7 @@ def architect_observe_v3(question: str, deity: str, session_id: str) -> dict:
     oracle_authoritative = True
     notes = "All constraints honored"
     timestamp = datetime.datetime.now().isoformat()
-    
+
     return {
         "phase": "3.0",
         "role": "observer",
@@ -1608,7 +1608,7 @@ def get_session_memory(session_id: str, depth: Optional[int]):
     finally:
         conn.close()
 
-   
+
     history = []
 
     for r in reversed(rows):
@@ -2861,7 +2861,7 @@ def reset_scroll_system():
         file_path = os.path.join(UPLOAD_DIR, filename)
         if os.path.isfile(file_path):
             os.remove(file_path)
-    
+
 
 def ensure_anonymous_user(anonymous_user_id: str):
     """Ensure the anonymous user exists in the database and update last_seen."""
@@ -2869,10 +2869,10 @@ def ensure_anonymous_user(anonymous_user_id: str):
     with conn.cursor() as cur:
         cur.execute("SELECT id FROM anonymous_users WHERE id = %s", (anonymous_user_id,))
         if not cur.fetchone():
-            cur.execute("INSERT INTO anonymous_users (id, created_at, last_seen) VALUES (%s, %s, %s)", 
+            cur.execute("INSERT INTO anonymous_users (id, created_at, last_seen) VALUES (%s, %s, %s)",
                         (anonymous_user_id, datetime.datetime.utcnow(), datetime.datetime.utcnow()))
         else:
-            cur.execute("UPDATE anonymous_users SET last_seen = %s WHERE id = %s", 
+            cur.execute("UPDATE anonymous_users SET last_seen = %s WHERE id = %s",
                         (datetime.datetime.utcnow(), anonymous_user_id))
     conn.commit()
     conn.close()
@@ -2881,7 +2881,7 @@ def resolve_seeker_id(anonymous_user_id: str, provided_seeker_id: Optional[str] 
     """Resolve seeker_id with precedence: provided > None (since no claims)"""
     if provided_seeker_id:
         return provided_seeker_id
-    
+
     return None
 
 def resolve_identity_state(anonymous_user_id: str) -> dict:
@@ -5917,7 +5917,7 @@ def admin_backfill_embeddings(request: Request, limit: int = 500, offset: int = 
             "admin_user_id": admin_user["user_id"],
             "result": result
         }
-    
+
     except Exception as e:
         logger.error(f"Backfill embeddings error: {e}")
         return JSONResponse(
@@ -6018,30 +6018,30 @@ def auth_register(payload: AuthRegisterInput, request: Request):
     email = payload.email.lower().strip()
     password = payload.password
     display_name = payload.display_name.strip()
-    
+
     # Validate display_name
     if not re.match(r'^[A-Za-z0-9_]{2,24}$', display_name):
         return JSONResponse(content={"error": "Invalid display name format"}, status_code=400)
-    
+
     # Validate password strength (basic)
     if len(password) < 8:
         return JSONResponse(content={"error": "Password must be at least 8 characters"}, status_code=400)
-    
+
     if len(password.encode("utf-8")) > 72:
         return JSONResponse(
             content={"error": "Password must be 72 bytes or fewer."},
             status_code=400
         )
-    
+
     conn = get_db_connection()
-    
+
     # Check if email already exists
     with conn.cursor() as cur:
         cur.execute("SELECT id FROM users WHERE email = %s", (email,))
         if cur.fetchone():
             conn.close()
             return JSONResponse(content={"error": "Email already registered"}, status_code=409)
-    
+
     # Check display_name uniqueness (case-insensitive)
     with conn.cursor() as cur:
         cur.execute(
@@ -6051,14 +6051,14 @@ def auth_register(payload: AuthRegisterInput, request: Request):
         if cur.fetchone():
             conn.close()
             return JSONResponse(content={"error": "Display name already taken"}, status_code=409)
-    
+
     # Create user
     user_id = str(uuid.uuid4())
     seeker_id = str(uuid.uuid4())
     hashed_password = hash_password(password)
     verification_token = str(uuid.uuid4())
     created_at = datetime.datetime.now(timezone.utc)
-    
+
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO users (
@@ -6103,11 +6103,11 @@ def auth_register(payload: AuthRegisterInput, request: Request):
 
     session_id = get_or_create_session_id(request)
     merge_anonymous_history_into_user(session_id, user_id)
-    
+
     # Build verification link
     app_base_url = os.getenv("APP_BASE_URL", os.getenv("BASE_URL", "http://localhost:8000"))
     verification_link = f"{app_base_url}/auth/verify-email?token={verification_token}"
-    
+
     # Send verification email
     try:
         send_email(
@@ -6176,7 +6176,7 @@ def auth_login(payload: AuthLoginInput, request: Request):
 
     return {"message": "Login successful"}
 
-       
+
 @app.post("/auth/logout")
 def auth_logout(request: Request):
     request.session.clear()
@@ -6291,12 +6291,12 @@ def auth_reset_password(
 @app.post("/auth/request-password-reset")
 def auth_request_password_reset(payload: PasswordResetRequestInput):
     email = payload.email.lower().strip()
-    
+
     conn = get_db_connection()
     with conn.cursor() as cur:
         cur.execute("SELECT id FROM users WHERE email = %s", (email,))
         result = cur.fetchone()
-    
+
     # Always return success to prevent user enumeration
     if result:
         user_id = result["id"]
@@ -6310,11 +6310,11 @@ def auth_request_password_reset(payload: PasswordResetRequestInput):
                 (token, expires_at, user_id)
             )
         conn.commit()
-        
+
         # Build reset link
         app_base_url = os.getenv("APP_BASE_URL", "http://localhost:8000")
         reset_url = f"{app_base_url}/auth/reset-password?token={token}"
-        
+
         subject = "Reset your God Incorporated password"
         html = f"""
 <p>You requested a password reset.</p>
@@ -6332,7 +6332,7 @@ def auth_request_password_reset(payload: PasswordResetRequestInput):
             )
         except Exception as e:
             print("Email send failed:", str(e))
-    
+
     conn.close()
     return {"message": "If that email exists, a reset link has been sent."}
 
@@ -6851,69 +6851,23 @@ def admin_set_user_role(request: Request, payload: AdminSetRoleInput):
         "user": row
     }
 
-@app.post("/upload_scroll")
-async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
-    anonymous_user_id = anonymous_user_id or get_or_create_session_id(request)
-    ensure_anonymous_user(anonymous_user_id)
 
-    user = get_current_user(request)
-    authenticated_user_id = user["user_id"] if user else None
+def ingest_saved_scroll_file(
+    *,
+    file_path: str,
+    safe_name: str,
+    original_filename: str,
+    mime_type: Optional[str],
+    anonymous_user_id: str,
+    authenticated_user_id: Optional[str],
+):
+    """
+    Ingest an already-saved scroll file using the current synchronous behavior.
 
-    if not authenticated_user_id:
-        stats = get_anonymous_upload_stats(anonymous_user_id)
-        upload_count = stats["upload_count"]
-        last_uploaded_at = stats["last_uploaded_at"]
-
-        if upload_count >= ANONYMOUS_UPLOAD_LIMIT:
-            logger.warning(
-                "Anonymous upload cap hit ip_hash=%s anonymous_user_id=%s upload_count=%s",
-                get_ip_hash(request),
-                anonymous_user_id,
-                upload_count,
-            )
-            return JSONResponse(
-                content={
-                    "error": "Anonymous upload limit reached for this browser. Claim this path to continue offering scrolls.",
-                    "claim_required": True,
-                    "upload_count_for_browser": upload_count,
-                    "continuity_nudges": build_claim_nudges(upload_count),
-                    "anonymous_upload_limit": ANONYMOUS_UPLOAD_LIMIT,
-                },
-                status_code=403
-            )
-
-        if last_uploaded_at:
-            if last_uploaded_at.tzinfo is None:
-                last_uploaded_at = last_uploaded_at.replace(tzinfo=timezone.utc)
-
-            elapsed = (utc_now() - last_uploaded_at).total_seconds()
-            if elapsed < ANONYMOUS_UPLOAD_COOLDOWN_SECONDS:
-                seconds_remaining = max(1, int(ANONYMOUS_UPLOAD_COOLDOWN_SECONDS - elapsed + 0.999))
-                logger.warning(
-                    "Anonymous upload cooldown hit ip_hash=%s anonymous_user_id=%s upload_count=%s seconds_remaining=%s",
-                    get_ip_hash(request),
-                    anonymous_user_id,
-                    upload_count,
-                    seconds_remaining,
-                )
-                return JSONResponse(
-                    content={
-                        "error": "Please wait a few seconds before offering another scroll.",
-                        "warning": "We’re slowing repeated uploads to protect the Temple. Please wait a moment before trying again.",
-                        "cooldown_seconds_remaining": seconds_remaining,
-                        "upload_count_for_browser": upload_count,
-                    },
-                    status_code=429
-                )
-
-    seeker_id = resolve_seeker_id(anonymous_user_id, seeker_id)
-        
-    # Save the file with safe name to prevent overwrites
-    safe_name = f"{uuid.uuid4()}_{scroll.filename}"
-    file_path = os.path.join(UPLOAD_DIR, safe_name)
-    with open(file_path, "wb") as f:
-        shutil.copyfileobj(scroll.file, f)
-
+    Phase 11.8E.1 only extracts the existing /upload_scroll ingestion path into
+    a reusable helper. It does not enable queued public uploads yet.
+    Future queued workers should call this same helper after claiming a job.
+    """
     file_ext = os.path.splitext(file_path)[1].lower()
 
     # Extract text
@@ -6932,7 +6886,7 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
 
     # Determine corpus layer
     corpus_layer = "personal" if authenticated_user_id else "community"
-    
+
     # Insert scroll into database
     word_count = len(extracted_text.split())
 
@@ -6974,8 +6928,8 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
                     anonymous_user_id,
                     authenticated_user_id,
                     "file",
-                    scroll.filename,
-                    scroll.content_type,
+                    original_filename,
+                    mime_type,
                     safe_name,
                     extracted_text,
                     text_hash,
@@ -7117,6 +7071,79 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
         response_payload["anonymous_upload_limit"] = ANONYMOUS_UPLOAD_LIMIT
 
     return response_payload
+
+
+@app.post("/upload_scroll")
+async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
+    anonymous_user_id = anonymous_user_id or get_or_create_session_id(request)
+    ensure_anonymous_user(anonymous_user_id)
+
+    user = get_current_user(request)
+    authenticated_user_id = user["user_id"] if user else None
+
+    if not authenticated_user_id:
+        stats = get_anonymous_upload_stats(anonymous_user_id)
+        upload_count = stats["upload_count"]
+        last_uploaded_at = stats["last_uploaded_at"]
+
+        if upload_count >= ANONYMOUS_UPLOAD_LIMIT:
+            logger.warning(
+                "Anonymous upload cap hit ip_hash=%s anonymous_user_id=%s upload_count=%s",
+                get_ip_hash(request),
+                anonymous_user_id,
+                upload_count,
+            )
+            return JSONResponse(
+                content={
+                    "error": "Anonymous upload limit reached for this browser. Claim this path to continue offering scrolls.",
+                    "claim_required": True,
+                    "upload_count_for_browser": upload_count,
+                    "continuity_nudges": build_claim_nudges(upload_count),
+                    "anonymous_upload_limit": ANONYMOUS_UPLOAD_LIMIT,
+                },
+                status_code=403
+            )
+
+        if last_uploaded_at:
+            if last_uploaded_at.tzinfo is None:
+                last_uploaded_at = last_uploaded_at.replace(tzinfo=timezone.utc)
+
+            elapsed = (utc_now() - last_uploaded_at).total_seconds()
+            if elapsed < ANONYMOUS_UPLOAD_COOLDOWN_SECONDS:
+                seconds_remaining = max(1, int(ANONYMOUS_UPLOAD_COOLDOWN_SECONDS - elapsed + 0.999))
+                logger.warning(
+                    "Anonymous upload cooldown hit ip_hash=%s anonymous_user_id=%s upload_count=%s seconds_remaining=%s",
+                    get_ip_hash(request),
+                    anonymous_user_id,
+                    upload_count,
+                    seconds_remaining,
+                )
+                return JSONResponse(
+                    content={
+                        "error": "Please wait a few seconds before offering another scroll.",
+                        "warning": "We’re slowing repeated uploads to protect the Temple. Please wait a moment before trying again.",
+                        "cooldown_seconds_remaining": seconds_remaining,
+                        "upload_count_for_browser": upload_count,
+                    },
+                    status_code=429
+                )
+
+    seeker_id = resolve_seeker_id(anonymous_user_id, seeker_id)
+
+    # Save the file with safe name to prevent overwrites
+    safe_name = f"{uuid.uuid4()}_{scroll.filename}"
+    file_path = os.path.join(UPLOAD_DIR, safe_name)
+    with open(file_path, "wb") as f:
+        shutil.copyfileobj(scroll.file, f)
+
+    return ingest_saved_scroll_file(
+        file_path=file_path,
+        safe_name=safe_name,
+        original_filename=scroll.filename,
+        mime_type=scroll.content_type,
+        anonymous_user_id=anonymous_user_id,
+        authenticated_user_id=authenticated_user_id,
+    )
 
 class AdminEntitlementOverrideInput(BaseModel):
     user_id: str
@@ -8543,8 +8570,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             content={
             "oracle_message": "The Oracle grows quiet. To continue the dialogue, please log in or support the Temple."
         },
-        status_code=429        
-        )   
+        status_code=429
+        )
 
     try:
         ask_started_at = datetime.datetime.now()
@@ -8610,7 +8637,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             retrieval_finished_at = datetime.datetime.now()
 
 
-        
+
         # --— structured memory weighting ---
         memory_block = ""
 
@@ -9040,7 +9067,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "question": question,
             "answer": raw_answer
         }
-       
+
     except Exception as e:
         logger.error(f"Oracle endpoint error: {e}")
         return JSONResponse(content={"error": str(e)}, status_code=500)
