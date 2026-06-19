@@ -6337,6 +6337,163 @@ def auth_request_password_reset(payload: PasswordResetRequestInput):
     return {"message": "If that email exists, a reset link has been sent."}
 
 
+
+def generate_daily_business_snapshot(
+    days: int = 1,
+    environment: Optional[str] = None,
+    git_sha: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Generate a safe daily business snapshot report.
+
+    This creates report/artifact records only. It does not email, schedule,
+    expose private scroll text, or expose seeker conversations.
+    """
+    env = environment or get_app_environment()
+    safe_days = max(1, min(int(days or 1), 30))
+
+    run = create_report_run(
+        report_key="daily_business_snapshot",
+        status="processing",
+        environment=env,
+        git_sha=git_sha,
+        metadata_json={
+            "days": safe_days,
+            "source": "generate_daily_business_snapshot",
+        },
+    )
+
+    if not run:
+        create_alert_event(
+            alert_key="report_run_create_failed",
+            fingerprint=f"daily_business_snapshot:{env}",
+            severity="CRITICAL",
+            title="Daily business snapshot report run could not be created",
+            message="create_report_run returned no row.",
+            environment=env,
+            metadata_json={"report_key": "daily_business_snapshot"},
+        )
+        return None
+
+    try:
+        overview = get_admin_reporting_overview(days=safe_days)
+        usage_summary = get_admin_usage_summary(days=safe_days)
+        diagnostics = {
+            "environment": env,
+            "days": safe_days,
+            "email_settings": {
+                key: value
+                for key, value in get_report_email_settings().items()
+                if key != "admin_alert_emails"
+            },
+            "delivery_modes": {
+                "info_email": get_notification_delivery_mode(severity="INFO", channel="email"),
+                "warn_email": get_notification_delivery_mode(severity="WARN", channel="email"),
+                "critical_email": get_notification_delivery_mode(severity="CRITICAL", channel="email"),
+            },
+        }
+
+        summary = {
+            "report_key": "daily_business_snapshot",
+            "environment": env,
+            "days": safe_days,
+            "overview": overview,
+            "usage_summary": usage_summary,
+            "diagnostics": diagnostics,
+        }
+
+        artifact = create_report_artifact(
+            report_key="daily_business_snapshot",
+            format="json",
+            environment=env,
+            storage_ref=None,
+            summary_json=summary,
+        )
+
+        if not artifact:
+            raise RuntimeError("create_report_artifact returned no row")
+
+        finished = finish_report_run(
+            report_run_id=str(run["id"]),
+            status="completed",
+            artifact_id=str(artifact["id"]),
+            metadata_json={
+                "days": safe_days,
+                "artifact_id": str(artifact["id"]),
+            },
+        )
+
+        if not finished:
+            raise RuntimeError("finish_report_run returned no row")
+
+        return {
+            "ok": True,
+            "report_run": finished,
+            "artifact": artifact,
+            "summary": summary,
+        }
+
+    except Exception as exc:
+        logging.exception("DAILY_BUSINESS_SNAPSHOT_FAILED env=%s days=%s", env, safe_days)
+
+        finish_report_run(
+            report_run_id=str(run["id"]),
+            status="failed",
+            error_message=str(exc),
+            metadata_json={
+                "days": safe_days,
+                "error": str(exc),
+            },
+        )
+
+        alert = create_alert_event(
+            alert_key="daily_business_snapshot_failed",
+            fingerprint=f"daily_business_snapshot:{env}",
+            severity="CRITICAL",
+            title="Daily business snapshot failed",
+            message=str(exc),
+            environment=env,
+            metadata_json={
+                "report_key": "daily_business_snapshot",
+                "days": safe_days,
+            },
+        )
+
+        if alert:
+            record_alert_notification(
+                alert_event=alert,
+                channel="email",
+                metadata_json={
+                    "source": "generate_daily_business_snapshot",
+                    "expected_local_status": "muted",
+                },
+            )
+
+        return None
+
+
+@app.post("/admin/reports/daily-business-snapshot")
+def admin_generate_daily_business_snapshot(request: Request, days: int = 1):
+    """
+    Admin-only manual trigger for the daily business snapshot.
+
+    This creates private report records only. It does not send email.
+    """
+    admin_user = require_admin(request)
+    result = generate_daily_business_snapshot(days=days)
+
+    if not result:
+        raise HTTPException(status_code=500, detail="Daily business snapshot failed")
+
+    return {
+        "ok": True,
+        "requested_by": admin_user["user_id"],
+        "report_run": _admin_report_row(result["report_run"]),
+        "artifact": _admin_report_row(result["artifact"]),
+        "summary": result["summary"],
+    }
+
+
 @app.get("/admin/reports/reporting-diagnostics")
 def admin_reporting_diagnostics(request: Request):
     """
