@@ -6336,6 +6336,147 @@ def auth_request_password_reset(payload: PasswordResetRequestInput):
     conn.close()
     return {"message": "If that email exists, a reset link has been sent."}
 
+
+@app.get("/admin/reports/reporting-diagnostics")
+def admin_reporting_diagnostics(request: Request):
+    """
+    Admin-only diagnostics for the reporting/alerting rail.
+
+    Safe operational state only. No private scroll text, seeker dialogue,
+    secrets, or email sending.
+    """
+    admin_user = require_admin(request)
+    conn = None
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT 'report_artifacts' AS table_name, COUNT(*) AS total FROM report_artifacts
+                UNION ALL
+                SELECT 'report_runs' AS table_name, COUNT(*) AS total FROM report_runs
+                UNION ALL
+                SELECT 'alert_events' AS table_name, COUNT(*) AS total FROM alert_events
+                UNION ALL
+                SELECT 'notification_deliveries' AS table_name, COUNT(*) AS total FROM notification_deliveries
+                ORDER BY table_name
+                """
+            )
+            table_counts = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT status, COUNT(*) AS total
+                FROM report_runs
+                GROUP BY status
+                ORDER BY status
+                """
+            )
+            report_runs_by_status = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT status, severity, COUNT(*) AS total
+                FROM alert_events
+                GROUP BY status, severity
+                ORDER BY status, severity
+                """
+            )
+            alert_events_by_status = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT status, channel, COUNT(*) AS total
+                FROM notification_deliveries
+                GROUP BY status, channel
+                ORDER BY status, channel
+                """
+            )
+            notification_deliveries_by_status = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    alert_key,
+                    fingerprint,
+                    environment,
+                    severity,
+                    status,
+                    title,
+                    first_seen_at,
+                    last_seen_at,
+                    count
+                FROM alert_events
+                WHERE status = 'open'
+                ORDER BY last_seen_at DESC
+                LIMIT 10
+                """
+            )
+            open_alerts = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    report_key,
+                    environment,
+                    status,
+                    period_start,
+                    period_end,
+                    started_at,
+                    finished_at,
+                    error_message,
+                    artifact_id,
+                    git_sha,
+                    created_at
+                FROM report_runs
+                ORDER BY created_at DESC
+                LIMIT 10
+                """
+            )
+            recent_report_runs = cur.fetchall()
+
+        settings = get_report_email_settings()
+
+        # Do not expose recipient email lists broadly; this is admin-only, but keep it summarized.
+        safe_email_settings = {
+            "environment": settings.get("environment"),
+            "reports_from_email": settings.get("reports_from_email"),
+            "alerts_from_email": settings.get("alerts_from_email"),
+            "admin_alert_email_count": len(settings.get("admin_alert_emails") or []),
+            "alerts_enabled": settings.get("alerts_enabled"),
+            "alert_emails_enabled": settings.get("alert_emails_enabled"),
+            "alert_email_mode": settings.get("alert_email_mode"),
+            "allow_external_emails": settings.get("allow_external_emails"),
+            "staging_notifications_muted": settings.get("staging_notifications_muted"),
+            "dev_notifications_muted": settings.get("dev_notifications_muted"),
+            "external_email_allowed": settings.get("external_email_allowed"),
+        }
+
+        return {
+            "ok": True,
+            "requested_by": admin_user["user_id"],
+            "environment": get_app_environment(),
+            "email_settings": safe_email_settings,
+            "delivery_modes": {
+                "info_email": get_notification_delivery_mode(severity="INFO", channel="email"),
+                "warn_email": get_notification_delivery_mode(severity="WARN", channel="email"),
+                "critical_email": get_notification_delivery_mode(severity="CRITICAL", channel="email"),
+            },
+            "counts": _admin_report_rows(table_counts),
+            "report_runs_by_status": _admin_report_rows(report_runs_by_status),
+            "alert_events_by_status": _admin_report_rows(alert_events_by_status),
+            "notification_deliveries_by_status": _admin_report_rows(notification_deliveries_by_status),
+            "open_alerts": _admin_report_rows(open_alerts),
+            "recent_report_runs": _admin_report_rows(recent_report_runs),
+        }
+
+    finally:
+        if conn:
+            conn.close()
+
 @app.get("/admin/reports/overview")
 def admin_reports_overview(
     request: Request,
