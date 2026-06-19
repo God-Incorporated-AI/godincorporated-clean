@@ -6017,6 +6017,33 @@ def health_db():
             status_code=500
         )
 
+
+@app.post("/admin/ingestion/process-one-scroll")
+def admin_process_one_scroll_ingestion_job(request: Request):
+    """
+    Admin-only manual processor for one queued scroll ingestion job.
+
+    This does not start a background worker and does not change public upload
+    behavior. It lets staging/dev process one queued job deliberately.
+    """
+    admin_user = require_admin(request)
+    result = process_one_queued_scroll_ingestion_job()
+
+    log_admin_action(
+        admin_user_id=admin_user["user_id"],
+        action_type="admin.ingestion.process_one_scroll",
+        payload={
+            "result": result,
+        }
+    )
+
+    return {
+        "ok": True,
+        "requested_by": admin_user["user_id"],
+        "result": result,
+    }
+
+
 @app.post("/admin/backfill_embeddings")
 def admin_backfill_embeddings(request: Request, limit: int = 500, offset: int = 0):
     admin_user = require_admin(request)
