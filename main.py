@@ -2806,6 +2806,134 @@ def record_notification_delivery(
             conn.close()
 
 
+
+def process_one_queued_scroll_ingestion_job() -> dict:
+    """
+    Claim and process one queued scroll_upload ingestion job.
+
+    This helper is not automatic. It is intended for manual/admin processing
+    first so the queue path can be tested without changing public upload behavior.
+    """
+    job = get_next_queued_ingestion_job("scroll_upload")
+    if not job:
+        return {
+            "ok": True,
+            "processed": False,
+            "reason": "no_queued_jobs",
+        }
+
+    job_id = str(job["id"])
+    storage_ref = job.get("storage_ref")
+    original_filename = job.get("original_filename") or storage_ref or "queued_scroll"
+    mime_type = job.get("mime_type")
+    session_id = str(job["session_id"]) if job.get("session_id") else None
+    user_id = str(job["user_id"]) if job.get("user_id") else None
+
+    if not storage_ref:
+        update_ingestion_job_status(
+            job_id,
+            "failed",
+            error_message="Queued ingestion job missing storage_ref",
+        )
+        return {
+            "ok": False,
+            "processed": False,
+            "job_id": job_id,
+            "status": "failed",
+            "error": "missing_storage_ref",
+        }
+
+    if not session_id:
+        update_ingestion_job_status(
+            job_id,
+            "failed",
+            error_message="Queued ingestion job missing session_id",
+        )
+        return {
+            "ok": False,
+            "processed": False,
+            "job_id": job_id,
+            "status": "failed",
+            "error": "missing_session_id",
+        }
+
+    file_path = os.path.join(UPLOAD_DIR, storage_ref)
+
+    if not os.path.exists(file_path):
+        update_ingestion_job_status(
+            job_id,
+            "failed",
+            error_message=f"Queued ingestion file missing: {storage_ref}",
+        )
+        return {
+            "ok": False,
+            "processed": False,
+            "job_id": job_id,
+            "status": "failed",
+            "error": "missing_file",
+        }
+
+    try:
+        result = ingest_saved_scroll_file(
+            file_path=file_path,
+            safe_name=storage_ref,
+            original_filename=original_filename,
+            mime_type=mime_type,
+            anonymous_user_id=session_id,
+            authenticated_user_id=user_id,
+        )
+
+        scroll_id = str(result.get("scroll_id")) if result and result.get("scroll_id") else None
+
+        update_ingestion_job_status(
+            job_id,
+            "ready",
+            scroll_id=scroll_id,
+            error_message=None,
+        )
+
+        return {
+            "ok": True,
+            "processed": True,
+            "job_id": job_id,
+            "status": "ready",
+            "scroll_id": scroll_id,
+            "result": result,
+        }
+
+    except HTTPException as exc:
+        status = "needs_ocr" if exc.status_code == 422 else "failed"
+        update_ingestion_job_status(
+            job_id,
+            status,
+            error_message=str(exc.detail),
+        )
+
+        return {
+            "ok": False,
+            "processed": True,
+            "job_id": job_id,
+            "status": status,
+            "error": str(exc.detail),
+        }
+
+    except Exception as exc:
+        logging.exception("QUEUED_SCROLL_INGESTION_FAILED job_id=%s", job_id)
+        update_ingestion_job_status(
+            job_id,
+            "failed",
+            error_message=str(exc),
+        )
+
+        return {
+            "ok": False,
+            "processed": True,
+            "job_id": job_id,
+            "status": "failed",
+            "error": str(exc),
+        }
+
+
 def extract_text_from_scroll(file_path):
     text = ""
     ext = os.path.splitext(file_path)[1].lower()
