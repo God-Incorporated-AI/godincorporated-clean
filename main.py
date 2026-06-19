@@ -2325,6 +2325,157 @@ def is_external_email_allowed() -> bool:
     return True
 
 
+
+def _split_email_list(raw: Optional[str]) -> list[str]:
+    """Split comma/semicolon separated email list into clean entries."""
+    if not raw:
+        return []
+    parts = re.split(r"[,;]", raw)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def get_report_email_settings() -> dict:
+    """
+    Return report/alert email settings without sending anything.
+
+    reports@godincorporated.ai is the planned sender/archive mailbox.
+    """
+    reports_from = os.getenv("REPORTS_FROM_EMAIL", "reports@godincorporated.ai").strip()
+    alerts_from = os.getenv("ALERTS_FROM_EMAIL", reports_from).strip()
+    admin_recipients = _split_email_list(os.getenv("ADMIN_ALERT_EMAILS", ""))
+
+    return {
+        "environment": get_app_environment(),
+        "reports_from_email": reports_from,
+        "alerts_from_email": alerts_from,
+        "admin_alert_emails": admin_recipients,
+        "alerts_enabled": _env_flag("ALERTS_ENABLED", default=False),
+        "alert_emails_enabled": _env_flag("ALERT_EMAILS_ENABLED", default=False),
+        "alert_email_mode": (os.getenv("ALERT_EMAIL_MODE") or "muted").strip().lower(),
+        "allow_external_emails": _env_flag("ALLOW_EXTERNAL_EMAILS", default=False),
+        "staging_notifications_muted": _env_flag("STAGING_NOTIFICATIONS_MUTED", default=True),
+        "dev_notifications_muted": _env_flag("DEV_NOTIFICATIONS_MUTED", default=True),
+        "external_email_allowed": is_external_email_allowed(),
+    }
+
+
+def get_notification_delivery_mode(
+    severity: str = "INFO",
+    channel: str = "email",
+) -> str:
+    """
+    Decide notification handling without sending.
+
+    Returns:
+      muted  - record only, no external delivery
+      digest - future digest queue path
+      queued - future immediate send queue path
+    """
+    env = get_app_environment()
+    channel = (channel or "email").strip().lower()
+    severity = (severity or "INFO").strip().upper()
+
+    if channel != "email":
+        return "muted"
+
+    if env == "staging" and _env_flag("STAGING_NOTIFICATIONS_MUTED", default=True):
+        return "muted"
+
+    if env in {"development", "local", "dev"} and _env_flag("DEV_NOTIFICATIONS_MUTED", default=True):
+        return "muted"
+
+    if not is_external_email_allowed():
+        return "muted"
+
+    mode = (os.getenv("ALERT_EMAIL_MODE") or "muted").strip().lower()
+
+    if mode == "all":
+        return "queued"
+
+    if mode == "critical_only":
+        return "queued" if severity == "CRITICAL" else "muted"
+
+    if mode == "digest_only":
+        return "digest"
+
+    return "muted"
+
+
+def record_alert_notification(
+    alert_event: dict,
+    channel: str = "email",
+    recipient: Optional[str] = None,
+    metadata_json: Optional[dict] = None,
+) -> Optional[dict]:
+    """
+    Record notification delivery intent for an alert.
+
+    This helper intentionally does not send email. In staging/dev it should
+    record status=muted. In production with gates enabled, it may record
+    status=queued for a future sender to process.
+    """
+    if not alert_event:
+        return None
+
+    alert_event_id = str(alert_event.get("id")) if alert_event.get("id") else None
+    severity = alert_event.get("severity", "INFO")
+    delivery_mode = get_notification_delivery_mode(severity=severity, channel=channel)
+
+    status = {
+        "queued": "queued",
+        "digest": "queued_digest",
+        "muted": "muted",
+    }.get(delivery_mode, "muted")
+
+    settings = get_report_email_settings()
+    payload = {
+        "delivery_mode": delivery_mode,
+        "environment": settings.get("environment"),
+        "severity": severity,
+        "alert_key": alert_event.get("alert_key"),
+        "fingerprint": alert_event.get("fingerprint"),
+    }
+
+    if metadata_json:
+        payload.update(metadata_json)
+
+    if recipient is None:
+        recipients = settings.get("admin_alert_emails") or []
+        recipient = recipients[0] if recipients else None
+
+    return record_notification_delivery(
+        alert_event_id=alert_event_id,
+        channel=channel,
+        recipient=recipient,
+        status=status,
+        metadata_json=payload,
+    )
+
+
+def record_muted_notification(
+    alert_event_id: Optional[str],
+    channel: str = "email",
+    recipient: Optional[str] = None,
+    reason: str = "notifications_muted",
+    metadata_json: Optional[dict] = None,
+) -> Optional[dict]:
+    """Explicitly record a muted notification delivery."""
+    payload = {
+        "reason": reason,
+        "environment": get_app_environment(),
+    }
+    if metadata_json:
+        payload.update(metadata_json)
+
+    return record_notification_delivery(
+        alert_event_id=alert_event_id,
+        channel=channel,
+        recipient=recipient,
+        status="muted",
+        metadata_json=payload,
+    )
+
+
 def create_report_artifact(
     report_key: str,
     format: str,
