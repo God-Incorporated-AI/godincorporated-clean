@@ -2263,6 +2263,398 @@ def get_next_queued_ingestion_job(job_type: str = "scroll_upload") -> Optional[d
 
 
 
+
+def _safe_json_payload(value) -> str:
+    """Return a JSON string safe for jsonb inserts."""
+    if value is None:
+        return "{}"
+    if isinstance(value, str):
+        try:
+            json.loads(value)
+            return value
+        except Exception:
+            return json.dumps({"value": value})
+    return json.dumps(value)
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Read a conservative boolean env flag."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_app_environment() -> str:
+    """Return the current app environment for reports and alerts."""
+    env = os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "development"
+    env = env.strip().lower()
+    if env in {"prod", "production"}:
+        return "production"
+    if env in {"stage", "staging"}:
+        return "staging"
+    if env in {"dev", "development", "local"}:
+        return "development"
+    return env or "development"
+
+
+def is_external_email_allowed() -> bool:
+    """
+    Conservative safety gate for future alert/report email delivery.
+
+    This helper does not send email. It only answers whether external alert
+    email would be allowed by environment and flags.
+    """
+    env = get_app_environment()
+    if env != "production":
+        return False
+
+    if not _env_flag("ALERTS_ENABLED", default=False):
+        return False
+
+    if not _env_flag("ALERT_EMAILS_ENABLED", default=False):
+        return False
+
+    mode = (os.getenv("ALERT_EMAIL_MODE") or "muted").strip().lower()
+    if mode in {"muted", "off", "disabled", "none"}:
+        return False
+
+    if not _env_flag("ALLOW_EXTERNAL_EMAILS", default=False):
+        return False
+
+    return True
+
+
+def create_report_artifact(
+    report_key: str,
+    format: str,
+    environment: Optional[str] = None,
+    storage_ref: Optional[str] = None,
+    sha256: Optional[str] = None,
+    size_bytes: Optional[int] = None,
+    summary_json: Optional[dict] = None,
+) -> Optional[dict]:
+    """Create a private report artifact record."""
+    env = environment or get_app_environment()
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO report_artifacts (
+                    report_key,
+                    environment,
+                    format,
+                    storage_ref,
+                    sha256,
+                    size_bytes,
+                    summary_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                RETURNING *
+                """,
+                (
+                    report_key,
+                    env,
+                    format,
+                    storage_ref,
+                    sha256,
+                    size_bytes,
+                    _safe_json_payload(summary_json),
+                ),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+    except Exception:
+        if conn:
+            conn.rollback()
+        logging.exception("CREATE_REPORT_ARTIFACT_FAILED report_key=%s env=%s", report_key, env)
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def create_report_run(
+    report_key: str,
+    status: str = "queued",
+    environment: Optional[str] = None,
+    period_start=None,
+    period_end=None,
+    git_sha: Optional[str] = None,
+    metadata_json: Optional[dict] = None,
+) -> Optional[dict]:
+    """Create a scheduled/manual report run record."""
+    env = environment or get_app_environment()
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO report_runs (
+                    report_key,
+                    environment,
+                    status,
+                    period_start,
+                    period_end,
+                    git_sha,
+                    metadata_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                RETURNING *
+                """,
+                (
+                    report_key,
+                    env,
+                    status,
+                    period_start,
+                    period_end,
+                    git_sha,
+                    _safe_json_payload(metadata_json),
+                ),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+    except Exception:
+        if conn:
+            conn.rollback()
+        logging.exception("CREATE_REPORT_RUN_FAILED report_key=%s env=%s", report_key, env)
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def finish_report_run(
+    report_run_id: str,
+    status: str,
+    artifact_id: Optional[str] = None,
+    error_message: Optional[str] = None,
+    metadata_json: Optional[dict] = None,
+) -> Optional[dict]:
+    """Mark a report run finished, failed, or otherwise completed."""
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE report_runs
+                SET
+                    status = %s,
+                    artifact_id = COALESCE(%s, artifact_id),
+                    error_message = %s,
+                    metadata_json = COALESCE(%s::jsonb, metadata_json),
+                    started_at = COALESCE(started_at, now()),
+                    finished_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (
+                    status,
+                    artifact_id,
+                    error_message,
+                    _safe_json_payload(metadata_json) if metadata_json is not None else None,
+                    report_run_id,
+                ),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+    except Exception:
+        if conn:
+            conn.rollback()
+        logging.exception("FINISH_REPORT_RUN_FAILED report_run_id=%s status=%s", report_run_id, status)
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def create_alert_event(
+    alert_key: str,
+    fingerprint: str,
+    severity: str,
+    title: str,
+    message: Optional[str] = None,
+    environment: Optional[str] = None,
+    metadata_json: Optional[dict] = None,
+) -> Optional[dict]:
+    """
+    Create or update a deduped alert event.
+
+    Existing matching alerts are reopened, last_seen_at is updated, and count is
+    incremented. No notification is sent here.
+    """
+    env = environment or get_app_environment()
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO alert_events (
+                    alert_key,
+                    fingerprint,
+                    environment,
+                    severity,
+                    status,
+                    title,
+                    message,
+                    metadata_json
+                )
+                VALUES (%s, %s, %s, %s, 'open', %s, %s, %s::jsonb)
+                ON CONFLICT (alert_key, fingerprint, environment)
+                DO UPDATE SET
+                    severity = EXCLUDED.severity,
+                    status = 'open',
+                    title = EXCLUDED.title,
+                    message = EXCLUDED.message,
+                    metadata_json = EXCLUDED.metadata_json,
+                    last_seen_at = now(),
+                    count = alert_events.count + 1,
+                    resolved_at = NULL
+                RETURNING *
+                """,
+                (
+                    alert_key,
+                    fingerprint,
+                    env,
+                    severity,
+                    title,
+                    message,
+                    _safe_json_payload(metadata_json),
+                ),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+    except Exception:
+        if conn:
+            conn.rollback()
+        logging.exception("CREATE_ALERT_EVENT_FAILED alert_key=%s fingerprint=%s env=%s", alert_key, fingerprint, env)
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def resolve_alert_event(
+    alert_event_id: Optional[str] = None,
+    alert_key: Optional[str] = None,
+    fingerprint: Optional[str] = None,
+    environment: Optional[str] = None,
+    message: Optional[str] = None,
+) -> Optional[dict]:
+    """Resolve an alert event by id or by alert_key/fingerprint/environment."""
+    env = environment or get_app_environment()
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if alert_event_id:
+                cur.execute(
+                    """
+                    UPDATE alert_events
+                    SET
+                        status = 'resolved',
+                        message = COALESCE(%s, message),
+                        resolved_at = now(),
+                        last_seen_at = now()
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (message, alert_event_id),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE alert_events
+                    SET
+                        status = 'resolved',
+                        message = COALESCE(%s, message),
+                        resolved_at = now(),
+                        last_seen_at = now()
+                    WHERE alert_key = %s
+                      AND fingerprint = %s
+                      AND environment = %s
+                    RETURNING *
+                    """,
+                    (message, alert_key, fingerprint, env),
+                )
+            row = cur.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+    except Exception:
+        if conn:
+            conn.rollback()
+        logging.exception("RESOLVE_ALERT_EVENT_FAILED alert_event_id=%s alert_key=%s fingerprint=%s env=%s", alert_event_id, alert_key, fingerprint, env)
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def record_notification_delivery(
+    alert_event_id: Optional[str],
+    channel: str,
+    status: str,
+    recipient: Optional[str] = None,
+    error_message: Optional[str] = None,
+    metadata_json: Optional[dict] = None,
+    sent_at=None,
+) -> Optional[dict]:
+    """
+    Record notification delivery state.
+
+    Valid first statuses include sent, failed, muted, skipped, and queued.
+    This helper does not send email.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO notification_deliveries (
+                    alert_event_id,
+                    channel,
+                    recipient,
+                    status,
+                    error_message,
+                    sent_at,
+                    metadata_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
+                RETURNING *
+                """,
+                (
+                    alert_event_id,
+                    channel,
+                    recipient,
+                    status,
+                    error_message,
+                    sent_at,
+                    _safe_json_payload(metadata_json),
+                ),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return dict(row) if row else None
+    except Exception:
+        if conn:
+            conn.rollback()
+        logging.exception("RECORD_NOTIFICATION_DELIVERY_FAILED alert_event_id=%s channel=%s status=%s", alert_event_id, channel, status)
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
 def extract_text_from_scroll(file_path):
     text = ""
     ext = os.path.splitext(file_path)[1].lower()
