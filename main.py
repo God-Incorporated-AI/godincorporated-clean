@@ -2910,6 +2910,205 @@ def run_scroll_upload_auto_processor(max_jobs: int = 1) -> None:
         logger.exception("SCROLL_UPLOAD_AUTO_PROCESS_FAILED")
 
 
+
+def get_scroll_storage_settings() -> dict:
+    """
+    Return durable scroll storage settings.
+
+    Backend defaults to local to preserve the accepted production fallback path.
+    R2 uses Cloudflare R2's S3-compatible API.
+    """
+    backend = (os.getenv("SCROLL_STORAGE_BACKEND") or "local").strip().lower()
+    if backend not in {"local", "r2"}:
+        backend = "local"
+
+    prefix = (os.getenv("SCROLL_STORAGE_PREFIX") or "scrolls/original").strip().strip("/")
+
+    return {
+        "backend": backend,
+        "bucket": (os.getenv("SCROLL_STORAGE_BUCKET") or "").strip(),
+        "prefix": prefix,
+        "endpoint_url": (os.getenv("SCROLL_STORAGE_ENDPOINT_URL") or "").strip(),
+        "region": (os.getenv("SCROLL_STORAGE_REGION") or "auto").strip() or "auto",
+        "access_key_present": bool(os.getenv("SCROLL_STORAGE_ACCESS_KEY_ID")),
+        "secret_key_present": bool(os.getenv("SCROLL_STORAGE_SECRET_ACCESS_KEY")),
+    }
+
+
+def is_r2_storage_ref(storage_ref: Optional[str]) -> bool:
+    return bool(storage_ref and str(storage_ref).startswith("r2://"))
+
+
+def build_r2_storage_key(safe_name: str) -> str:
+    settings = get_scroll_storage_settings()
+    try:
+        now = utc_now()
+    except Exception:
+        now = datetime.datetime.now(timezone.utc)
+
+    parts = [
+        settings["prefix"],
+        f"{now.year:04d}",
+        f"{now.month:02d}",
+        safe_name,
+    ]
+    return "/".join(part.strip("/") for part in parts if part)
+
+
+def get_r2_client():
+    try:
+        import boto3
+    except ImportError as exc:
+        raise RuntimeError("boto3 is required for SCROLL_STORAGE_BACKEND=r2") from exc
+
+    endpoint_url = os.getenv("SCROLL_STORAGE_ENDPOINT_URL")
+    access_key = os.getenv("SCROLL_STORAGE_ACCESS_KEY_ID")
+    secret_key = os.getenv("SCROLL_STORAGE_SECRET_ACCESS_KEY")
+    region = os.getenv("SCROLL_STORAGE_REGION") or "auto"
+
+    missing = [
+        name
+        for name, value in [
+            ("SCROLL_STORAGE_ENDPOINT_URL", endpoint_url),
+            ("SCROLL_STORAGE_ACCESS_KEY_ID", access_key),
+            ("SCROLL_STORAGE_SECRET_ACCESS_KEY", secret_key),
+        ]
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(f"Missing R2 storage settings: {', '.join(missing)}")
+
+    return boto3.client(
+        "s3",
+        endpoint_url=endpoint_url,
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name=region,
+    )
+
+
+def parse_r2_storage_ref(storage_ref: str) -> tuple[str, str]:
+    if not is_r2_storage_ref(storage_ref):
+        raise ValueError("storage_ref is not an R2 reference")
+
+    remainder = storage_ref[len("r2://"):]
+    bucket, sep, key = remainder.partition("/")
+    if not bucket or not sep or not key:
+        raise ValueError("Invalid R2 storage_ref format")
+
+    return bucket, key
+
+
+def save_scroll_upload_to_storage(
+    file_path: str,
+    safe_name: str,
+    *,
+    original_filename: Optional[str] = None,
+    mime_type: Optional[str] = None,
+) -> str:
+    """
+    Save an uploaded scroll original to the configured storage backend.
+
+    Local backend returns the safe filename. R2 backend uploads the file and
+    returns an r2://bucket/key reference for DB/job storage_ref.
+    """
+    settings = get_scroll_storage_settings()
+    if settings["backend"] == "local":
+        return safe_name
+
+    bucket = settings["bucket"]
+    if not bucket:
+        raise RuntimeError("SCROLL_STORAGE_BUCKET is required for R2 storage")
+
+    key = build_r2_storage_key(safe_name)
+    extra_args = {}
+    if mime_type:
+        extra_args["ContentType"] = mime_type
+    if original_filename:
+        extra_args["Metadata"] = {
+            "original-filename": original_filename[:1024],
+        }
+
+    client = get_r2_client()
+    client.upload_file(
+        file_path,
+        bucket,
+        key,
+        ExtraArgs=extra_args or None,
+    )
+
+    storage_ref = f"r2://{bucket}/{key}"
+    logger.info(
+        "SCROLL_STORAGE_SAVED backend=r2 bucket=%s key=%s filename=%s",
+        bucket,
+        key,
+        original_filename or safe_name,
+    )
+    return storage_ref
+
+
+def materialize_scroll_storage_ref(storage_ref: str) -> dict:
+    """
+    Return a local readable file path for a storage_ref.
+
+    Local refs point inside UPLOAD_DIR. R2 refs are downloaded to a temporary
+    materialization directory and should be cleaned after processing.
+    """
+    if not is_r2_storage_ref(storage_ref):
+        return {
+            "backend": "local",
+            "file_path": os.path.join(UPLOAD_DIR, storage_ref),
+            "temporary": False,
+        }
+
+    bucket, key = parse_r2_storage_ref(storage_ref)
+    ext = os.path.splitext(key)[1]
+    materialized_dir = os.path.join(UPLOAD_DIR, "_materialized")
+    os.makedirs(materialized_dir, exist_ok=True)
+
+    local_name = f"{uuid.uuid4()}{ext}"
+    local_path = os.path.join(materialized_dir, local_name)
+
+    client = get_r2_client()
+    client.download_file(bucket, key, local_path)
+
+    logger.info(
+        "SCROLL_STORAGE_MATERIALIZED backend=r2 bucket=%s key=%s",
+        bucket,
+        key,
+    )
+    return {
+        "backend": "r2",
+        "file_path": local_path,
+        "temporary": True,
+    }
+
+
+def cleanup_materialized_scroll_file(file_path: Optional[str], temporary: bool) -> None:
+    if temporary and file_path and os.path.exists(file_path):
+        try:
+            os.remove(file_path)
+        except Exception:
+            logger.warning("SCROLL_STORAGE_TEMP_CLEANUP_FAILED path=%s", file_path)
+
+
+def delete_scroll_storage_ref(storage_ref: Optional[str]) -> None:
+    """
+    Delete an uploaded original from durable storage when it should not be kept,
+    such as a duplicate queued upload. Local refs are intentionally left to the
+    existing local-file cleanup path.
+    """
+    if not is_r2_storage_ref(storage_ref):
+        return
+
+    try:
+        bucket, key = parse_r2_storage_ref(storage_ref)
+        get_r2_client().delete_object(Bucket=bucket, Key=key)
+        logger.info("SCROLL_STORAGE_DELETED backend=r2 bucket=%s key=%s", bucket, key)
+    except Exception:
+        logger.warning("SCROLL_STORAGE_DELETE_FAILED storage_ref=%s", storage_ref)
+
+
 def process_one_queued_scroll_ingestion_job() -> dict:
     """
     Claim and process one queued scroll_upload ingestion job.
@@ -2960,7 +3159,29 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             "error": "missing_session_id",
         }
 
-    file_path = os.path.join(UPLOAD_DIR, storage_ref)
+    materialized_file_path = None
+    materialized_is_temporary = False
+
+    try:
+        materialized = materialize_scroll_storage_ref(storage_ref)
+        file_path = materialized["file_path"]
+        materialized_file_path = file_path
+        materialized_is_temporary = bool(materialized.get("temporary"))
+
+    except Exception as exc:
+        logging.exception("QUEUED_SCROLL_STORAGE_MATERIALIZE_FAILED job_id=%s", job_id)
+        update_ingestion_job_status(
+            job_id,
+            "failed",
+            error_message=str(exc),
+        )
+        return {
+            "ok": False,
+            "processed": True,
+            "job_id": job_id,
+            "status": "failed",
+            "error": str(exc),
+        }
 
     if not os.path.exists(file_path):
         update_ingestion_job_status(
@@ -2968,6 +3189,7 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             "failed",
             error_message=f"Queued ingestion file missing: {storage_ref}",
         )
+        cleanup_materialized_scroll_file(materialized_file_path, materialized_is_temporary)
         return {
             "ok": False,
             "processed": False,
@@ -2990,12 +3212,17 @@ def process_one_queued_scroll_ingestion_job() -> dict:
         result_payload = normalize_ingestion_result_payload(result)
         scroll_id = str(result_payload.get("scroll_id")) if result_payload.get("scroll_id") else None
 
+        if result_payload.get("duplicate"):
+            delete_scroll_storage_ref(storage_ref)
+
         update_ingestion_job_status(
             job_id,
             "ready",
             scroll_id=scroll_id,
             error_message=None,
         )
+
+        cleanup_materialized_scroll_file(materialized_file_path, materialized_is_temporary)
 
         return {
             "ok": True,
@@ -3014,6 +3241,8 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             error_message=str(exc.detail),
         )
 
+        cleanup_materialized_scroll_file(materialized_file_path, materialized_is_temporary)
+
         return {
             "ok": False,
             "processed": True,
@@ -3029,6 +3258,8 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             "failed",
             error_message=str(exc),
         )
+
+        cleanup_materialized_scroll_file(materialized_file_path, materialized_is_temporary)
 
         return {
             "ok": False,
@@ -7440,6 +7671,14 @@ async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scr
     file_size_bytes = os.path.getsize(file_path)
 
     if queue_settings["enabled"] and file_size_bytes >= queue_settings["min_bytes"]:
+        storage_ref = save_scroll_upload_to_storage(
+            file_path,
+            safe_name,
+            original_filename=scroll.filename,
+            mime_type=scroll.content_type,
+        )
+        storage_backend = "r2" if is_r2_storage_ref(storage_ref) else "local"
+
         corpus_layer = "personal" if authenticated_user_id else "community"
         job_id = create_ingestion_job(
             session_id=anonymous_user_id,
@@ -7447,10 +7686,13 @@ async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scr
             job_type="scroll_upload",
             status="queued",
             original_filename=scroll.filename,
-            storage_ref=safe_name,
+            storage_ref=storage_ref,
             mime_type=scroll.content_type,
             corpus_layer=corpus_layer,
         )
+
+        if is_r2_storage_ref(storage_ref):
+            remove_uploaded_file(file_path)
 
         logger.info(
             "SCROLL_UPLOAD_QUEUED anonymous_user_id=%s authenticated_user_present=%s filename=%s size_bytes=%s job_id=%s",
@@ -7477,6 +7719,7 @@ async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scr
                 "filename": scroll.filename,
                 "file_size_bytes": file_size_bytes,
                 "queue_min_bytes": queue_settings["min_bytes"],
+                "storage_backend": storage_backend,
                 "auto_process_enabled": auto_process_settings["enabled"],
                 "auto_process_max_jobs": auto_process_settings["max_jobs"] if auto_process_settings["enabled"] else 0,
             },
