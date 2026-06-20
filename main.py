@@ -13,7 +13,7 @@ import re
 from typing import Optional, Literal
 from docx import Document
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -2838,12 +2838,84 @@ def normalize_ingestion_result_payload(result) -> dict:
     }
 
 
+
+def get_scroll_upload_auto_process_settings() -> dict:
+    """
+    Return bounded automatic queue processing settings for scroll uploads.
+
+    This is intentionally disabled by default. When enabled, the upload response
+    still returns quickly and FastAPI runs a small follow-up queue processor task.
+    """
+    enabled = _env_flag("SCROLL_UPLOAD_AUTO_PROCESS_ENABLED", default=False)
+
+    try:
+        max_jobs = int(os.getenv("SCROLL_UPLOAD_AUTO_PROCESS_MAX_JOBS", "1"))
+    except (TypeError, ValueError):
+        max_jobs = 1
+
+    max_jobs = max(1, min(max_jobs, 10))
+
+    return {
+        "enabled": enabled,
+        "max_jobs": max_jobs,
+    }
+
+
+def process_queued_scroll_ingestion_jobs(max_jobs: int = 1) -> dict:
+    """
+    Process a bounded number of queued scroll_upload ingestion jobs.
+
+    This is safe for manual/admin use and for FastAPI BackgroundTasks because
+    each underlying job is claimed with SKIP LOCKED.
+    """
+    try:
+        max_jobs = int(max_jobs)
+    except (TypeError, ValueError):
+        max_jobs = 1
+
+    max_jobs = max(1, min(max_jobs, 10))
+    results = []
+    processed_count = 0
+
+    for _ in range(max_jobs):
+        result = process_one_queued_scroll_ingestion_job()
+        results.append(result)
+
+        if not result.get("processed"):
+            break
+
+        processed_count += 1
+
+    logger.info(
+        "SCROLL_UPLOAD_AUTO_PROCESS_BATCH processed_count=%s max_jobs=%s",
+        processed_count,
+        max_jobs,
+    )
+
+    return {
+        "ok": True,
+        "processed_count": processed_count,
+        "max_jobs": max_jobs,
+        "results": results,
+    }
+
+
+def run_scroll_upload_auto_processor(max_jobs: int = 1) -> None:
+    """
+    Background task wrapper for bounded scroll ingestion processing.
+    """
+    try:
+        process_queued_scroll_ingestion_jobs(max_jobs=max_jobs)
+    except Exception:
+        logger.exception("SCROLL_UPLOAD_AUTO_PROCESS_FAILED")
+
+
 def process_one_queued_scroll_ingestion_job() -> dict:
     """
     Claim and process one queued scroll_upload ingestion job.
 
-    This helper is not automatic. It is intended for manual/admin processing
-    first so the queue path can be tested without changing public upload behavior.
+    This helper is used by manual/admin processing and by the bounded
+    automatic upload background processor.
     """
     job = get_next_queued_ingestion_job("scroll_upload")
     if not job:
@@ -7302,7 +7374,7 @@ def get_scroll_upload_queue_settings() -> dict:
 
 
 @app.post("/upload_scroll")
-async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
+async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
     anonymous_user_id = anonymous_user_id or get_or_create_session_id(request)
     ensure_anonymous_user(anonymous_user_id)
 
@@ -7389,6 +7461,13 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
             job_id,
         )
 
+        auto_process_settings = get_scroll_upload_auto_process_settings()
+        if auto_process_settings["enabled"]:
+            background_tasks.add_task(
+                run_scroll_upload_auto_processor,
+                auto_process_settings["max_jobs"],
+            )
+
         return JSONResponse(
             content={
                 "message": "Scroll received. The Temple is reading it in the background.",
@@ -7398,6 +7477,8 @@ async def upload_scroll(request: Request, scroll: UploadFile = File(...), seeker
                 "filename": scroll.filename,
                 "file_size_bytes": file_size_bytes,
                 "queue_min_bytes": queue_settings["min_bytes"],
+                "auto_process_enabled": auto_process_settings["enabled"],
+                "auto_process_max_jobs": auto_process_settings["max_jobs"] if auto_process_settings["enabled"] else 0,
             },
             status_code=202,
         )
