@@ -283,6 +283,22 @@ def iter_embedding_batches(items: list[dict], size: int):
         yield items[start:start + size]
 
 
+def get_scroll_ingest_inline_embed_max_chunks() -> int:
+    """
+    Maximum chunk count eligible for inline pgvector embedding during upload
+    ingestion. Large documents should commit chunks first and be embedded by a
+    controlled backfill/worker path so uploads cannot stall before chunk commit.
+
+    Set SCROLL_INGEST_INLINE_EMBED_MAX_CHUNKS=0 to disable inline embeddings.
+    """
+    try:
+        max_chunks = int(os.getenv("SCROLL_INGEST_INLINE_EMBED_MAX_CHUNKS", "50"))
+    except (TypeError, ValueError):
+        max_chunks = 50
+
+    return max(0, max_chunks)
+
+
 def should_store_scroll_chunk_db_embeddings() -> bool:
     """
     Store pgvector embeddings when embeddings are enabled or pgvector retrieval
@@ -333,6 +349,20 @@ def store_scroll_chunk_embeddings(chunk_rows: list[dict], batch_size: Optional[i
             "updated": 0,
             "skipped": len(chunk_rows),
             "disabled": True,
+            "reason": "db_embedding_storage_disabled",
+        }
+
+    max_inline_chunks = get_scroll_ingest_inline_embed_max_chunks()
+    if max_inline_chunks == 0 or len(chunk_rows) > max_inline_chunks:
+        return {
+            "ok": True,
+            "processed": 0,
+            "updated": 0,
+            "skipped": len(chunk_rows),
+            "disabled": True,
+            "reason": "too_many_chunks_for_inline_embedding",
+            "max_inline_chunks": max_inline_chunks,
+            "chunk_count": len(chunk_rows),
         }
 
     prepared_rows = []
@@ -7729,10 +7759,9 @@ def ingest_saved_scroll_file(
                     "chunk_text": chunk,
                 })
 
-            try:
-                cache_chunk_embedding(chunk)
-            except Exception as e:
-                logger.warning(f"Chunk embedding cache warm failed: {e}")
+            # Do not warm the legacy local embedding cache inside ingestion.
+            # Database pgvector embeddings are stored after chunk commit for
+            # small documents; large documents are handled by backfill/worker.
 
     conn.commit()
     conn.close()
