@@ -261,6 +261,172 @@ def generate_text_embedding(text: str) -> list[float] | None:
     )
     return response.data[0].embedding
 
+
+SCROLL_CHUNK_DB_EMBEDDING_MODEL = "text-embedding-3-small"
+
+
+def scroll_embedding_vector_literal(values: list[float]) -> str:
+    return "[" + ",".join(str(float(value)) for value in values) + "]"
+
+
+def get_scroll_ingest_embedding_batch_size() -> int:
+    try:
+        batch_size = int(os.getenv("SCROLL_INGEST_EMBED_BATCH_SIZE", "25"))
+    except (TypeError, ValueError):
+        batch_size = 25
+
+    return max(1, min(batch_size, 100))
+
+
+def iter_embedding_batches(items: list[dict], size: int):
+    for start in range(0, len(items), size):
+        yield items[start:start + size]
+
+
+def should_store_scroll_chunk_db_embeddings() -> bool:
+    """
+    Store pgvector embeddings when embeddings are enabled or pgvector retrieval
+    is the active retrieval backend.
+
+    This keeps the accepted legacy behavior intact while ensuring newly
+    ingested scrolls are immediately retrievable in pgvector environments.
+    """
+    if should_use_embeddings():
+        return True
+
+    backend = (RETRIEVAL_BACKEND or "").strip().lower()
+    return backend == "pgvector"
+
+
+def generate_text_embeddings_batch(texts: list[str]) -> list[list[float]]:
+    client = get_openai_client()
+    response = client.embeddings.create(
+        model=SCROLL_CHUNK_DB_EMBEDDING_MODEL,
+        input=texts,
+    )
+
+    ordered = sorted(response.data, key=lambda item: item.index)
+    return [item.embedding for item in ordered]
+
+
+def store_scroll_chunk_embeddings(chunk_rows: list[dict], batch_size: Optional[int] = None) -> dict:
+    """
+    Store pgvector embeddings for newly inserted scroll chunks.
+
+    This is intentionally non-fatal for upload ingestion. If embedding storage
+    fails, the scroll can still be ingested and the existing backfill script can
+    repair missing embeddings later.
+    """
+    if not chunk_rows:
+        return {
+            "ok": True,
+            "processed": 0,
+            "updated": 0,
+            "skipped": 0,
+            "disabled": False,
+        }
+
+    if not should_store_scroll_chunk_db_embeddings():
+        return {
+            "ok": True,
+            "processed": 0,
+            "updated": 0,
+            "skipped": len(chunk_rows),
+            "disabled": True,
+        }
+
+    prepared_rows = []
+    skipped = 0
+
+    for row in chunk_rows:
+        chunk_id = row.get("id")
+        chunk_text = (row.get("chunk_text") or "").strip()
+
+        if not chunk_id or not chunk_text:
+            skipped += 1
+            continue
+
+        prepared_rows.append({
+            "id": chunk_id,
+            "chunk_text": chunk_text[:2000],
+        })
+
+    if not prepared_rows:
+        return {
+            "ok": True,
+            "processed": 0,
+            "updated": 0,
+            "skipped": skipped,
+            "disabled": False,
+        }
+
+    batch_size = batch_size or get_scroll_ingest_embedding_batch_size()
+    updated = 0
+    processed = 0
+    conn = None
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            for batch in iter_embedding_batches(prepared_rows, batch_size):
+                texts = [row["chunk_text"] for row in batch]
+                embeddings = generate_text_embeddings_batch(texts)
+
+                if len(embeddings) != len(batch):
+                    raise RuntimeError(
+                        f"Embedding count mismatch: rows={len(batch)} embeddings={len(embeddings)}"
+                    )
+
+                for row, embedding in zip(batch, embeddings):
+                    cur.execute(
+                        """
+                        UPDATE scroll_chunks
+                        SET
+                            embedding = %s::vector,
+                            embedding_model = %s,
+                            embedded_at = NOW()
+                        WHERE id = %s
+                          AND embedding IS NULL
+                        """,
+                        (
+                            scroll_embedding_vector_literal(embedding),
+                            SCROLL_CHUNK_DB_EMBEDDING_MODEL,
+                            row["id"],
+                        ),
+                    )
+                    updated += cur.rowcount
+                    processed += 1
+
+        conn.commit()
+
+        return {
+            "ok": True,
+            "processed": processed,
+            "updated": updated,
+            "skipped": skipped,
+            "disabled": False,
+        }
+
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+
+        logger.exception("SCROLL_CHUNK_DB_EMBEDDING_FAILED")
+
+        return {
+            "ok": False,
+            "processed": processed,
+            "updated": updated,
+            "skipped": skipped,
+            "disabled": False,
+            "error": str(exc),
+        }
+
+    finally:
+        if conn:
+            conn.close()
+
+
 def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     """
     Compute cosine similarity between two embedding vectors.
@@ -7542,6 +7708,8 @@ def ingest_saved_scroll_file(
         chunks.append(chunk)
         start += CHUNK_SIZE - OVERLAP
 
+    chunk_rows_for_embedding = []
+
     conn = get_db_connection()
     with conn.cursor() as cur:
         for i, chunk in enumerate(chunks):
@@ -7550,9 +7718,17 @@ def ingest_saved_scroll_file(
                 INSERT INTO scroll_chunks
                 (scroll_id, chunk_index, chunk_text)
                 VALUES (%s,%s,%s)
+                RETURNING id
                 """,
                 (scroll_id, i, chunk)
             )
+            chunk_row = cur.fetchone()
+            if chunk_row and (chunk or "").strip():
+                chunk_rows_for_embedding.append({
+                    "id": chunk_row["id"],
+                    "chunk_text": chunk,
+                })
+
             try:
                 cache_chunk_embedding(chunk)
             except Exception as e:
@@ -7560,6 +7736,14 @@ def ingest_saved_scroll_file(
 
     conn.commit()
     conn.close()
+
+    embedding_summary = store_scroll_chunk_embeddings(chunk_rows_for_embedding)
+    logger.info(
+        "SCROLL_CHUNK_DB_EMBEDDING_SUMMARY scroll_id=%s chunk_count=%s summary=%s",
+        scroll_id,
+        len(chunk_rows_for_embedding),
+        embedding_summary,
+    )
 
     # Refresh cached user scroll_count from authoritative scroll_associations
     if authenticated_user_id:
