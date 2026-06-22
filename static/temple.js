@@ -238,7 +238,9 @@ document.addEventListener("DOMContentLoaded", function () {
   async function pollQueuedUploadStatus(jobId, options = {}) {
     if (!jobId) return null;
 
-    const maxAttempts = 18;
+    // Some PDF ingestion jobs take longer than the first "received" modal.
+    // Keep polling long enough for real-world duplicate/OCR/ready outcomes.
+    const maxAttempts = 90;
     const delayMs = 1000;
 
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -286,9 +288,12 @@ document.addEventListener("DOMContentLoaded", function () {
       }
     }
 
-    if (feedbackBody) {
-      feedbackBody.innerHTML = "<div>" + escapeHtml("The Temple is still reading this scroll. Refresh the Library shortly if the final notice does not appear.") + "</div>";
-    }
+    showFeedbackModal(
+      "The Temple is still reading this scroll. Refresh the Library shortly if the final notice does not appear.",
+      [],
+      "Scroll Still Processing",
+      { showCreateAccount: Boolean(options.showCreateAccount) }
+    );
 
     return null;
   }
