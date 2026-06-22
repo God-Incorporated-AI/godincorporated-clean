@@ -254,20 +254,40 @@ document.addEventListener("DOMContentLoaded", function () {
 
         if (isTerminalIngestionStatus(statusData?.status)) {
           const nudges = Array.isArray(statusData?.continuity_nudges) ? statusData.continuity_nudges : [];
+          const finalMessage = statusData.message || "The Temple has finished reading this scroll.";
+          const finalTitle = uploadStatusTitle(statusData);
 
           showFeedbackModal(
-            statusData.message || "The Temple has finished reading this scroll.",
+            finalMessage,
             nudges,
-            uploadStatusTitle(statusData),
+            finalTitle,
             { showCreateAccount: Boolean(options.showCreateAccount) }
           );
+
+          if (feedbackTitle) {
+            feedbackTitle.textContent = finalTitle;
+          }
+
+          if (feedbackBody) {
+            const lines = ["<div>" + escapeHtml(finalMessage) + "</div>"];
+            nudges.forEach((line) => {
+              lines.push("<div>" + escapeHtml(line) + "</div>");
+            });
+            feedbackBody.innerHTML = lines.join("");
+          }
 
           await refreshScrollCount();
           return statusData;
         }
       } catch (err) {
-        // Keep polling quietly; the initial accepted message is still true.
+        if (window.console && typeof window.console.warn === "function") {
+          console.warn("Upload status polling failed", err);
+        }
       }
+    }
+
+    if (feedbackBody) {
+      feedbackBody.innerHTML = "<div>" + escapeHtml("The Temple is still reading this scroll. Refresh the Library shortly if the final notice does not appear.") + "</div>";
     }
 
     return null;
