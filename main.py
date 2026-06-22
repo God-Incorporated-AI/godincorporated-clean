@@ -2326,6 +2326,7 @@ def update_ingestion_job_status(
     scroll_id: Optional[str] = None,
     error_message: Optional[str] = None,
     increment_attempts: bool = False,
+    result_json: Optional[dict] = None,
 ) -> Optional[dict]:
     """
     Update ingestion job status and timestamps.
@@ -2352,6 +2353,7 @@ def update_ingestion_job_status(
                     status = %s,
                     scroll_id = COALESCE(%s, scroll_id),
                     error_message = %s,
+                    result_json = COALESCE(%s::jsonb, result_json),
                     {started_at_sql}
                     {finished_at_sql}
                     {attempts_sql}
@@ -2359,7 +2361,13 @@ def update_ingestion_job_status(
                 WHERE id = %s
                 RETURNING *;
                 """,
-                (status_key, scroll_id, error_message, job_id)
+                (
+                    status_key,
+                    scroll_id,
+                    error_message,
+                    _safe_json_payload(result_json) if result_json is not None else None,
+                    job_id,
+                )
             )
             row = cur.fetchone()
 
@@ -2402,6 +2410,157 @@ def get_ingestion_job(job_id: str) -> Optional[dict]:
             return cur.fetchone()
     finally:
         conn.close()
+
+
+
+def build_ingestion_job_result_payload(
+    status: str,
+    *,
+    original_filename: Optional[str] = None,
+    scroll_id: Optional[str] = None,
+    result_payload: Optional[dict] = None,
+    error_message: Optional[str] = None,
+) -> dict:
+    """
+    Build a safe final result payload for queued upload status polling.
+    No private scroll text or storage credentials are included.
+    """
+    status_key = (status or "").strip().lower()
+    payload = dict(result_payload or {})
+
+    payload["status"] = status_key
+    if original_filename:
+        payload.setdefault("original_filename", original_filename)
+    if scroll_id:
+        payload.setdefault("scroll_id", str(scroll_id))
+    if error_message:
+        payload.setdefault("error", str(error_message))
+
+    if status_key == "ready":
+        payload["ready"] = True
+        if payload.get("duplicate"):
+            payload.setdefault(
+                "message",
+                "This scroll is already present in the Temple. No duplicate copy was stored. It will still be recognized in your personal record.",
+            )
+        else:
+            payload.setdefault("message", "Your scroll is ready.")
+    elif status_key == "needs_ocr":
+        payload["needs_ocr"] = True
+        payload.setdefault(
+            "message",
+            str(error_message or "This scroll appears to need OCR. The Temple preserved the original, but could not reliably read it yet."),
+        )
+    elif status_key == "failed":
+        payload["failed"] = True
+        payload.setdefault(
+            "message",
+            str(error_message or "The Temple could not process this scroll. Please try again or use a text-based file."),
+        )
+    elif status_key in {"queued", "processing"}:
+        payload.setdefault("message", "The Temple is still reading this scroll in the background.")
+    else:
+        payload.setdefault("message", "The Temple is checking this scroll.")
+
+    return payload
+
+
+def _safe_ingestion_result_json(value) -> dict:
+    if isinstance(value, dict):
+        return value
+
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+
+    return {}
+
+
+def _isoformat_or_none(value):
+    if not value:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def request_can_view_ingestion_job(request: Request, job: dict) -> bool:
+    current_user = get_current_user(request)
+    job_user_id = str(job.get("user_id")) if job.get("user_id") else None
+
+    if current_user and job_user_id and str(current_user.get("user_id")) == job_user_id:
+        return True
+
+    if current_user and current_user.get("role") == "admin":
+        return True
+
+    request_anonymous_id = (request.headers.get("X-Anonymous-User-Id") or "").strip()
+    job_session_id = str(job.get("session_id")) if job.get("session_id") else None
+
+    if request_anonymous_id and job_session_id and request_anonymous_id == job_session_id:
+        return True
+
+    return False
+
+
+def serialize_ingestion_job_status(job: dict) -> dict:
+    result_json = _safe_ingestion_result_json(job.get("result_json"))
+    status = (job.get("status") or "").strip().lower()
+    error_message = job.get("error_message")
+
+    message = result_json.get("message")
+    if not message:
+        message = build_ingestion_job_result_payload(
+            status,
+            original_filename=job.get("original_filename"),
+            scroll_id=str(job.get("scroll_id")) if job.get("scroll_id") else None,
+            error_message=error_message,
+        ).get("message")
+
+    response = {
+        "ok": True,
+        "job_id": str(job.get("id")),
+        "status": status,
+        "queued": status == "queued",
+        "processing": status == "processing",
+        "ready": status == "ready",
+        "needs_ocr": status == "needs_ocr",
+        "failed": status == "failed",
+        "duplicate": bool(result_json.get("duplicate")),
+        "message": message,
+        "original_filename": job.get("original_filename"),
+        "scroll_id": str(job.get("scroll_id")) if job.get("scroll_id") else result_json.get("scroll_id"),
+        "created_at": _isoformat_or_none(job.get("created_at")),
+        "started_at": _isoformat_or_none(job.get("started_at")),
+        "finished_at": _isoformat_or_none(job.get("finished_at")),
+    }
+
+    # Preserve safe result hints for the frontend without exposing storage refs or text.
+    for key in ["upload_count_for_browser", "continuity_nudges", "claim_recommended", "anonymous_upload_limit"]:
+        if key in result_json:
+            response[key] = result_json[key]
+
+    return response
+
+
+@app.get("/ingestion/jobs/{job_id}")
+def ingestion_job_status(request: Request, job_id: str):
+    try:
+        uuid.UUID(str(job_id))
+    except Exception:
+        raise HTTPException(status_code=404, detail="Ingestion job not found")
+
+    job = get_ingestion_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Ingestion job not found")
+
+    if not request_can_view_ingestion_job(request, job):
+        raise HTTPException(status_code=403, detail="Not authorized to view this ingestion job")
+
+    return serialize_ingestion_job_status(job)
 
 
 def get_next_queued_ingestion_job(job_type: str = "scroll_upload") -> Optional[dict]:
@@ -3411,11 +3570,19 @@ def process_one_queued_scroll_ingestion_job() -> dict:
         if result_payload.get("duplicate"):
             delete_scroll_storage_ref(storage_ref)
 
+        final_result_payload = build_ingestion_job_result_payload(
+            "ready",
+            original_filename=original_filename,
+            scroll_id=scroll_id,
+            result_payload=result_payload,
+        )
+
         update_ingestion_job_status(
             job_id,
             "ready",
             scroll_id=scroll_id,
             error_message=None,
+            result_json=final_result_payload,
         )
 
         cleanup_materialized_scroll_file(materialized_file_path, materialized_is_temporary)
@@ -3426,15 +3593,21 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             "job_id": job_id,
             "status": "ready",
             "scroll_id": scroll_id,
-            "result": result_payload,
+            "result": final_result_payload,
         }
 
     except HTTPException as exc:
         status = "needs_ocr" if exc.status_code == 422 else "failed"
+        final_result_payload = build_ingestion_job_result_payload(
+            status,
+            original_filename=original_filename,
+            error_message=str(exc.detail),
+        )
         update_ingestion_job_status(
             job_id,
             status,
             error_message=str(exc.detail),
+            result_json=final_result_payload,
         )
 
         cleanup_materialized_scroll_file(materialized_file_path, materialized_is_temporary)
@@ -3445,14 +3618,21 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             "job_id": job_id,
             "status": status,
             "error": str(exc.detail),
+            "result": final_result_payload,
         }
 
     except Exception as exc:
         logging.exception("QUEUED_SCROLL_INGESTION_FAILED job_id=%s", job_id)
+        final_result_payload = build_ingestion_job_result_payload(
+            "failed",
+            original_filename=original_filename,
+            error_message=str(exc),
+        )
         update_ingestion_job_status(
             job_id,
             "failed",
             error_message=str(exc),
+            result_json=final_result_payload,
         )
 
         cleanup_materialized_scroll_file(materialized_file_path, materialized_is_temporary)
@@ -3463,6 +3643,7 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             "job_id": job_id,
             "status": "failed",
             "error": str(exc),
+            "result": final_result_payload,
         }
 
 

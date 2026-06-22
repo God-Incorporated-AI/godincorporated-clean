@@ -208,6 +208,71 @@ document.addEventListener("DOMContentLoaded", function () {
     return { error: text || "Oracle request failed" };
   }
 
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function isTerminalIngestionStatus(status) {
+    return ["ready", "needs_ocr", "failed"].includes(String(status || "").toLowerCase());
+  }
+
+  function uploadStatusTitle(data) {
+    if (data?.needs_ocr) return "Scroll Needs OCR";
+    if (data?.duplicate) return "Scroll Already Present";
+    if (data?.failed) return "Scroll Upload";
+    if (data?.ready) return "Scroll Ready";
+    return "Scroll Upload";
+  }
+
+  async function refreshScrollCount() {
+    if (!scrollCount) return;
+
+    const countResponse = await fetch("/scrolls");
+    const countData = await safeReadJson(countResponse);
+
+    if (countResponse.ok && typeof countData.count !== "undefined") {
+      scrollCount.textContent = countData.count;
+    }
+  }
+
+  async function pollQueuedUploadStatus(jobId, options = {}) {
+    if (!jobId) return null;
+
+    const maxAttempts = 18;
+    const delayMs = 1000;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      await delay(delayMs);
+
+      try {
+        const statusResponse = await identityFetch("/ingestion/jobs/" + encodeURIComponent(jobId));
+        const statusData = await safeReadJson(statusResponse);
+
+        if (!statusResponse.ok) {
+          continue;
+        }
+
+        if (isTerminalIngestionStatus(statusData?.status)) {
+          const nudges = Array.isArray(statusData?.continuity_nudges) ? statusData.continuity_nudges : [];
+
+          showFeedbackModal(
+            statusData.message || "The Temple has finished reading this scroll.",
+            nudges,
+            uploadStatusTitle(statusData),
+            { showCreateAccount: Boolean(options.showCreateAccount) }
+          );
+
+          await refreshScrollCount();
+          return statusData;
+        }
+      } catch (err) {
+        // Keep polling quietly; the initial accepted message is still true.
+      }
+    }
+
+    return null;
+  }
+
   // Unified /ask submission function
   async function submitOracleQuestion(questionText, selectedDeity) {
     const payload = {
@@ -407,11 +472,10 @@ if (scrollInput && scrollForm) {
       );
       scrollInput.value = "";
 
-      const countResponse = await fetch("/scrolls");
-      const countData = await safeReadJson(countResponse);
-
-      if (countResponse.ok && typeof countData.count !== "undefined") {
-        scrollCount.textContent = countData.count;
+      if (data?.queued && data?.job_id) {
+        pollQueuedUploadStatus(data.job_id, { showCreateAccount: shouldOfferClaim });
+      } else {
+        await refreshScrollCount();
       }
     } catch (err) {
       showFeedbackModal(err.message || "Scroll upload failed.", [], "Temple Notice");
