@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS library_uploads (
     id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
 
     session_id uuid NULL REFERENCES sessions(id) ON DELETE SET NULL,
+    anonymous_user_id character varying NULL REFERENCES anonymous_users(id) ON DELETE SET NULL,
     user_id uuid NULL REFERENCES users(id) ON DELETE SET NULL,
 
     ingestion_job_id uuid NULL REFERENCES ingestion_jobs(id) ON DELETE SET NULL,
@@ -70,6 +71,9 @@ CREATE TABLE IF NOT EXISTS library_uploads (
 
 CREATE INDEX IF NOT EXISTS idx_library_uploads_user_created
     ON library_uploads (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_library_uploads_anonymous_user_created
+    ON library_uploads (anonymous_user_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_library_uploads_session_created
     ON library_uploads (session_id, created_at DESC);

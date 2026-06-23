@@ -2313,6 +2313,7 @@ def _library_upload_isoformat_or_none(value):
 def create_library_upload(
     *,
     session_id: Optional[str] = None,
+    anonymous_user_id: Optional[str] = None,
     user_id: Optional[str] = None,
     ingestion_job_id: Optional[str] = None,
     scroll_id: Optional[str] = None,
@@ -2348,6 +2349,7 @@ def create_library_upload(
                 """
                 INSERT INTO library_uploads (
                     session_id,
+                    anonymous_user_id,
                     user_id,
                     ingestion_job_id,
                     scroll_id,
@@ -2365,12 +2367,13 @@ def create_library_upload(
                 )
                 VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s::jsonb
+                    %s, %s, %s, %s, %s, %s::jsonb
                 )
                 RETURNING id;
                 """,
                 (
                     session_id,
+                    anonymous_user_id,
                     user_id,
                     ingestion_job_id,
                     scroll_id,
@@ -2392,11 +2395,12 @@ def create_library_upload(
         conn.commit()
         upload_id = str(row["id"]) if row and row.get("id") else None
         logger.info(
-            "LIBRARY_UPLOAD_CREATED upload_id=%s job_id=%s scroll_id=%s user_id_present=%s session_id_present=%s status=%s storage_backend=%s",
+            "LIBRARY_UPLOAD_CREATED upload_id=%s job_id=%s scroll_id=%s user_id_present=%s anonymous_user_id_present=%s session_id_present=%s status=%s storage_backend=%s",
             upload_id,
             ingestion_job_id,
             scroll_id,
             bool(user_id),
+            bool(anonymous_user_id),
             bool(session_id),
             status_key,
             backend_key,
@@ -2417,6 +2421,8 @@ def update_library_upload(
     *,
     ingestion_job_id: Optional[str] = None,
     scroll_id: Optional[str] = None,
+    anonymous_user_id: Optional[str] = None,
+    user_id: Optional[str] = None,
     seeker_status: Optional[str] = None,
     admin_status: Optional[str] = None,
     dedupe_kind: Optional[str] = None,
@@ -2445,6 +2451,14 @@ def update_library_upload(
     if scroll_id is not None:
         set_clauses.append("scroll_id = %s")
         params.append(scroll_id)
+
+    if anonymous_user_id is not None:
+        set_clauses.append("anonymous_user_id = %s")
+        params.append(anonymous_user_id)
+
+    if user_id is not None:
+        set_clauses.append("user_id = %s")
+        params.append(user_id)
 
     if seeker_status is not None:
         set_clauses.append("seeker_status = %s")
