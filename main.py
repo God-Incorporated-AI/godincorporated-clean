@@ -5281,14 +5281,24 @@ def get_anonymous_upload_stats(anonymous_user_id: str) -> dict:
 
 
 def build_claim_nudges(upload_count: int) -> list[str]:
-    nudges = []
-    if upload_count >= 1:
-        nudges.append("Claim this path so your scrolls and dialogue follow you.")
-    if upload_count >= 2:
-        nudges.append("Your uploads in this browser can be attached to your account.")
-    if upload_count >= 3:
-        nudges.append("Create an account now to preserve continuity across devices.")
-    return nudges
+    """
+    Keep anonymous upload nudges brief and calm.
+
+    The claim path matters, but successful upload feedback should feel like
+    continuity guidance, not a repeated sales pitch.
+    """
+    try:
+        count = int(upload_count or 0)
+    except Exception:
+        count = 0
+
+    if count <= 0:
+        return []
+
+    if count >= max(1, ANONYMOUS_UPLOAD_LIMIT - 1):
+        return ["Create an account to keep uploading and preserve your Library."]
+
+    return ["Create an account to keep your Library."]
 
 
 def refresh_user_fallback_state(user_id: str) -> dict:
