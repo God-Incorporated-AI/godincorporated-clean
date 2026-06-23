@@ -9672,7 +9672,18 @@ def detect_memory_intent(question: str) -> str:
         "didn't i say",
         "have i asked",
         "have we discussed",
+        "what have we discussed",
+        "what have we talked about",
         "what were we talking about",
+        "show me our past dialogue",
+        "show past dialogue",
+        "reveal past dialogue",
+        "past dialogue",
+        "dialogue history",
+        "conversation history",
+        "past conversation",
+        "previous conversation",
+        "last conversation",
         "remind me what",
         "recall",
         "remember when",
@@ -9686,6 +9697,74 @@ def detect_memory_intent(question: str) -> str:
             return "recall"
 
     return "reflection"
+
+
+def detect_oracle_interaction_style(question: str) -> str:
+    """
+    Keep simple greetings and presence checks gentle and conversational.
+
+    Premium tiers unlock depth when the seeker asks for depth. They should not
+    force a greeting into a full memory synthesis.
+    """
+    q = re.sub(r"\s+", " ", (question or "").lower()).strip(" .!?")
+
+    if not q:
+        return "gentle_conversation"
+
+    conversational_patterns = [
+        "hello",
+        "hi",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "are you there",
+        "are you here",
+        "are you with me",
+        "can you hear me",
+        "hathor are you there",
+        "moses are you there",
+        "thank you",
+        "thanks",
+        "ok",
+        "okay"
+    ]
+
+    depth_terms = [
+        "why",
+        "what",
+        "how",
+        "explain",
+        "compare",
+        "contrast",
+        "analyze",
+        "critique",
+        "summarize",
+        "summary",
+        "synopsis",
+        "table",
+        "list",
+        "outline",
+        "teach",
+        "research",
+        "interpret",
+        "meaning",
+        "remember",
+        "recall",
+        "past",
+        "previous",
+        "before",
+        "dialogue",
+        "conversation",
+        "scroll",
+        "library"
+    ]
+
+    if len(q) <= 90 and any(pattern in q for pattern in conversational_patterns):
+        if not any(term in q for term in depth_terms):
+            return "gentle_conversation"
+
+    return "standard"
 
 
 def expand_query_terms(query_terms: list[str]) -> set[str]:
@@ -9963,6 +10042,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         # --— detect memory intent ---
         memory_intent = detect_memory_intent(question)
+        oracle_interaction_style = detect_oracle_interaction_style(question)
 
 
         # --- Resolve title for memory depth ---
@@ -9971,6 +10051,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             entitlement = get_user_entitlement_snapshot(user_id)
             plan_code = entitlement["effective_plan_code"]
             memory_depth = get_memory_depth(plan_code, memory_intent)
+
+        if oracle_interaction_style == "gentle_conversation":
+            memory_depth = 0
 
         # --- Retrieve seeker long-term memory ---
         memories = retrieve_seeker_memory(user_id, session_id, memory_depth)
@@ -9992,7 +10075,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         # --- Conditional retrieval based on memory intent ---
         passages = []
 
-        if memory_intent != "recall":
+        if memory_intent != "recall" and oracle_interaction_style != "gentle_conversation":
             retrieval_started_at = datetime.datetime.now()
             passages = retrieve_context(
                 question,
@@ -10005,6 +10088,14 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             retrieval_finished_at = datetime.datetime.now()
 
 
+
+        if oracle_interaction_style == "gentle_conversation":
+            recent_memory = ""
+            compressed_memory = ""
+            limited_memories = []
+            helper_recent_memory = ""
+            helper_compressed_memory = ""
+            helper_limited_memories = []
 
         # --— structured memory weighting ---
         memory_block = ""
@@ -10022,7 +10113,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             memory_block += "\n\n".join(limited_memories) + "\n\n"
 
         # --— fallback retrieval if recall requested but memory is empty ---
-        if memory_intent == "recall" and not memory_block.strip():
+        if memory_intent == "recall" and not memory_block.strip() and oracle_interaction_style != "gentle_conversation":
             retrieval_started_at = datetime.datetime.now()
             passages = retrieve_context(
                 question,
@@ -10058,9 +10149,13 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         llama_compact_brief = ""
         phase1_started_at = None
         phase1_finished_at = None
-        bypass_llama_phase1 = should_bypass_llama_phase1_for_request(
-            plan_code=plan_code,
-            input_mode=input_mode
+        llama_bypass_reason = "gentle_conversation" if oracle_interaction_style == "gentle_conversation" else "voice_entry_plan"
+        bypass_llama_phase1 = (
+            oracle_interaction_style == "gentle_conversation"
+            or should_bypass_llama_phase1_for_request(
+                plan_code=plan_code,
+                input_mode=input_mode
+            )
         )
 
         if bypass_llama_phase1:
@@ -10072,15 +10167,16 @@ async def ask_oracle(request: Request, payload: QuestionInput):
                 "budget_tier": "skipped",
                 "selected_passage_indexes": [],
                 "compact_brief": "",
-                "reason": "skipped: voice_entry_plan"
+                "reason": "skipped:" + llama_bypass_reason
             }
             logger.info(
-                "LLAMA_PHASE1_BYPASS input_mode=%s deity=%s memory_intent=%s plan_code=%s passages_before=%s reason=voice_entry_plan",
+                "LLAMA_PHASE1_BYPASS input_mode=%s deity=%s memory_intent=%s plan_code=%s passages_before=%s reason=%s",
                 input_mode,
                 deity,
                 memory_intent,
                 plan_code,
-                len(passages_before_llama)
+                len(passages_before_llama),
+                llama_bypass_reason
             )
         else:
             support_packet = build_support_packet(
@@ -10122,16 +10218,23 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         # --— dual-mode prompt ---
 
+        normalized_input_mode = (input_mode or "text").strip().lower()
         response_word_cap = get_response_word_cap(
             plan_code=plan_code,
             memory_intent=memory_intent,
             deity=deity,
             input_mode=input_mode
         )
+        if oracle_interaction_style == "gentle_conversation":
+            response_word_cap = min(response_word_cap, 90 if normalized_input_mode == "text" else 50)
+
         response_max_tokens = words_to_max_tokens(response_word_cap)
         response_min_words = 0
-        normalized_input_mode = (input_mode or "text").strip().lower()
-        if memory_intent != "recall" and normalized_input_mode == "text":
+        if (
+            memory_intent != "recall"
+            and normalized_input_mode == "text"
+            and oracle_interaction_style != "gentle_conversation"
+        ):
             response_min_words = max(220, int(response_word_cap * 0.58))
 
         if memory_intent == "recall":
@@ -10167,15 +10270,19 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         Rules:
         1. Use memory to enhance continuity, not override the present.
         2. Prioritize the current question.
-        3. Integrate relevant past context when helpful.
-        4. Keep responses coherent and under {response_word_cap} words.
-        5. Do not exceed the word cap. Prefer a complete, bounded answer over a long essay.
-        6. For higher access levels, allow a fuller reflection when the question genuinely invites it, while still avoiding rambling.
-        7. If input_mode is text, provide a complete written reflection with useful structure, synthesis, and continuity. Unless the seeker asks for brevity, aim for at least {response_min_words} words while staying under {response_word_cap} words.
-        8. If input_mode is voice, keep the answer naturally speakable and concise.
-        9. For text mode, prefer 3 to 6 coherent paragraphs or short sections when that helps the answer breathe.
+        3. Integrate relevant past context only when it directly helps.
+        4. For greetings, thanks, or presence checks, answer pleasantly in one to three short sentences. Do not recap past dialogue unless the seeker asks.
+        5. Keep responses coherent and under {response_word_cap} words.
+        6. Do not exceed the word cap. Prefer a complete, bounded answer over a long essay.
+        7. For higher access levels, allow a fuller reflection when the question genuinely invites it, while still avoiding rambling.
+        8. If input_mode is text and the question invites reflection, provide a complete written reflection with useful structure, synthesis, and continuity. Unless the seeker asks for brevity, aim for at least {response_min_words} words while staying under {response_word_cap} words.
+        9. If input_mode is voice, keep the answer naturally speakable and concise.
+        10. For text mode, prefer 3 to 6 coherent paragraphs or short sections only when that helps the answer breathe.
         """
         enhanced_question = f"""{instruction_block}
+
+        Interaction style:
+        {oracle_interaction_style}
 
         {memory_block}
 
@@ -10194,11 +10301,12 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         enhanced_question_chars = len(enhanced_question or "")
 
         logger.info(
-            "PROMPT_BUDGET plan_code=%s deity=%s input_mode=%s memory_intent=%s response_word_cap=%s response_min_words=%s response_max_tokens=%s recent_memory_chars=%s compressed_memory_chars=%s limited_memories_count=%s limited_memories_chars=%s memory_block_chars=%s context_block_chars=%s instruction_block_chars=%s enhanced_question_chars=%s passages=%s",
+            "PROMPT_BUDGET plan_code=%s deity=%s input_mode=%s memory_intent=%s interaction_style=%s response_word_cap=%s response_min_words=%s response_max_tokens=%s recent_memory_chars=%s compressed_memory_chars=%s limited_memories_count=%s limited_memories_chars=%s memory_block_chars=%s context_block_chars=%s instruction_block_chars=%s enhanced_question_chars=%s passages=%s",
             plan_code,
             deity,
             input_mode,
             memory_intent,
+            oracle_interaction_style,
             response_word_cap,
             response_min_words,
             response_max_tokens,
@@ -10346,6 +10454,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
                 "phase": "10.7",
                 "event_source": "ask_oracle",
                 "memory_intent": memory_intent,
+                "oracle_interaction_style": oracle_interaction_style,
                 "source_model": source_model,
                 "response_word_cap": response_word_cap,
                 "pricing_source": oracle_pricing.get("source"),
@@ -10368,6 +10477,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         # --- Logging ---
         save_log({
             "memory_intent": memory_intent,
+            "oracle_interaction_style": oracle_interaction_style,
             "memory_has_content": bool(memory_block.strip()),
             "timestamp": str(datetime.datetime.now()),
             "session_id": session_id,
