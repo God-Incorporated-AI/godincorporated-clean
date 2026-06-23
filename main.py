@@ -2246,6 +2246,344 @@ def retrieve_context(
     return personal + canonical + community
 
 
+LIBRARY_UPLOAD_SEEKER_STATUSES = {
+    "received",
+    "saved",
+    "queued",
+    "reading",
+    "ready",
+    "needs_ocr",
+    "failed",
+    "already_saved",
+    "indexing_deferred",
+}
+
+LIBRARY_UPLOAD_DEDUPE_KINDS = {
+    "none",
+    "exact_byte",
+    "content_hash",
+    "canonical_match",
+    "legacy_duplicate_not_preserved",
+}
+
+
+def normalize_library_upload_seeker_status(status: Optional[str]) -> str:
+    status_key = (status or "received").strip().lower()
+    if status_key in LIBRARY_UPLOAD_SEEKER_STATUSES:
+        return status_key
+    return "received"
+
+
+def normalize_library_upload_dedupe_kind(dedupe_kind: Optional[str]) -> Optional[str]:
+    kind_key = (dedupe_kind or "").strip().lower()
+    if not kind_key:
+        return None
+    if kind_key in LIBRARY_UPLOAD_DEDUPE_KINDS:
+        return kind_key
+    return "none"
+
+
+def library_upload_storage_backend(storage_ref: Optional[str], storage_backend: Optional[str] = None) -> Optional[str]:
+    backend = (storage_backend or "").strip().lower()
+    if backend:
+        return backend
+
+    ref = (storage_ref or "").strip()
+    if not ref:
+        return None
+
+    if ref.startswith("r2://"):
+        return "r2"
+
+    return "local"
+
+
+def _library_upload_json_payload(value: Optional[dict]) -> str:
+    return json.dumps(value or {}, default=str)
+
+
+def _library_upload_isoformat_or_none(value):
+    if not value:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def create_library_upload(
+    *,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    ingestion_job_id: Optional[str] = None,
+    scroll_id: Optional[str] = None,
+    original_filename: Optional[str] = None,
+    mime_type: Optional[str] = None,
+    file_size_bytes: Optional[int] = None,
+    storage_ref: Optional[str] = None,
+    storage_backend: Optional[str] = None,
+    file_sha256: Optional[str] = None,
+    content_hash: Optional[str] = None,
+    seeker_status: str = "received",
+    admin_status: Optional[str] = None,
+    dedupe_kind: Optional[str] = None,
+    metadata_json: Optional[dict] = None,
+) -> Optional[str]:
+    """
+    Create a seeker-visible Library artifact row.
+
+    This helper does not replace scrolls or ingestion_jobs:
+    - library_uploads tracks the user's uploaded artifact.
+    - scrolls remains the deduped retrieval/corpus record.
+    - ingestion_jobs remains the background processing record.
+    """
+    filename = (original_filename or "").strip() or "uploaded_scroll"
+    status_key = normalize_library_upload_seeker_status(seeker_status)
+    dedupe_key = normalize_library_upload_dedupe_kind(dedupe_kind)
+    backend_key = library_upload_storage_backend(storage_ref, storage_backend)
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO library_uploads (
+                    session_id,
+                    user_id,
+                    ingestion_job_id,
+                    scroll_id,
+                    original_filename,
+                    mime_type,
+                    file_size_bytes,
+                    storage_ref,
+                    storage_backend,
+                    file_sha256,
+                    content_hash,
+                    seeker_status,
+                    admin_status,
+                    dedupe_kind,
+                    metadata_json
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s::jsonb
+                )
+                RETURNING id;
+                """,
+                (
+                    session_id,
+                    user_id,
+                    ingestion_job_id,
+                    scroll_id,
+                    filename,
+                    mime_type,
+                    file_size_bytes,
+                    storage_ref,
+                    backend_key,
+                    file_sha256,
+                    content_hash,
+                    status_key,
+                    admin_status,
+                    dedupe_key,
+                    _library_upload_json_payload(metadata_json),
+                ),
+            )
+            row = cur.fetchone()
+
+        conn.commit()
+        upload_id = str(row["id"]) if row and row.get("id") else None
+        logger.info(
+            "LIBRARY_UPLOAD_CREATED upload_id=%s job_id=%s scroll_id=%s user_id_present=%s session_id_present=%s status=%s storage_backend=%s",
+            upload_id,
+            ingestion_job_id,
+            scroll_id,
+            bool(user_id),
+            bool(session_id),
+            status_key,
+            backend_key,
+        )
+        return upload_id
+
+    except Exception as exc:
+        conn.rollback()
+        logger.error("LIBRARY_UPLOAD_CREATE_FAILED error=%s", exc)
+        raise
+
+    finally:
+        conn.close()
+
+
+def update_library_upload(
+    library_upload_id: str,
+    *,
+    ingestion_job_id: Optional[str] = None,
+    scroll_id: Optional[str] = None,
+    seeker_status: Optional[str] = None,
+    admin_status: Optional[str] = None,
+    dedupe_kind: Optional[str] = None,
+    storage_ref: Optional[str] = None,
+    storage_backend: Optional[str] = None,
+    file_sha256: Optional[str] = None,
+    content_hash: Optional[str] = None,
+    metadata_json: Optional[dict] = None,
+) -> Optional[dict]:
+    """
+    Update a Library artifact row.
+
+    Only non-None fields are updated. This keeps the helper safe for incremental
+    ingestion stages where not every value is known yet.
+    """
+    if not library_upload_id:
+        raise ValueError("library_upload_id is required")
+
+    set_clauses = ["updated_at = NOW()"]
+    params = []
+
+    if ingestion_job_id is not None:
+        set_clauses.append("ingestion_job_id = %s")
+        params.append(ingestion_job_id)
+
+    if scroll_id is not None:
+        set_clauses.append("scroll_id = %s")
+        params.append(scroll_id)
+
+    if seeker_status is not None:
+        set_clauses.append("seeker_status = %s")
+        params.append(normalize_library_upload_seeker_status(seeker_status))
+
+    if admin_status is not None:
+        set_clauses.append("admin_status = %s")
+        params.append(admin_status)
+
+    if dedupe_kind is not None:
+        set_clauses.append("dedupe_kind = %s")
+        params.append(normalize_library_upload_dedupe_kind(dedupe_kind))
+
+    if storage_ref is not None:
+        set_clauses.append("storage_ref = %s")
+        params.append(storage_ref)
+
+    if storage_backend is not None or storage_ref is not None:
+        set_clauses.append("storage_backend = %s")
+        params.append(library_upload_storage_backend(storage_ref, storage_backend))
+
+    if file_sha256 is not None:
+        set_clauses.append("file_sha256 = %s")
+        params.append(file_sha256)
+
+    if content_hash is not None:
+        set_clauses.append("content_hash = %s")
+        params.append(content_hash)
+
+    if metadata_json is not None:
+        set_clauses.append("metadata_json = COALESCE(metadata_json, '{}'::jsonb) || %s::jsonb")
+        params.append(_library_upload_json_payload(metadata_json))
+
+    params.append(library_upload_id)
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE library_uploads
+                SET {", ".join(set_clauses)}
+                WHERE id = %s
+                RETURNING *;
+                """,
+                tuple(params),
+            )
+            row = cur.fetchone()
+
+        conn.commit()
+        if row:
+            logger.info(
+                "LIBRARY_UPLOAD_UPDATED upload_id=%s status=%s job_id=%s scroll_id=%s",
+                library_upload_id,
+                row.get("seeker_status"),
+                row.get("ingestion_job_id"),
+                row.get("scroll_id"),
+            )
+        else:
+            logger.warning("LIBRARY_UPLOAD_UPDATE_MISSING upload_id=%s", library_upload_id)
+
+        return row
+
+    except Exception as exc:
+        conn.rollback()
+        logger.error("LIBRARY_UPLOAD_UPDATE_FAILED upload_id=%s error=%s", library_upload_id, exc)
+        raise
+
+    finally:
+        conn.close()
+
+
+def get_library_upload(library_upload_id: str) -> Optional[dict]:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM library_uploads
+                WHERE id = %s
+                LIMIT 1;
+                """,
+                (library_upload_id,),
+            )
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def get_library_upload_for_ingestion_job(ingestion_job_id: str) -> Optional[dict]:
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM library_uploads
+                WHERE ingestion_job_id = %s
+                ORDER BY created_at DESC
+                LIMIT 1;
+                """,
+                (ingestion_job_id,),
+            )
+            return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def serialize_library_upload_for_seeker(upload: dict) -> dict:
+    """
+    Return a seeker-safe Library upload payload.
+
+    Do not expose storage_ref, bucket names, internal R2 paths, or admin-only
+    dedupe metadata here.
+    """
+    status = normalize_library_upload_seeker_status(upload.get("seeker_status"))
+    filename = upload.get("original_filename") or "uploaded_scroll"
+
+    return {
+        "upload_id": str(upload.get("id")) if upload.get("id") else None,
+        "job_id": str(upload.get("ingestion_job_id")) if upload.get("ingestion_job_id") else None,
+        "scroll_id": str(upload.get("scroll_id")) if upload.get("scroll_id") else None,
+        "filename": filename,
+        "original_filename": filename,
+        "seeker_status": status,
+        "status": status,
+        "ready": status == "ready",
+        "reading": status in {"received", "saved", "queued", "reading", "indexing_deferred"},
+        "needs_ocr": status == "needs_ocr",
+        "failed": status == "failed",
+        "already_saved": status == "already_saved",
+        "indexing_deferred": status == "indexing_deferred",
+        "can_open_original": bool(upload.get("storage_ref")),
+        "can_ask_oracle": bool(upload.get("scroll_id")) and status in {"ready", "indexing_deferred"},
+        "created_at": _library_upload_isoformat_or_none(upload.get("created_at")),
+        "updated_at": _library_upload_isoformat_or_none(upload.get("updated_at")),
+    }
+
 def create_ingestion_job(
     *,
     scroll_id: Optional[str] = None,
