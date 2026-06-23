@@ -2568,6 +2568,56 @@ def get_library_upload_for_ingestion_job(ingestion_job_id: str) -> Optional[dict
         conn.close()
 
 
+def update_library_upload_for_ingestion_job(
+    ingestion_job_id: str,
+    *,
+    scroll_id: Optional[str] = None,
+    seeker_status: Optional[str] = None,
+    admin_status: Optional[str] = None,
+    dedupe_kind: Optional[str] = None,
+    storage_ref: Optional[str] = None,
+    storage_backend: Optional[str] = None,
+    content_hash: Optional[str] = None,
+    metadata_json: Optional[dict] = None,
+) -> Optional[dict]:
+    """
+    Best-effort update for the seeker-visible Library artifact linked to an
+    ingestion job.
+
+    This must never break ingestion. If a Library row does not exist, or if an
+    older environment has not applied the Library migration yet, log and
+    continue.
+    """
+    if not ingestion_job_id:
+        return None
+
+    try:
+        upload = get_library_upload_for_ingestion_job(ingestion_job_id)
+        if not upload:
+            logger.info("LIBRARY_UPLOAD_NOT_FOUND_FOR_JOB job_id=%s", ingestion_job_id)
+            return None
+
+        return update_library_upload(
+            str(upload["id"]),
+            scroll_id=scroll_id,
+            seeker_status=seeker_status,
+            admin_status=admin_status,
+            dedupe_kind=dedupe_kind,
+            storage_ref=storage_ref,
+            storage_backend=storage_backend,
+            content_hash=content_hash,
+            metadata_json=metadata_json,
+        )
+
+    except Exception as exc:
+        logger.warning(
+            "LIBRARY_UPLOAD_UPDATE_FOR_JOB_FAILED job_id=%s error=%s",
+            ingestion_job_id,
+            exc,
+        )
+        return None
+
+
 def serialize_library_upload_for_seeker(upload: dict) -> dict:
     """
     Return a seeker-safe Library upload payload.
@@ -2791,10 +2841,14 @@ def build_ingestion_job_result_payload(
     if status_key == "ready":
         payload["ready"] = True
         if payload.get("duplicate"):
+            payload.setdefault("seeker_status", "ready")
+            payload.setdefault("dedupe_kind", "content_hash")
+            payload.setdefault("admin_status", "content_hash_duplicate")
             payload.setdefault(
-                "message",
-                "This scroll is already present in the Temple. No duplicate copy was stored. It will still be recognized in your personal record.",
+                "admin_message",
+                "Content hash matched an existing scroll; corpus was not expanded.",
             )
+            payload["message"] = payload.get("seeker_message") or "Ready in your Library."
         else:
             payload.setdefault("message", "Your scroll is ready.")
     elif status_key == "needs_ocr":
@@ -3801,9 +3855,11 @@ def cleanup_materialized_scroll_file(file_path: Optional[str], temporary: bool) 
 
 def delete_scroll_storage_ref(storage_ref: Optional[str]) -> None:
     """
-    Delete an uploaded original from durable storage when it should not be kept,
-    such as a duplicate queued upload. Local refs are intentionally left to the
-    existing local-file cleanup path.
+    Delete an uploaded original from durable storage only for explicit cleanup.
+
+    Library-preserved queued uploads should not call this just because content
+    matches an existing scroll. Corpus dedupe and artifact preservation are
+    separate concerns.
     """
     if not is_r2_storage_ref(storage_ref):
         return
@@ -3844,6 +3900,12 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             "failed",
             error_message="Queued ingestion job missing storage_ref",
         )
+        update_library_upload_for_ingestion_job(
+            job_id,
+            seeker_status="failed",
+            admin_status="missing_storage_ref",
+            metadata_json={"error": "missing_storage_ref"},
+        )
         return {
             "ok": False,
             "processed": False,
@@ -3857,6 +3919,12 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             job_id,
             "failed",
             error_message="Queued ingestion job missing session_id",
+        )
+        update_library_upload_for_ingestion_job(
+            job_id,
+            seeker_status="failed",
+            admin_status="missing_session_id",
+            metadata_json={"error": "missing_session_id"},
         )
         return {
             "ok": False,
@@ -3882,6 +3950,12 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             "failed",
             error_message=str(exc),
         )
+        update_library_upload_for_ingestion_job(
+            job_id,
+            seeker_status="failed",
+            admin_status="storage_materialize_failed",
+            metadata_json={"error": str(exc)},
+        )
         return {
             "ok": False,
             "processed": True,
@@ -3895,6 +3969,12 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             job_id,
             "failed",
             error_message=f"Queued ingestion file missing: {storage_ref}",
+        )
+        update_library_upload_for_ingestion_job(
+            job_id,
+            seeker_status="failed",
+            admin_status="missing_materialized_file",
+            metadata_json={"error": "missing_file", "storage_ref_present": bool(storage_ref)},
         )
         cleanup_materialized_scroll_file(materialized_file_path, materialized_is_temporary)
         return {
@@ -3914,13 +3994,19 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             anonymous_user_id=session_id,
             authenticated_user_id=user_id,
             preserve_unreadable_file=True,
+            preserve_duplicate_file=True,
         )
 
         result_payload = normalize_ingestion_result_payload(result)
         scroll_id = str(result_payload.get("scroll_id")) if result_payload.get("scroll_id") else None
+        is_content_duplicate = bool(result_payload.get("duplicate"))
 
-        if result_payload.get("duplicate"):
-            delete_scroll_storage_ref(storage_ref)
+        if is_content_duplicate:
+            logger.info(
+                "SCROLL_UPLOAD_DUPLICATE_ARTIFACT_PRESERVED job_id=%s storage_ref_present=%s",
+                job_id,
+                bool(storage_ref),
+            )
 
         final_result_payload = build_ingestion_job_result_payload(
             "ready",
@@ -3935,6 +4021,23 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             scroll_id=scroll_id,
             error_message=None,
             result_json=final_result_payload,
+        )
+
+        update_library_upload_for_ingestion_job(
+            job_id,
+            scroll_id=scroll_id,
+            seeker_status="ready",
+            admin_status="content_hash_duplicate" if is_content_duplicate else "ready",
+            dedupe_kind="content_hash" if is_content_duplicate else "none",
+            storage_ref=storage_ref,
+            storage_backend="r2" if is_r2_storage_ref(storage_ref) else "local",
+            content_hash=result_payload.get("content_hash"),
+            metadata_json={
+                "ingestion_status": "ready",
+                "duplicate": is_content_duplicate,
+                "artifact_preserved": True,
+                "result_status": final_result_payload.get("status"),
+            },
         )
 
         cleanup_materialized_scroll_file(materialized_file_path, materialized_is_temporary)
@@ -3962,6 +4065,20 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             result_json=final_result_payload,
         )
 
+        update_library_upload_for_ingestion_job(
+            job_id,
+            seeker_status=status,
+            admin_status=status,
+            storage_ref=storage_ref,
+            storage_backend="r2" if is_r2_storage_ref(storage_ref) else "local",
+            metadata_json={
+                "ingestion_status": status,
+                "status_code": exc.status_code,
+                "error": str(exc.detail),
+                "artifact_preserved": True,
+            },
+        )
+
         cleanup_materialized_scroll_file(materialized_file_path, materialized_is_temporary)
 
         return {
@@ -3985,6 +4102,19 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             "failed",
             error_message=str(exc),
             result_json=final_result_payload,
+        )
+
+        update_library_upload_for_ingestion_job(
+            job_id,
+            seeker_status="failed",
+            admin_status="ingestion_failed",
+            storage_ref=storage_ref,
+            storage_backend="r2" if is_r2_storage_ref(storage_ref) else "local",
+            metadata_json={
+                "ingestion_status": "failed",
+                "error": str(exc),
+                "artifact_preserved": True,
+            },
         )
 
         cleanup_materialized_scroll_file(materialized_file_path, materialized_is_temporary)
@@ -8095,6 +8225,7 @@ def ingest_saved_scroll_file(
     anonymous_user_id: str,
     authenticated_user_id: Optional[str],
     preserve_unreadable_file: bool = False,
+    preserve_duplicate_file: bool = False,
 ):
     """
     Ingest an already-saved scroll file using the current synchronous behavior.
@@ -8207,7 +8338,7 @@ def ingest_saved_scroll_file(
             if not existing_scroll:
                 conn.close()
 
-                if os.path.exists(file_path):
+                if not preserve_duplicate_file and os.path.exists(file_path):
                     os.remove(file_path)
 
                 if authenticated_user_id:
@@ -8235,7 +8366,7 @@ def ingest_saved_scroll_file(
         conn.commit()
         conn.close()
 
-        if os.path.exists(file_path):
+        if not preserve_duplicate_file and os.path.exists(file_path):
             os.remove(file_path)
 
         if authenticated_user_id:
@@ -8243,11 +8374,16 @@ def ingest_saved_scroll_file(
 
         duplicate_payload = {
             "duplicate": True,
-            "message": "This scroll is already present in the Temple. No duplicate copy was stored. It will still be recognized in your personal record."
+            "scroll_id": str(scroll_id),
+            "seeker_status": "ready",
+            "dedupe_kind": "content_hash",
+            "admin_status": "content_hash_duplicate",
+            "message": "Ready in your Library.",
+            "admin_message": "Content hash matched an existing scroll; corpus was not expanded."
         }
 
         if not authenticated_user_id:
-            duplicate_payload["message"] = "This scroll is already present in the Temple. No duplicate copy was stored. It will still be recognized in this Seeker’s path."
+            duplicate_payload["message"] = "Ready in your Library."
             stats = get_anonymous_upload_stats(anonymous_user_id)
             duplicate_payload["upload_count_for_browser"] = stats["upload_count"]
             duplicate_payload["continuity_nudges"] = build_claim_nudges(stats["upload_count"])
