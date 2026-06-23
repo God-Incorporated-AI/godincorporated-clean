@@ -8450,6 +8450,37 @@ async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scr
         )
 
         auto_process_settings = get_scroll_upload_auto_process_settings()
+
+        library_upload_id = None
+        try:
+            library_upload_id = create_library_upload(
+                session_id=None,
+                anonymous_user_id=anonymous_user_id,
+                user_id=authenticated_user_id,
+                ingestion_job_id=str(job_id) if job_id else None,
+                original_filename=scroll.filename,
+                mime_type=scroll.content_type,
+                file_size_bytes=file_size_bytes,
+                storage_ref=storage_ref,
+                storage_backend=storage_backend,
+                seeker_status="queued",
+                admin_status="queued_upload_received",
+                dedupe_kind="none",
+                metadata_json={
+                    "corpus_layer": corpus_layer,
+                    "queue_min_bytes": queue_settings["min_bytes"],
+                    "auto_process_enabled": auto_process_settings["enabled"],
+                    "auto_process_max_jobs": auto_process_settings["max_jobs"] if auto_process_settings["enabled"] else 0,
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "LIBRARY_UPLOAD_CREATE_FOR_QUEUED_UPLOAD_FAILED job_id=%s filename=%s error=%s",
+                job_id,
+                scroll.filename,
+                exc,
+            )
+
         if auto_process_settings["enabled"]:
             background_tasks.add_task(
                 run_scroll_upload_auto_processor,
@@ -8458,10 +8489,11 @@ async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scr
 
         return JSONResponse(
             content={
-                "message": "Scroll received. The Temple is reading it in the background.",
+                "message": "Scroll saved. The Temple is reading it in the background.",
                 "queued": True,
                 "status": "queued",
                 "job_id": str(job_id),
+                "upload_id": str(library_upload_id) if library_upload_id else None,
                 "filename": scroll.filename,
                 "file_size_bytes": file_size_bytes,
                 "queue_min_bytes": queue_settings["min_bytes"],
