@@ -8929,21 +8929,52 @@ async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scr
                 auto_process_settings["max_jobs"],
             )
 
+        acceptance_message = UPLOAD_SEEKER_MESSAGE_TEXT[SEEKER_MESSAGE_UPLOAD_SAVED_READING]
+        job_id_text = str(job_id) if job_id else None
+        library_upload_id_text = str(library_upload_id) if library_upload_id else None
         return JSONResponse(
-            content={
-                "message": "Scroll saved. The Temple is reading it in the background.",
-                "queued": True,
-                "status": "queued",
-                "job_id": str(job_id),
-                "upload_id": str(library_upload_id) if library_upload_id else None,
-                "filename": scroll.filename,
-                "file_size_bytes": file_size_bytes,
-                "queue_min_bytes": queue_settings["min_bytes"],
-                "storage_backend": storage_backend,
-                "auto_process_enabled": auto_process_settings["enabled"],
-                "auto_process_max_jobs": auto_process_settings["max_jobs"] if auto_process_settings["enabled"] else 0,
-            },
-            status_code=202,
+            content=build_upload_status_payload(
+                ok=True,
+                accepted=True,
+                rejected=False,
+                terminal=False,
+                upload_state=UPLOAD_STATE_QUEUED,
+                library_state=LIBRARY_STATE_QUEUED,
+                seeker_title_key=SEEKER_TITLE_UPLOAD_SAVED,
+                seeker_message_key=SEEKER_MESSAGE_UPLOAD_SAVED_READING,
+                admin_status=UPLOAD_ADMIN_STATUS_QUEUED_UPLOAD_RECEIVED,
+                admin_message="Queued upload accepted and saved for background reading.",
+                claim_required=False,
+                claim_recommended=not bool(authenticated_user_id),
+                anonymous_uploads_remaining=(
+                    max(ANONYMOUS_UPLOAD_LIMIT - upload_count, 0)
+                    if not authenticated_user_id
+                    else None
+                ),
+                upload_id=library_upload_id_text,
+                library_upload_id=library_upload_id_text,
+                ingestion_job_id=job_id_text,
+                job_id=job_id_text,
+                artifact_preserved=True,
+                storage_backend=storage_backend,
+                duplicate=False,
+                dedupe_kind=UPLOAD_DEDUPE_KIND_NONE,
+                needs_ocr=False,
+                extra={
+                    "message": acceptance_message,
+                    "queued": True,
+                    "status": "queued",
+                    "filename": scroll.filename,
+                    "file_size_bytes": file_size_bytes,
+                    "queue_min_bytes": queue_settings["min_bytes"],
+                    "auto_process_enabled": auto_process_settings["enabled"],
+                    "auto_process_max_jobs": auto_process_settings["max_jobs"],
+                    "upload_count_for_browser": upload_count if not authenticated_user_id else None,
+                    "continuity_nudges": build_claim_nudges(upload_count) if not authenticated_user_id else [],
+                    "anonymous_upload_limit": ANONYMOUS_UPLOAD_LIMIT if not authenticated_user_id else None,
+                },
+            ),
+            status_code=202
         )
 
     return ingest_saved_scroll_file(
