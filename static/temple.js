@@ -128,21 +128,41 @@ document.addEventListener("DOMContentLoaded", function () {
     return sample.startsWith("<!doctype html") || sample.startsWith("<html");
   }
 
+  function makeUploadStatusUnavailablePayload(message = "Upload status could not be loaded. Refresh your Library shortly.") {
+    return {
+      upload_state: "status_unavailable",
+      library_state: "unknown",
+      terminal: true,
+      seeker_title: "Status unavailable",
+      seeker_message: message
+    };
+  }
+
+  function isCanonicalUploadFeedback(data) {
+    return Boolean(
+      data &&
+      typeof data === "object" &&
+      typeof data.upload_state === "string" &&
+      typeof data.seeker_title === "string" &&
+      typeof data.seeker_message === "string"
+    );
+  }
+
   function normalizeUploadFeedback(response, data) {
     const nudges = Array.isArray(data?.continuity_nudges) ? data.continuity_nudges : [];
-
-    if ((response && response.status >= 500) || looksLikeHtmlResponse(data)) {
-      return {
-        message: "The Temple could not read that scroll right now. This file may be image-heavy or photo-scanned, and the live upload path could not process it reliably. Please try a text-based PDF, TXT, DOCX, or an OCR-processed scan.",
-        nudges,
-        title: "Scroll Upload"
-      };
-    }
+    const canonical = isCanonicalUploadFeedback(data);
+    const payload = canonical ? data : makeUploadStatusUnavailablePayload();
 
     return {
-      message: data?.error || data?.detail || data?.message || (typeof data === "string" && data.trim() ? data.trim() : "Scroll upload failed."),
+      message: payload.seeker_message,
       nudges,
-      title: "Temple Notice"
+      title: payload.seeker_title,
+      uploadState: payload.upload_state,
+      libraryState: payload.library_state,
+      terminal: Boolean(payload.terminal),
+      accepted: Boolean(payload.accepted),
+      rejected: Boolean(payload.rejected),
+      canonical
     };
   }
 
@@ -208,20 +228,31 @@ document.addEventListener("DOMContentLoaded", function () {
     return { error: text || "Oracle request failed" };
   }
 
+  async function safeReadUploadJson(response) {
+    const text = await response.text();
+    const contentType = response.headers.get("content-type") || "";
+
+    if (contentType.includes("application/json")) {
+      try {
+        return JSON.parse(text);
+      } catch (e) {
+        return makeUploadStatusUnavailablePayload("The upload response could not be read. Refresh your Library shortly.");
+      }
+    }
+
+    if (looksLikeHtmlResponse(text)) {
+      return makeUploadStatusUnavailablePayload("Upload status could not be loaded. Refresh your Library shortly.");
+    }
+
+    return makeUploadStatusUnavailablePayload("Upload status could not be loaded. Refresh your Library shortly.");
+  }
+
   function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  function isTerminalIngestionStatus(status) {
-    return ["ready", "needs_ocr", "failed"].includes(String(status || "").toLowerCase());
-  }
-
   function uploadStatusTitle(data) {
-    if (data?.needs_ocr) return "Scroll Needs OCR";
-    if (data?.duplicate) return "Scroll Already Present";
-    if (data?.failed) return "Scroll Upload";
-    if (data?.ready) return "Scroll Ready";
-    return "Scroll Upload";
+    return isCanonicalUploadFeedback(data) ? data.seeker_title : "Status unavailable";
   }
 
   async function refreshScrollCount() {
@@ -248,35 +279,28 @@ document.addEventListener("DOMContentLoaded", function () {
 
       try {
         const statusResponse = await identityFetch("/ingestion/jobs/" + encodeURIComponent(jobId));
-        const statusData = await safeReadJson(statusResponse);
+        const statusData = await safeReadUploadJson(statusResponse);
 
         if (!statusResponse.ok) {
-          continue;
-        }
-
-        if (isTerminalIngestionStatus(statusData?.status)) {
-          const nudges = Array.isArray(statusData?.continuity_nudges) ? statusData.continuity_nudges : [];
-          const finalMessage = statusData.message || "The Temple has finished reading this scroll.";
-          const finalTitle = uploadStatusTitle(statusData);
-
+          const normalized = normalizeUploadFeedback(statusResponse, statusData);
           showFeedbackModal(
-            finalMessage,
-            nudges,
-            finalTitle,
+            normalized.message,
+            normalized.nudges,
+            normalized.title,
             { showCreateAccount: Boolean(options.showCreateAccount) }
           );
+          return statusData;
+        }
 
-          if (feedbackTitle) {
-            feedbackTitle.textContent = finalTitle;
-          }
+        if (statusData?.terminal === true) {
+          const normalized = normalizeUploadFeedback(statusResponse, statusData);
 
-          if (feedbackBody) {
-            const lines = ["<div>" + escapeHtml(finalMessage) + "</div>"];
-            nudges.forEach((line) => {
-              lines.push("<div>" + escapeHtml(line) + "</div>");
-            });
-            feedbackBody.innerHTML = lines.join("");
-          }
+          showFeedbackModal(
+            normalized.message,
+            normalized.nudges,
+            normalized.title,
+            { showCreateAccount: Boolean(options.showCreateAccount) }
+          );
 
           await refreshScrollCount();
           return statusData;
@@ -289,9 +313,9 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     showFeedbackModal(
-      "The Temple is still reading this scroll. Refresh the Library shortly if the final notice does not appear.",
+      "Still reading. Check your Library shortly.",
       [],
-      "Scroll Still Processing",
+      "Upload status",
       { showCreateAccount: Boolean(options.showCreateAccount) }
     );
 
@@ -464,7 +488,7 @@ if (scrollInput && scrollForm) {
         body: formData,
       });
 
-      const data = await safeReadJson(response);
+      const data = await safeReadUploadJson(response);
       const continuityNudges = Array.isArray(data?.continuity_nudges) ? data.continuity_nudges : [];
       const shouldOfferClaim = !currentIdentity?.authenticated && (Boolean(data?.claim_required) || continuityNudges.length > 0);
 
@@ -489,21 +513,26 @@ if (scrollInput && scrollForm) {
         return;
       }
 
+      const normalized = normalizeUploadFeedback(response, data);
       showFeedbackModal(
-        data.message || "📜 Your scroll has been uploaded.",
-        continuityNudges,
-        "Temple Notice",
+        normalized.message,
+        normalized.nudges,
+        normalized.title,
         { showCreateAccount: shouldOfferClaim }
       );
       scrollInput.value = "";
 
-      if (data?.queued && data?.job_id) {
+      if (data?.upload_state === "queued" && data?.job_id) {
         pollQueuedUploadStatus(data.job_id, { showCreateAccount: shouldOfferClaim });
       } else {
         await refreshScrollCount();
       }
     } catch (err) {
-      showFeedbackModal(err.message || "Scroll upload failed.", [], "Temple Notice");
+      showFeedbackModal(
+        "Upload status could not be loaded. Refresh your Library shortly.",
+        [],
+        "Status unavailable"
+      );
     } finally {
       if (submitBtn) {
         submitBtn.disabled = false;
