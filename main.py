@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import uuid
 
 import re
@@ -4512,6 +4513,110 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             "error": str(exc),
             "result": final_result_payload,
         }
+
+
+def get_scroll_ocr_settings() -> dict:
+    """Return guarded OCR settings for queued PDF ingestion."""
+    return {
+        "enabled": _env_flag("SCROLL_OCR_ENABLED", default=False),
+        "max_pages": max(1, int(os.getenv("SCROLL_OCR_MAX_PAGES", "5"))),
+        "timeout_seconds": max(5, int(os.getenv("SCROLL_OCR_TIMEOUT_SECONDS", "60"))),
+        "min_text_chars": max(1, int(os.getenv("SCROLL_OCR_MIN_TEXT_CHARS", "500"))),
+        "dpi": max(72, int(os.getenv("SCROLL_OCR_DPI", "200"))),
+        "tesseract_cmd": (os.getenv("SCROLL_OCR_TESSERACT_CMD") or "tesseract").strip() or "tesseract",
+    }
+
+
+def is_pdf_file_path(file_path: str) -> bool:
+    return os.path.splitext(file_path or "")[1].lower() == ".pdf"
+
+
+def is_scroll_text_sufficient(text: str, min_chars: Optional[int] = None) -> bool:
+    threshold = int(min_chars or os.getenv("SCROLL_MIN_TEXT_CHARS", "50"))
+    return len((text or "").strip()) >= max(1, threshold)
+
+
+def render_pdf_page_to_png_bytes(page, dpi: int) -> bytes:
+    zoom = dpi / 72.0
+    matrix = fitz.Matrix(zoom, zoom)
+    pix = page.get_pixmap(matrix=matrix, alpha=False)
+    return pix.tobytes("png")
+
+
+def run_tesseract_ocr_on_png_bytes(image_bytes: bytes, *, timeout_seconds: int, tesseract_cmd: str) -> str:
+    proc = subprocess.run(
+        [tesseract_cmd, "stdin", "stdout", "--psm", "6"],
+        input=image_bytes,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout_seconds,
+        check=False,
+    )
+    if proc.returncode != 0:
+        stderr_preview = proc.stderr.decode("utf-8", errors="ignore").strip()[:240]
+        logger.warning("SCROLL_OCR_TESSERACT_FAILED returncode=%s stderr=%s", proc.returncode, stderr_preview)
+        return ""
+    return proc.stdout.decode("utf-8", errors="ignore").strip()
+
+
+def extract_pdf_text_with_worker_ocr(file_path: str, *, settings: Optional[dict] = None) -> str:
+    """Attempt bounded OCR for a PDF file. Intended for queued worker use only."""
+    settings = settings or get_scroll_ocr_settings()
+    if not settings.get("enabled"):
+        return ""
+    if not is_pdf_file_path(file_path):
+        return ""
+
+    tesseract_cmd = settings["tesseract_cmd"]
+    if not shutil.which(tesseract_cmd):
+        logger.warning("SCROLL_OCR_TESSERACT_MISSING cmd=%s", tesseract_cmd)
+        return ""
+
+    max_pages = int(settings["max_pages"])
+    timeout_seconds = int(settings["timeout_seconds"])
+    dpi = int(settings["dpi"])
+    min_text_chars = int(settings["min_text_chars"])
+
+    parts = []
+    try:
+        doc = fitz.open(file_path)
+    except Exception as exc:
+        logger.warning("SCROLL_OCR_OPEN_FAILED file=%s error=%s", file_path, exc)
+        return ""
+
+    try:
+        page_count = min(doc.page_count, max_pages)
+        for page_index in range(page_count):
+            try:
+                page = doc.load_page(page_index)
+                image_bytes = render_pdf_page_to_png_bytes(page, dpi)
+                page_text = run_tesseract_ocr_on_png_bytes(
+                    image_bytes,
+                    timeout_seconds=timeout_seconds,
+                    tesseract_cmd=tesseract_cmd,
+                )
+                if page_text:
+                    parts.append(page_text)
+                current_text = "\n".join(parts).strip()
+                if len(current_text) >= min_text_chars:
+                    break
+            except subprocess.TimeoutExpired:
+                logger.warning("SCROLL_OCR_PAGE_TIMEOUT file=%s page=%s timeout=%s", file_path, page_index + 1, timeout_seconds)
+            except Exception as exc:
+                logger.warning("SCROLL_OCR_PAGE_FAILED file=%s page=%s error=%s", file_path, page_index + 1, exc)
+    finally:
+        doc.close()
+
+    ocr_text = "\n".join(parts).strip()
+    logger.info(
+        "SCROLL_OCR_COMPLETE file=%s chars=%s max_pages=%s dpi=%s",
+        file_path,
+        len(ocr_text),
+        max_pages,
+        dpi,
+    )
+    return ocr_text
+
 
 
 def extract_text_from_scroll(file_path):
