@@ -8778,14 +8778,31 @@ async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scr
                 anonymous_user_id,
                 upload_count,
             )
+            cap_message = UPLOAD_SEEKER_MESSAGE_TEXT[SEEKER_MESSAGE_UPLOAD_CAP]
             return JSONResponse(
-                content={
-                    "error": "Anonymous upload limit reached for this browser. Claim this path to continue offering scrolls.",
-                    "claim_required": True,
-                    "upload_count_for_browser": upload_count,
-                    "continuity_nudges": build_claim_nudges(upload_count),
-                    "anonymous_upload_limit": ANONYMOUS_UPLOAD_LIMIT,
-                },
+                content=build_upload_status_payload(
+                    ok=False,
+                    accepted=False,
+                    rejected=True,
+                    terminal=True,
+                    upload_state=UPLOAD_STATE_REJECTED_CAP,
+                    library_state=LIBRARY_STATE_NONE,
+                    seeker_title_key=SEEKER_TITLE_UPLOAD_CREATE_ACCOUNT,
+                    seeker_message_key=SEEKER_MESSAGE_UPLOAD_CAP,
+                    admin_status=UPLOAD_ADMIN_STATUS_REJECTED_ANONYMOUS_CAP,
+                    admin_message="Anonymous upload cap reached before storage.",
+                    claim_required=True,
+                    claim_recommended=True,
+                    anonymous_uploads_remaining=0,
+                    artifact_preserved=False,
+                    extra={
+                        "error": cap_message,
+                        "message": cap_message,
+                        "upload_count_for_browser": upload_count,
+                        "continuity_nudges": [],
+                        "anonymous_upload_limit": ANONYMOUS_UPLOAD_LIMIT,
+                    },
+                ),
                 status_code=403
             )
 
@@ -8803,13 +8820,30 @@ async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scr
                     upload_count,
                     seconds_remaining,
                 )
+                cooldown_message = UPLOAD_SEEKER_MESSAGE_TEXT[SEEKER_MESSAGE_UPLOAD_COOLDOWN]
                 return JSONResponse(
-                    content={
-                        "error": "Please wait a few seconds before offering another scroll.",
-                        "warning": "We’re slowing repeated uploads to protect the Temple. Please wait a moment before trying again.",
-                        "cooldown_seconds_remaining": seconds_remaining,
-                        "upload_count_for_browser": upload_count,
-                    },
+                    content=build_upload_status_payload(
+                        ok=False,
+                        accepted=False,
+                        rejected=True,
+                        terminal=True,
+                        upload_state=UPLOAD_STATE_REJECTED_COOLDOWN,
+                        library_state=LIBRARY_STATE_NONE,
+                        seeker_title_key=SEEKER_TITLE_UPLOAD_PAUSED,
+                        seeker_message_key=SEEKER_MESSAGE_UPLOAD_COOLDOWN,
+                        admin_status=UPLOAD_ADMIN_STATUS_REJECTED_COOLDOWN,
+                        admin_message="Anonymous upload cooldown hit before storage.",
+                        retry_after_seconds=seconds_remaining,
+                        anonymous_uploads_remaining=max(ANONYMOUS_UPLOAD_LIMIT - upload_count, 0),
+                        artifact_preserved=False,
+                        extra={
+                            "error": cooldown_message,
+                            "message": cooldown_message,
+                            "warning": "We’re slowing repeated uploads to protect the Temple. Please wait a moment before trying again.",
+                            "cooldown_seconds_remaining": seconds_remaining,
+                            "upload_count_for_browser": upload_count,
+                        },
+                    ),
                     status_code=429
                 )
 
