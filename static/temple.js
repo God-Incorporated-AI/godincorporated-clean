@@ -212,9 +212,27 @@ document.addEventListener("DOMContentLoaded", function () {
       }
 
       if (
+        uploadState === "needs_ocr" ||
+        adminStatus === "needs_ocr" ||
+        status === 422
+      ) {
+        return buildUploadNotice(
+          "Needs OCR",
+          "Saved to Library. Needs OCR.",
+          data,
+          {
+            uploadState: "needs_ocr",
+            libraryState: "needs_ocr",
+            terminal: true,
+            accepted: true
+          }
+        );
+      }
+
+      if (
         uploadState === "rejected_invalid_file" ||
         adminStatus === "unreadable" ||
-        [400, 415, 422].includes(status)
+        [400, 415].includes(status)
       ) {
         return buildUploadNotice(
           "File could not be read",
