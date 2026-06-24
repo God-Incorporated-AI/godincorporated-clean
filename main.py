@@ -3099,36 +3099,61 @@ def build_ingestion_job_result_payload(
         payload.setdefault("scroll_id", str(scroll_id))
     if error_message:
         payload.setdefault("error", str(error_message))
+        payload.setdefault("admin_message", str(error_message))
 
     if status_key == "ready":
         payload["ready"] = True
+        payload.setdefault("seeker_status", "ready")
+        payload.setdefault("seeker_title_key", SEEKER_TITLE_UPLOAD_READY)
+        payload.setdefault("seeker_message_key", SEEKER_MESSAGE_UPLOAD_READY)
         if payload.get("duplicate"):
-            payload.setdefault("seeker_status", "ready")
-            payload.setdefault("dedupe_kind", "content_hash")
-            payload.setdefault("admin_status", "content_hash_duplicate")
+            payload.setdefault("dedupe_kind", UPLOAD_DEDUPE_KIND_CONTENT_HASH)
+            payload.setdefault("admin_status", UPLOAD_ADMIN_STATUS_CONTENT_HASH_DUPLICATE)
             payload.setdefault(
                 "admin_message",
                 "Content hash matched an existing scroll; corpus was not expanded.",
             )
-            payload["message"] = payload.get("seeker_message") or "Ready in your Library."
         else:
-            payload.setdefault("message", "Your scroll is ready.")
+            payload.setdefault("dedupe_kind", UPLOAD_DEDUPE_KIND_NONE)
+            payload.setdefault("admin_status", UPLOAD_ADMIN_STATUS_READY)
+
+        payload["message"] = UPLOAD_SEEKER_MESSAGE_TEXT[SEEKER_MESSAGE_UPLOAD_READY]
+        payload.setdefault("seeker_message", payload["message"])
+
     elif status_key == "needs_ocr":
         payload["needs_ocr"] = True
-        payload.setdefault(
-            "message",
-            str(error_message or "This scroll appears to need OCR. The Temple preserved the original, but could not reliably read it yet."),
-        )
+        payload.setdefault("seeker_status", "needs_ocr")
+        payload.setdefault("admin_status", UPLOAD_ADMIN_STATUS_NEEDS_OCR)
+        payload.setdefault("seeker_title_key", SEEKER_TITLE_UPLOAD_NEEDS_OCR)
+        payload.setdefault("seeker_message_key", SEEKER_MESSAGE_UPLOAD_NEEDS_OCR)
+
+        payload["message"] = UPLOAD_SEEKER_MESSAGE_TEXT[SEEKER_MESSAGE_UPLOAD_NEEDS_OCR]
+        payload.setdefault("seeker_message", payload["message"])
+
     elif status_key == "failed":
         payload["failed"] = True
-        payload.setdefault(
-            "message",
-            str(error_message or "The Temple could not process this scroll. Please try again or use a text-based file."),
-        )
+        payload.setdefault("seeker_status", "failed")
+        payload.setdefault("admin_status", UPLOAD_ADMIN_STATUS_INGESTION_FAILED)
+        payload.setdefault("seeker_title_key", SEEKER_TITLE_UPLOAD_FAILED)
+        payload.setdefault("seeker_message_key", SEEKER_MESSAGE_UPLOAD_FAILED)
+
+        payload["message"] = UPLOAD_SEEKER_MESSAGE_TEXT[SEEKER_MESSAGE_UPLOAD_FAILED]
+        payload.setdefault("seeker_message", payload["message"])
+
     elif status_key in {"queued", "processing"}:
-        payload.setdefault("message", "The Temple is still reading this scroll in the background.")
+        payload.setdefault("seeker_title_key", SEEKER_TITLE_UPLOAD_STATUS)
+        payload.setdefault("seeker_message_key", SEEKER_MESSAGE_UPLOAD_STATUS_STILL_PROCESSING)
+
+        payload["message"] = UPLOAD_SEEKER_MESSAGE_TEXT[SEEKER_MESSAGE_UPLOAD_STATUS_STILL_PROCESSING]
+        payload.setdefault("seeker_message", payload["message"])
+
     else:
-        payload.setdefault("message", "The Temple is checking this scroll.")
+        payload.setdefault("admin_status", UPLOAD_ADMIN_STATUS_STATUS_UNAVAILABLE)
+        payload.setdefault("seeker_title_key", SEEKER_TITLE_UPLOAD_STATUS_UNAVAILABLE)
+        payload.setdefault("seeker_message_key", SEEKER_MESSAGE_UPLOAD_STATUS_UNAVAILABLE)
+
+        payload["message"] = UPLOAD_SEEKER_MESSAGE_TEXT[SEEKER_MESSAGE_UPLOAD_STATUS_UNAVAILABLE]
+        payload.setdefault("seeker_message", payload["message"])
 
     return payload
 
