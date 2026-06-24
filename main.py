@@ -8739,6 +8739,30 @@ def ingest_saved_scroll_file(
     # Extract text
     extracted_text = extract_text_from_scroll(file_path)
 
+    if not extracted_text.strip() and preserve_unreadable_file and file_ext == ".pdf":
+        ocr_settings = get_scroll_ocr_settings()
+        if ocr_settings.get("enabled"):
+            logger.info(
+                "SCROLL_OCR_ATTEMPT filename=%s max_pages=%s dpi=%s",
+                original_filename,
+                ocr_settings.get("max_pages"),
+                ocr_settings.get("dpi"),
+            )
+            ocr_text = extract_pdf_text_with_worker_ocr(file_path, settings=ocr_settings)
+            if is_scroll_text_sufficient(ocr_text, ocr_settings.get("min_text_chars")):
+                extracted_text = ocr_text
+                logger.info(
+                    "SCROLL_OCR_TEXT_ACCEPTED filename=%s chars=%s",
+                    original_filename,
+                    len(extracted_text),
+                )
+            else:
+                logger.info(
+                    "SCROLL_OCR_TEXT_INSUFFICIENT filename=%s chars=%s",
+                    original_filename,
+                    len(ocr_text or ""),
+                )
+
     if not extracted_text.strip():
         if not preserve_unreadable_file:
             remove_uploaded_file(file_path)
