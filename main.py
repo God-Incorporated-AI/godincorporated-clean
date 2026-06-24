@@ -3178,29 +3178,98 @@ def serialize_ingestion_job_status(job: dict) -> dict:
     result_json = _safe_ingestion_result_json(job.get("result_json"))
     status = (job.get("status") or "").strip().lower()
     error_message = job.get("error_message")
+    job_id_text = str(job.get("id")) if job.get("id") else None
+
+    library_upload = None
+    if job_id_text:
+        try:
+            library_upload = get_library_upload_for_ingestion_job(job_id_text)
+        except Exception as exc:
+            logger.warning(
+                "LIBRARY_UPLOAD_LOOKUP_FOR_JOB_STATUS_FAILED job_id=%s error=%s",
+                job_id_text,
+                exc,
+            )
+            library_upload = None
+
+    scroll_id_text = str(job.get("scroll_id")) if job.get("scroll_id") else result_json.get("scroll_id")
+
+    result_upload_id = result_json.get("upload_id") or result_json.get("library_upload_id")
+    library_upload_id_text = (
+        str(library_upload.get("id"))
+        if library_upload and library_upload.get("id")
+        else (str(result_upload_id) if result_upload_id else None)
+    )
+
+    storage_ref = job.get("storage_ref") or (
+        library_upload.get("storage_ref") if library_upload else None
+    )
+    storage_backend = (
+        library_upload.get("storage_backend")
+        if library_upload and library_upload.get("storage_backend")
+        else ("r2" if isinstance(storage_ref, str) and storage_ref.startswith("r2://") else ("local" if storage_ref else None))
+    )
+
+    duplicate = bool(result_json.get("duplicate"))
+    dedupe_kind = (
+        result_json.get("dedupe_kind")
+        or (library_upload.get("dedupe_kind") if library_upload else None)
+        or (UPLOAD_DEDUPE_KIND_CONTENT_HASH if duplicate else UPLOAD_DEDUPE_KIND_NONE)
+    )
 
     message = result_json.get("message")
     if not message:
         message = build_ingestion_job_result_payload(
             status,
             original_filename=job.get("original_filename"),
-            scroll_id=str(job.get("scroll_id")) if job.get("scroll_id") else None,
+            scroll_id=scroll_id_text,
             error_message=error_message,
         ).get("message")
 
-    response = {
-        "ok": True,
-        "job_id": str(job.get("id")),
+    upload_state_by_status = {
+        "queued": UPLOAD_STATE_QUEUED,
+        "processing": UPLOAD_STATE_PROCESSING,
+        "ready": UPLOAD_STATE_READY,
+        "needs_ocr": UPLOAD_STATE_NEEDS_OCR,
+        "failed": UPLOAD_STATE_FAILED,
+    }
+    library_state_by_status = {
+        "queued": LIBRARY_STATE_QUEUED,
+        "processing": LIBRARY_STATE_READING,
+        "ready": LIBRARY_STATE_READY,
+        "needs_ocr": LIBRARY_STATE_NEEDS_OCR,
+        "failed": LIBRARY_STATE_FAILED,
+    }
+    seeker_title_by_status = {
+        "queued": SEEKER_TITLE_UPLOAD_STATUS,
+        "processing": SEEKER_TITLE_UPLOAD_STATUS,
+        "ready": SEEKER_TITLE_UPLOAD_READY,
+        "needs_ocr": SEEKER_TITLE_UPLOAD_NEEDS_OCR,
+        "failed": SEEKER_TITLE_UPLOAD_FAILED,
+    }
+    seeker_message_by_status = {
+        "queued": SEEKER_MESSAGE_UPLOAD_STATUS_STILL_PROCESSING,
+        "processing": SEEKER_MESSAGE_UPLOAD_STATUS_STILL_PROCESSING,
+        "ready": SEEKER_MESSAGE_UPLOAD_READY,
+        "needs_ocr": SEEKER_MESSAGE_UPLOAD_NEEDS_OCR,
+        "failed": SEEKER_MESSAGE_UPLOAD_FAILED,
+    }
+    admin_status_by_status = {
+        "queued": UPLOAD_ADMIN_STATUS_QUEUED_UPLOAD_RECEIVED,
+        "processing": UPLOAD_ADMIN_STATUS_PROCESSING,
+        "ready": UPLOAD_ADMIN_STATUS_READY,
+        "needs_ocr": UPLOAD_ADMIN_STATUS_NEEDS_OCR,
+        "failed": UPLOAD_ADMIN_STATUS_INGESTION_FAILED,
+    }
+
+    extra = {
         "status": status,
         "queued": status == "queued",
         "processing": status == "processing",
         "ready": status == "ready",
-        "needs_ocr": status == "needs_ocr",
         "failed": status == "failed",
-        "duplicate": bool(result_json.get("duplicate")),
         "message": message,
         "original_filename": job.get("original_filename"),
-        "scroll_id": str(job.get("scroll_id")) if job.get("scroll_id") else result_json.get("scroll_id"),
         "created_at": _isoformat_or_none(job.get("created_at")),
         "started_at": _isoformat_or_none(job.get("started_at")),
         "finished_at": _isoformat_or_none(job.get("finished_at")),
@@ -3209,9 +3278,38 @@ def serialize_ingestion_job_status(job: dict) -> dict:
     # Preserve safe result hints for the frontend without exposing storage refs or text.
     for key in ["upload_count_for_browser", "continuity_nudges", "claim_recommended", "anonymous_upload_limit"]:
         if key in result_json:
-            response[key] = result_json[key]
+            extra[key] = result_json[key]
 
-    return response
+    return build_upload_status_payload(
+        ok=True,
+        accepted=True,
+        rejected=False,
+        terminal=status in {"ready", "needs_ocr", "failed"},
+        upload_state=upload_state_by_status.get(status, UPLOAD_STATE_STATUS_UNAVAILABLE),
+        library_state=library_state_by_status.get(status, LIBRARY_STATE_UNKNOWN),
+        seeker_title_key=seeker_title_by_status.get(status, SEEKER_TITLE_UPLOAD_STATUS_UNAVAILABLE),
+        seeker_message_key=seeker_message_by_status.get(status, SEEKER_MESSAGE_UPLOAD_STATUS_UNAVAILABLE),
+        admin_status=(
+            result_json.get("admin_status")
+            or (library_upload.get("admin_status") if library_upload else None)
+            or admin_status_by_status.get(status, UPLOAD_ADMIN_STATUS_STATUS_UNAVAILABLE)
+        ),
+        admin_message=result_json.get("admin_message") or error_message,
+        claim_required=False,
+        claim_recommended=bool(result_json.get("claim_recommended")),
+        anonymous_uploads_remaining=result_json.get("anonymous_uploads_remaining"),
+        upload_id=library_upload_id_text,
+        library_upload_id=library_upload_id_text,
+        ingestion_job_id=job_id_text,
+        job_id=job_id_text,
+        scroll_id=scroll_id_text,
+        artifact_preserved=bool(storage_ref),
+        storage_backend=storage_backend,
+        duplicate=duplicate,
+        dedupe_kind=dedupe_kind,
+        needs_ocr=status == "needs_ocr" or bool(result_json.get("needs_ocr")),
+        extra=extra,
+    )
 
 
 @app.get("/ingestion/jobs/{job_id}")
