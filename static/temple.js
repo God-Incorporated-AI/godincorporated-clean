@@ -128,12 +128,15 @@ document.addEventListener("DOMContentLoaded", function () {
     return sample.startsWith("<!doctype html") || sample.startsWith("<html");
   }
 
-  function makeUploadStatusUnavailablePayload(message = "Upload status could not be loaded. Refresh your Library shortly.") {
+  function makeUploadStatusUnavailablePayload(
+    message = "Final upload status could not be loaded. Refresh your Library shortly.",
+    title = "Upload status unavailable"
+  ) {
     return {
       upload_state: "status_unavailable",
       library_state: "unknown",
       terminal: true,
-      seeker_title: "Status unavailable",
+      seeker_title: title,
       seeker_message: message
     };
   }
@@ -148,22 +151,179 @@ document.addEventListener("DOMContentLoaded", function () {
     );
   }
 
-  function normalizeUploadFeedback(response, data) {
+  function buildUploadNotice(title, message, data = {}, options = {}) {
     const nudges = Array.isArray(data?.continuity_nudges) ? data.continuity_nudges : [];
-    const canonical = isCanonicalUploadFeedback(data);
-    const payload = canonical ? data : makeUploadStatusUnavailablePayload();
 
     return {
-      message: payload.seeker_message,
+      message,
       nudges,
-      title: payload.seeker_title,
-      uploadState: payload.upload_state,
-      libraryState: payload.library_state,
-      terminal: Boolean(payload.terminal),
-      accepted: Boolean(payload.accepted),
-      rejected: Boolean(payload.rejected),
-      canonical
+      title,
+      uploadState: data?.upload_state || options.uploadState || "status_unavailable",
+      libraryState: data?.library_state || options.libraryState || "unknown",
+      terminal: Boolean(data?.terminal ?? options.terminal ?? true),
+      accepted: Boolean(data?.accepted ?? options.accepted ?? false),
+      rejected: Boolean(data?.rejected ?? options.rejected ?? false),
+      canonical: Boolean(options.canonical)
     };
+  }
+
+  function noticeFromUploadResponse(response, data, options = {}) {
+    const context = options.context || "upload";
+    const status = Number(response?.status || 0);
+    const uploadState = String(data?.upload_state || "").toLowerCase();
+    const adminStatus = String(data?.admin_status || "").toLowerCase();
+
+    if (context === "upload") {
+      if (
+        uploadState === "rejected_cap" ||
+        adminStatus === "rejected_anonymous_cap" ||
+        data?.claim_required === true ||
+        status === 403
+      ) {
+        return buildUploadNotice(
+          "Create account",
+          "Create an account to keep uploading and preserve your Library.",
+          data,
+          {
+            uploadState: "rejected_cap",
+            libraryState: "none",
+            terminal: true,
+            rejected: true
+          }
+        );
+      }
+
+      if (
+        uploadState === "rejected_cooldown" ||
+        adminStatus === "rejected_cooldown" ||
+        status === 429
+      ) {
+        return buildUploadNotice(
+          "Please wait",
+          "Please wait a few seconds before uploading another scroll.",
+          data,
+          {
+            uploadState: "rejected_cooldown",
+            libraryState: "none",
+            terminal: true,
+            rejected: true
+          }
+        );
+      }
+
+      if (
+        uploadState === "rejected_invalid_file" ||
+        adminStatus === "unreadable" ||
+        [400, 415, 422].includes(status)
+      ) {
+        return buildUploadNotice(
+          "File could not be read",
+          "This file could not be read. Try a text PDF, TXT, DOCX, MD, or RTF.",
+          data,
+          {
+            uploadState: "rejected_invalid_file",
+            libraryState: "none",
+            terminal: true,
+            rejected: true
+          }
+        );
+      }
+
+      if (
+        uploadState === "storage_failed" ||
+        adminStatus === "storage_save_failed" ||
+        adminStatus === "storage_materialize_failed" ||
+        status >= 500
+      ) {
+        return buildUploadNotice(
+          "Upload failed",
+          "Upload could not be saved. Please try again.",
+          data,
+          {
+            uploadState: "storage_failed",
+            libraryState: "not_created",
+            terminal: true,
+            rejected: true
+          }
+        );
+      }
+    }
+
+    if (context === "poll" && !response?.ok) {
+      if (status === 401 || status === 403) {
+        return buildUploadNotice(
+          "Status unavailable",
+          "This browser could not view the final upload status. Refresh your Library or sign in to continue.",
+          data,
+          {
+            uploadState: "status_unavailable",
+            libraryState: "unknown",
+            terminal: true
+          }
+        );
+      }
+
+      if (status === 404) {
+        return buildUploadNotice(
+          "Status unavailable",
+          "Upload status could not be found. Refresh your Library shortly.",
+          data,
+          {
+            uploadState: "not_found",
+            libraryState: "unknown",
+            terminal: true
+          }
+        );
+      }
+
+      return buildUploadNotice(
+        "Upload status unavailable",
+        "Final upload status could not be loaded. Refresh your Library shortly.",
+        data,
+        {
+          uploadState: "status_unavailable",
+          libraryState: "unknown",
+          terminal: true
+        }
+      );
+    }
+
+    if (isCanonicalUploadFeedback(data)) {
+      return buildUploadNotice(
+        data.seeker_title,
+        data.seeker_message,
+        data,
+        { canonical: true }
+      );
+    }
+
+    if (context === "upload") {
+      return buildUploadNotice(
+        "Upload response unavailable",
+        "The upload response could not be read. Please try again.",
+        data,
+        {
+          uploadState: "status_unavailable",
+          libraryState: "unknown",
+          terminal: true
+        }
+      );
+    }
+
+    return buildUploadNotice(
+      "Upload status unavailable",
+      "Final upload status could not be loaded. Refresh your Library shortly.",
+      data,
+      {
+        uploadState: "status_unavailable",
+        libraryState: "unknown",
+        terminal: true
+      }
+    );
+  }
+
+  function normalizeUploadFeedback(response, data, options = {}) {
+    return noticeFromUploadResponse(response, data, options);
   }
 
   function showFeedbackModal(message, nudges = [], title = "Temple Notice", options = {}) {
@@ -236,15 +396,15 @@ document.addEventListener("DOMContentLoaded", function () {
       try {
         return JSON.parse(text);
       } catch (e) {
-        return makeUploadStatusUnavailablePayload("The upload response could not be read. Refresh your Library shortly.");
+        return makeUploadStatusUnavailablePayload("The upload response could not be read. Please try again.", "Upload response unavailable");
       }
     }
 
     if (looksLikeHtmlResponse(text)) {
-      return makeUploadStatusUnavailablePayload("Upload status could not be loaded. Refresh your Library shortly.");
+      return makeUploadStatusUnavailablePayload("Final upload status could not be loaded. Refresh your Library shortly.", "Upload status unavailable");
     }
 
-    return makeUploadStatusUnavailablePayload("Upload status could not be loaded. Refresh your Library shortly.");
+    return makeUploadStatusUnavailablePayload("Final upload status could not be loaded. Refresh your Library shortly.", "Upload status unavailable");
   }
 
   function delay(ms) {
@@ -282,7 +442,7 @@ document.addEventListener("DOMContentLoaded", function () {
         const statusData = await safeReadUploadJson(statusResponse);
 
         if (!statusResponse.ok) {
-          const normalized = normalizeUploadFeedback(statusResponse, statusData);
+          const normalized = normalizeUploadFeedback(statusResponse, statusData, { context: "poll" });
           showFeedbackModal(
             normalized.message,
             normalized.nudges,
@@ -293,7 +453,7 @@ document.addEventListener("DOMContentLoaded", function () {
         }
 
         if (statusData?.terminal === true) {
-          const normalized = normalizeUploadFeedback(statusResponse, statusData);
+          const normalized = normalizeUploadFeedback(statusResponse, statusData, { context: "poll" });
 
           showFeedbackModal(
             normalized.message,
@@ -493,7 +653,7 @@ if (scrollInput && scrollForm) {
       const shouldOfferClaim = !currentIdentity?.authenticated && (Boolean(data?.claim_required) || continuityNudges.length > 0);
 
       if (!response.ok) {
-        const normalized = normalizeUploadFeedback(response, data);
+        const normalized = normalizeUploadFeedback(response, data, { context: "upload" });
         const shouldClearFile =
           response.status === 403 ||
           response.status === 409 ||
@@ -513,7 +673,7 @@ if (scrollInput && scrollForm) {
         return;
       }
 
-      const normalized = normalizeUploadFeedback(response, data);
+      const normalized = normalizeUploadFeedback(response, data, { context: "upload" });
       showFeedbackModal(
         normalized.message,
         normalized.nudges,
