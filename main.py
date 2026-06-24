@@ -2246,6 +2246,268 @@ def retrieve_context(
     return personal + canonical + community
 
 
+
+UPLOAD_STATE_RECEIVED = "received"
+UPLOAD_STATE_SAVED = "saved"
+UPLOAD_STATE_QUEUED = "queued"
+UPLOAD_STATE_PROCESSING = "processing"
+UPLOAD_STATE_READY = "ready"
+UPLOAD_STATE_NEEDS_OCR = "needs_ocr"
+UPLOAD_STATE_FAILED = "failed"
+UPLOAD_STATE_REJECTED_COOLDOWN = "rejected_cooldown"
+UPLOAD_STATE_REJECTED_CAP = "rejected_cap"
+UPLOAD_STATE_REJECTED_INVALID_FILE = "rejected_invalid_file"
+UPLOAD_STATE_REJECTED_UNAUTHORIZED = "rejected_unauthorized"
+UPLOAD_STATE_NOT_FOUND = "not_found"
+UPLOAD_STATE_STORAGE_FAILED = "storage_failed"
+UPLOAD_STATE_STATUS_UNAVAILABLE = "status_unavailable"
+
+UPLOAD_STATES = {
+    UPLOAD_STATE_RECEIVED,
+    UPLOAD_STATE_SAVED,
+    UPLOAD_STATE_QUEUED,
+    UPLOAD_STATE_PROCESSING,
+    UPLOAD_STATE_READY,
+    UPLOAD_STATE_NEEDS_OCR,
+    UPLOAD_STATE_FAILED,
+    UPLOAD_STATE_REJECTED_COOLDOWN,
+    UPLOAD_STATE_REJECTED_CAP,
+    UPLOAD_STATE_REJECTED_INVALID_FILE,
+    UPLOAD_STATE_REJECTED_UNAUTHORIZED,
+    UPLOAD_STATE_NOT_FOUND,
+    UPLOAD_STATE_STORAGE_FAILED,
+    UPLOAD_STATE_STATUS_UNAVAILABLE,
+}
+
+LIBRARY_STATE_NONE = "none"
+LIBRARY_STATE_RECEIVED = "received"
+LIBRARY_STATE_SAVED = "saved"
+LIBRARY_STATE_QUEUED = "queued"
+LIBRARY_STATE_READING = "reading"
+LIBRARY_STATE_READY = "ready"
+LIBRARY_STATE_NEEDS_OCR = "needs_ocr"
+LIBRARY_STATE_FAILED = "failed"
+LIBRARY_STATE_ALREADY_SAVED = "already_saved"
+LIBRARY_STATE_INDEXING_DEFERRED = "indexing_deferred"
+LIBRARY_STATE_NOT_CREATED = "not_created"
+LIBRARY_STATE_UNKNOWN = "unknown"
+
+LIBRARY_STATES = {
+    LIBRARY_STATE_NONE,
+    LIBRARY_STATE_RECEIVED,
+    LIBRARY_STATE_SAVED,
+    LIBRARY_STATE_QUEUED,
+    LIBRARY_STATE_READING,
+    LIBRARY_STATE_READY,
+    LIBRARY_STATE_NEEDS_OCR,
+    LIBRARY_STATE_FAILED,
+    LIBRARY_STATE_ALREADY_SAVED,
+    LIBRARY_STATE_INDEXING_DEFERRED,
+    LIBRARY_STATE_NOT_CREATED,
+    LIBRARY_STATE_UNKNOWN,
+}
+
+SEEKER_TITLE_UPLOAD_SAVED = "upload.saved"
+SEEKER_TITLE_UPLOAD_READY = "upload.ready"
+SEEKER_TITLE_UPLOAD_NEEDS_OCR = "upload.needs_ocr"
+SEEKER_TITLE_UPLOAD_FAILED = "upload.failed"
+SEEKER_TITLE_UPLOAD_PAUSED = "upload.paused"
+SEEKER_TITLE_UPLOAD_STATUS = "upload.status"
+SEEKER_TITLE_UPLOAD_CREATE_ACCOUNT = "upload.create_account"
+SEEKER_TITLE_UPLOAD_STATUS_UNAVAILABLE = "upload.status_unavailable"
+
+SEEKER_TITLE_KEYS = {
+    SEEKER_TITLE_UPLOAD_SAVED,
+    SEEKER_TITLE_UPLOAD_READY,
+    SEEKER_TITLE_UPLOAD_NEEDS_OCR,
+    SEEKER_TITLE_UPLOAD_FAILED,
+    SEEKER_TITLE_UPLOAD_PAUSED,
+    SEEKER_TITLE_UPLOAD_STATUS,
+    SEEKER_TITLE_UPLOAD_CREATE_ACCOUNT,
+    SEEKER_TITLE_UPLOAD_STATUS_UNAVAILABLE,
+}
+
+SEEKER_MESSAGE_UPLOAD_SAVED_READING = "upload.saved_reading"
+SEEKER_MESSAGE_UPLOAD_READY = "upload.ready"
+SEEKER_MESSAGE_UPLOAD_NEEDS_OCR = "upload.needs_ocr"
+SEEKER_MESSAGE_UPLOAD_FAILED = "upload.failed"
+SEEKER_MESSAGE_UPLOAD_STORAGE_FAILED = "upload.storage_failed"
+SEEKER_MESSAGE_UPLOAD_COOLDOWN = "upload.cooldown"
+SEEKER_MESSAGE_UPLOAD_CAP = "upload.cap"
+SEEKER_MESSAGE_UPLOAD_KEEP_LIBRARY = "upload.keep_library"
+SEEKER_MESSAGE_UPLOAD_KEEP_UPLOADING = "upload.keep_uploading"
+SEEKER_MESSAGE_UPLOAD_STATUS_STILL_PROCESSING = "upload.status_still_processing"
+SEEKER_MESSAGE_UPLOAD_STATUS_UNAVAILABLE = "upload.status_unavailable"
+SEEKER_MESSAGE_UPLOAD_INVALID_FILE = "upload.invalid_file"
+
+SEEKER_MESSAGE_KEYS = {
+    SEEKER_MESSAGE_UPLOAD_SAVED_READING,
+    SEEKER_MESSAGE_UPLOAD_READY,
+    SEEKER_MESSAGE_UPLOAD_NEEDS_OCR,
+    SEEKER_MESSAGE_UPLOAD_FAILED,
+    SEEKER_MESSAGE_UPLOAD_STORAGE_FAILED,
+    SEEKER_MESSAGE_UPLOAD_COOLDOWN,
+    SEEKER_MESSAGE_UPLOAD_CAP,
+    SEEKER_MESSAGE_UPLOAD_KEEP_LIBRARY,
+    SEEKER_MESSAGE_UPLOAD_KEEP_UPLOADING,
+    SEEKER_MESSAGE_UPLOAD_STATUS_STILL_PROCESSING,
+    SEEKER_MESSAGE_UPLOAD_STATUS_UNAVAILABLE,
+    SEEKER_MESSAGE_UPLOAD_INVALID_FILE,
+}
+
+UPLOAD_ADMIN_STATUS_QUEUED_UPLOAD_RECEIVED = "queued_upload_received"
+UPLOAD_ADMIN_STATUS_PROCESSING = "processing"
+UPLOAD_ADMIN_STATUS_READY = "ready"
+UPLOAD_ADMIN_STATUS_CONTENT_HASH_DUPLICATE = "content_hash_duplicate"
+UPLOAD_ADMIN_STATUS_EXACT_BYTE_DUPLICATE = "exact_byte_duplicate"
+UPLOAD_ADMIN_STATUS_CANONICAL_MATCH = "canonical_match"
+UPLOAD_ADMIN_STATUS_NEEDS_OCR = "needs_ocr"
+UPLOAD_ADMIN_STATUS_UNREADABLE = "unreadable"
+UPLOAD_ADMIN_STATUS_STORAGE_SAVE_FAILED = "storage_save_failed"
+UPLOAD_ADMIN_STATUS_STORAGE_MATERIALIZE_FAILED = "storage_materialize_failed"
+UPLOAD_ADMIN_STATUS_MISSING_STORAGE_REF = "missing_storage_ref"
+UPLOAD_ADMIN_STATUS_MISSING_SESSION_ID = "missing_session_id"
+UPLOAD_ADMIN_STATUS_MISSING_MATERIALIZED_FILE = "missing_materialized_file"
+UPLOAD_ADMIN_STATUS_INGESTION_FAILED = "ingestion_failed"
+UPLOAD_ADMIN_STATUS_REJECTED_COOLDOWN = "rejected_cooldown"
+UPLOAD_ADMIN_STATUS_REJECTED_ANONYMOUS_CAP = "rejected_anonymous_cap"
+UPLOAD_ADMIN_STATUS_POLLING_UNAUTHORIZED = "polling_unauthorized"
+UPLOAD_ADMIN_STATUS_POLLING_NOT_FOUND = "polling_not_found"
+UPLOAD_ADMIN_STATUS_STATUS_UNAVAILABLE = "status_unavailable"
+
+UPLOAD_ADMIN_STATUSES = {
+    UPLOAD_ADMIN_STATUS_QUEUED_UPLOAD_RECEIVED,
+    UPLOAD_ADMIN_STATUS_PROCESSING,
+    UPLOAD_ADMIN_STATUS_READY,
+    UPLOAD_ADMIN_STATUS_CONTENT_HASH_DUPLICATE,
+    UPLOAD_ADMIN_STATUS_EXACT_BYTE_DUPLICATE,
+    UPLOAD_ADMIN_STATUS_CANONICAL_MATCH,
+    UPLOAD_ADMIN_STATUS_NEEDS_OCR,
+    UPLOAD_ADMIN_STATUS_UNREADABLE,
+    UPLOAD_ADMIN_STATUS_STORAGE_SAVE_FAILED,
+    UPLOAD_ADMIN_STATUS_STORAGE_MATERIALIZE_FAILED,
+    UPLOAD_ADMIN_STATUS_MISSING_STORAGE_REF,
+    UPLOAD_ADMIN_STATUS_MISSING_SESSION_ID,
+    UPLOAD_ADMIN_STATUS_MISSING_MATERIALIZED_FILE,
+    UPLOAD_ADMIN_STATUS_INGESTION_FAILED,
+    UPLOAD_ADMIN_STATUS_REJECTED_COOLDOWN,
+    UPLOAD_ADMIN_STATUS_REJECTED_ANONYMOUS_CAP,
+    UPLOAD_ADMIN_STATUS_POLLING_UNAUTHORIZED,
+    UPLOAD_ADMIN_STATUS_POLLING_NOT_FOUND,
+    UPLOAD_ADMIN_STATUS_STATUS_UNAVAILABLE,
+}
+
+UPLOAD_DEDUPE_KIND_NONE = "none"
+UPLOAD_DEDUPE_KIND_EXACT_BYTE = "exact_byte"
+UPLOAD_DEDUPE_KIND_CONTENT_HASH = "content_hash"
+UPLOAD_DEDUPE_KIND_CANONICAL_MATCH = "canonical_match"
+UPLOAD_DEDUPE_KIND_LEGACY_DUPLICATE_NOT_PRESERVED = "legacy_duplicate_not_preserved"
+
+UPLOAD_DEDUPE_KINDS = {
+    UPLOAD_DEDUPE_KIND_NONE,
+    UPLOAD_DEDUPE_KIND_EXACT_BYTE,
+    UPLOAD_DEDUPE_KIND_CONTENT_HASH,
+    UPLOAD_DEDUPE_KIND_CANONICAL_MATCH,
+    UPLOAD_DEDUPE_KIND_LEGACY_DUPLICATE_NOT_PRESERVED,
+}
+
+UPLOAD_SEEKER_TITLE_TEXT = {
+    SEEKER_TITLE_UPLOAD_SAVED: "Saved to Library",
+    SEEKER_TITLE_UPLOAD_READY: "Ready in your Library",
+    SEEKER_TITLE_UPLOAD_NEEDS_OCR: "Needs OCR",
+    SEEKER_TITLE_UPLOAD_FAILED: "Upload failed",
+    SEEKER_TITLE_UPLOAD_PAUSED: "Please wait",
+    SEEKER_TITLE_UPLOAD_STATUS: "Upload status",
+    SEEKER_TITLE_UPLOAD_CREATE_ACCOUNT: "Create account",
+    SEEKER_TITLE_UPLOAD_STATUS_UNAVAILABLE: "Status unavailable",
+}
+
+UPLOAD_SEEKER_MESSAGE_TEXT = {
+    SEEKER_MESSAGE_UPLOAD_SAVED_READING: "Saved to Library. Reading in the background.",
+    SEEKER_MESSAGE_UPLOAD_READY: "Ready in your Library.",
+    SEEKER_MESSAGE_UPLOAD_NEEDS_OCR: "Saved to Library. Needs OCR.",
+    SEEKER_MESSAGE_UPLOAD_FAILED: "Saved to Library, but processing failed. Please try again later.",
+    SEEKER_MESSAGE_UPLOAD_STORAGE_FAILED: "Upload could not be saved. Please try again.",
+    SEEKER_MESSAGE_UPLOAD_COOLDOWN: "Please wait a few seconds before uploading another scroll.",
+    SEEKER_MESSAGE_UPLOAD_CAP: "Create an account to keep uploading and preserve your Library.",
+    SEEKER_MESSAGE_UPLOAD_KEEP_LIBRARY: "Create an account to keep your Library.",
+    SEEKER_MESSAGE_UPLOAD_KEEP_UPLOADING: "Create an account to keep uploading and preserve your Library.",
+    SEEKER_MESSAGE_UPLOAD_STATUS_STILL_PROCESSING: "Still reading. Check your Library shortly.",
+    SEEKER_MESSAGE_UPLOAD_STATUS_UNAVAILABLE: "Upload status could not be loaded. Refresh your Library shortly.",
+    SEEKER_MESSAGE_UPLOAD_INVALID_FILE: "This file could not be read. Try a text PDF, TXT, DOCX, MD, or RTF.",
+}
+
+
+def get_upload_seeker_copy(title_key=None, message_key=None) -> dict:
+    return {
+        "seeker_title_key": title_key,
+        "seeker_title": UPLOAD_SEEKER_TITLE_TEXT.get(title_key),
+        "seeker_message_key": message_key,
+        "seeker_message": UPLOAD_SEEKER_MESSAGE_TEXT.get(message_key),
+    }
+
+
+def build_upload_status_payload(
+    *,
+    ok=True,
+    accepted=False,
+    rejected=False,
+    terminal=False,
+    upload_state=None,
+    library_state=None,
+    seeker_title_key=None,
+    seeker_message_key=None,
+    admin_status=None,
+    admin_message=None,
+    retry_after_seconds=None,
+    claim_required=False,
+    claim_recommended=False,
+    anonymous_uploads_remaining=None,
+    upload_id=None,
+    library_upload_id=None,
+    ingestion_job_id=None,
+    job_id=None,
+    scroll_id=None,
+    artifact_preserved=None,
+    storage_backend=None,
+    duplicate=False,
+    dedupe_kind=None,
+    needs_ocr=False,
+    extra=None,
+) -> dict:
+    payload = {
+        "ok": ok,
+        "accepted": accepted,
+        "rejected": rejected,
+        "terminal": terminal,
+        "upload_state": upload_state,
+        "library_state": library_state,
+        "admin_status": admin_status,
+        "admin_message": admin_message,
+        "retry_after_seconds": retry_after_seconds,
+        "claim_required": claim_required,
+        "claim_recommended": claim_recommended,
+        "anonymous_uploads_remaining": anonymous_uploads_remaining,
+        "upload_id": upload_id,
+        "library_upload_id": library_upload_id,
+        "ingestion_job_id": ingestion_job_id,
+        "job_id": job_id,
+        "scroll_id": scroll_id,
+        "artifact_preserved": artifact_preserved,
+        "storage_backend": storage_backend,
+        "duplicate": duplicate,
+        "dedupe_kind": dedupe_kind,
+        "needs_ocr": needs_ocr,
+    }
+    payload.update(get_upload_seeker_copy(seeker_title_key, seeker_message_key))
+
+    for key, value in (extra or {}).items():
+        if key not in payload:
+            payload[key] = value
+
+    return payload
+
+
 LIBRARY_UPLOAD_SEEKER_STATUSES = {
     "received",
     "saved",
