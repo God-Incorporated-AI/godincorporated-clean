@@ -4,7 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PIP_NO_CACHE_DIR=1
 
-WORKDIR /app
+WORKDIR /opt/render/project/src
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
