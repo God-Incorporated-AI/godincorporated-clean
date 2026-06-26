@@ -1651,6 +1651,1425 @@ if (seekerInput && oracleForm) {
     return true;
   }
 
+
+  const TEMPLE_REALTIME_INPUT_SAMPLE_RATE = 24000;
+  const TEMPLE_REALTIME_OUTPUT_SAMPLE_RATE = 24000;
+  const TEMPLE_REALTIME_SPEECH_RMS_THRESHOLD = 0.014;
+  const TEMPLE_REALTIME_SPEECH_START_FRAMES_REQUIRED = 3;
+  const TEMPLE_REALTIME_POST_PLAYBACK_COOLDOWN_MS = 100;
+  const TEMPLE_REALTIME_IDLE_AUTO_END_AFTER_RETURN_MS = 12000;
+  const TEMPLE_REALTIME_PRE_ROLL_MS = 650;
+  const TEMPLE_REALTIME_CLIENT_TURN_COMMIT_SILENCE_MS = 2400;
+  const TEMPLE_REALTIME_TRAILING_AUDIO_MS = TEMPLE_REALTIME_CLIENT_TURN_COMMIT_SILENCE_MS;
+  const TEMPLE_REALTIME_IDLE_TIMEOUT_MS = 90000;
+  const TEMPLE_REALTIME_MAX_SESSION_MS = 300000;
+  const TEMPLE_REALTIME_PLAYBACK_DRAIN_PADDING_MS = 150;
+  const TEMPLE_REALTIME_PLAYBACK_DRAIN_MIN_MS = 250;
+  const TEMPLE_REALTIME_PLAYBACK_DRAIN_MAX_MS = 60000;
+  const TEMPLE_REALTIME_WEBSOCKET_CONNECT_TIMEOUT_MS = 10000;
+
+  const templeRealtimeState = {
+    socket: null,
+    sessionData: null,
+    active: false,
+    starting: false,
+    clickPending: false,
+    ending: false,
+
+    selectedDeity: "Hathor",
+    selectedRealtimeVoice: "eve",
+
+    inputStream: null,
+    inputAudioContext: null,
+    inputSource: null,
+    inputProcessor: null,
+
+    outputAudioContext: null,
+    nextPlaybackTime: 0,
+    playbackDrainTimer: null,
+    idleTimer: null,
+    maxSessionTimer: null,
+    idleAutoEndTimer: null,
+
+    sessionStartedAt: 0,
+    lastActivityAt: 0,
+
+    speechGateOpen: false,
+    speechTurnIndex: 0,
+    assistantTurnIndex: 0,
+    assistantSpeaking: false,
+    turnCommitPending: false,
+
+    preRollChunks: [],
+    preRollSamples: 0,
+    trailingMsRemaining: 0,
+    speechAboveThresholdFrames: 0,
+    listeningCooldownUntil: 0,
+    turnInputStartSamples: 0,
+    responseOutputStartSamples: 0,
+
+    inputSamplesSent: 0,
+    inputBytesSent: 0,
+    inputChunksSent: 0,
+    outputSamplesReceived: 0,
+    outputBytesReceived: 0,
+    firstAudioDeltaAt: 0,
+
+    currentInputTranscript: "",
+    currentAssistantTranscript: ""
+  };
+
+  function templeRealtimeLog(label, payload) {
+    try {
+      console.log("[Temple realtime]", label, payload || "");
+    } catch (err) {
+      // Ignore console failures.
+    }
+  }
+
+  function templeRealtimeBrowserSupported() {
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    return Boolean(
+      window.WebSocket &&
+      AudioContextCtor &&
+      navigator.mediaDevices &&
+      navigator.mediaDevices.getUserMedia &&
+      window.atob &&
+      window.btoa
+    );
+  }
+
+  function templeRealtimeSelectedDeity() {
+    const value = voiceSelect && voiceSelect.value ? voiceSelect.value : "Hathor";
+    return value === "Moses" ? "Moses" : "Hathor";
+  }
+
+  function templeRealtimeSelectedVoice(deity) {
+    const selectId = deity === "Moses" ? "mosesVoiceSelect" : "hathorVoiceSelect";
+    const fallback = deity === "Moses" ? "leo" : "eve";
+    const select = document.getElementById(selectId);
+    return select && select.value ? select.value : fallback;
+  }
+
+  function templeRealtimeIsActiveOrStarting() {
+    return Boolean(templeRealtimeState.active || templeRealtimeState.starting);
+  }
+
+  function templeRealtimeSetButtonIdle() {
+    if (typeof resetVoiceButton === "function") {
+      resetVoiceButton();
+    } else if (speakButton) {
+      speakButton.disabled = false;
+      speakButton.textContent = "Speak";
+    }
+
+    if (speakButton) {
+      speakButton.removeAttribute("data-realtime-active");
+    }
+  }
+
+  function templeRealtimeSetButtonActive() {
+    if (!speakButton) return;
+    speakButton.disabled = false;
+    speakButton.textContent = "End Live Voice";
+    speakButton.setAttribute("data-realtime-active", "true");
+  }
+
+  async function templeRealtimeReadJsonResponse(response) {
+    const text = await response.text();
+    try {
+      return text ? JSON.parse(text) : {};
+    } catch (err) {
+      return { error: text || "Non-JSON response" };
+    }
+  }
+
+  function templeRealtimeAccessAllowsPaidWeb(access) {
+    if (!access || typeof access !== "object") return false;
+    if (access.allowed !== true) return false;
+
+    const reason = String(access.reason || "");
+    const isPreview = access.is_preview === true || access.preview_mode === true || reason.includes("preview");
+
+    if (isPreview) return false;
+
+    if (reason === "admin_unrestricted") return true;
+    if (reason === "realtime_fair_use_allowed") return true;
+    if (access.web_realtime_fair_use === true) return true;
+
+    if (reason === "realtime_monthly_turns_available") return true;
+
+    if (typeof access.monthly_remaining === "number") {
+      return access.monthly_remaining > 0;
+    }
+
+    return false;
+  }
+
+  async function templeRealtimeFetchAccess(deity) {
+    const response = await identityFetch("/voice/realtime/access?deity=" + encodeURIComponent(deity), {
+      method: "GET",
+      headers: {
+        "Accept": "application/json"
+      }
+    });
+
+    const payload = await templeRealtimeReadJsonResponse(response);
+
+    if (!response.ok) {
+      templeRealtimeLog("TEMPLE_REALTIME_ACCESS_HTTP_DENIED", {
+        status: response.status,
+        payload: payload
+      });
+      return {
+        allowed: false,
+        payload: payload
+      };
+    }
+
+    return {
+      allowed: templeRealtimeAccessAllowsPaidWeb(payload),
+      payload: payload
+    };
+  }
+
+  async function templeRealtimeCreateSession(deity, realtimeVoice) {
+    const response = await identityFetch("/voice/xai/realtime/session", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify({
+        voice: deity,
+        deity: deity,
+        realtime_voice: realtimeVoice,
+        voice_name: realtimeVoice,
+        xai_voice: realtimeVoice,
+        lab_input_mode: "temple_main_live_realtime",
+        source: "temple"
+      })
+    });
+
+    const payload = await templeRealtimeReadJsonResponse(response);
+
+    if (!response.ok) {
+      throw new Error(
+        payload.detail ||
+        payload.error ||
+        "Live realtime voice session could not be prepared."
+      );
+    }
+
+    return payload;
+  }
+
+  function templeRealtimeFirstPresent(values) {
+    for (const value of values) {
+      if (value) return value;
+    }
+    return "";
+  }
+
+  function templeRealtimeNormalizeProtocolValue(value) {
+    if (!value) return [];
+    if (Array.isArray(value)) return value.filter(Boolean);
+    if (typeof value === "string") return [value];
+    return [];
+  }
+
+  function templeRealtimeResolveWebSocketUrl(data) {
+    const explicitUrl = templeRealtimeFirstPresent([
+      data.websocket_url,
+      data.ws_url,
+      data.realtime_url,
+      data.url,
+      data.session && data.session.websocket_url,
+      data.session && data.session.ws_url,
+      data.session && data.session.url
+    ]);
+
+    if (explicitUrl) return explicitUrl;
+
+    const model = templeRealtimeFirstPresent([
+      data.model,
+      data.session && data.session.model
+    ]) || "grok-voice-latest";
+
+    return "wss://api.x.ai/v1/realtime?model=" + encodeURIComponent(model);
+  }
+
+  function templeRealtimeResolveWebSocketProtocols(data) {
+    const explicitProtocols = []
+      .concat(templeRealtimeNormalizeProtocolValue(data.websocket_protocols))
+      .concat(templeRealtimeNormalizeProtocolValue(data.protocols))
+      .concat(templeRealtimeNormalizeProtocolValue(data.websocket_protocol))
+      .concat(templeRealtimeNormalizeProtocolValue(data.protocol));
+
+    if (explicitProtocols.length) return explicitProtocols;
+
+    const clientSecret = templeRealtimeFirstPresent([
+      data.client_secret && data.client_secret.value,
+      data.client_secret,
+      data.ephemeral_token && data.ephemeral_token.value,
+      data.ephemeral_token,
+      data.token && data.token.value,
+      data.token,
+      data.secret && data.secret.value,
+      data.secret,
+      data.session && data.session.client_secret && data.session.client_secret.value,
+      data.session && data.session.client_secret
+    ]);
+
+    if (!clientSecret) return [];
+
+    const secretText = String(clientSecret);
+    return [
+      secretText.indexOf("xai-client-secret.") === 0
+        ? secretText
+        : "xai-client-secret." + secretText
+    ];
+  }
+
+  function templeRealtimeInstructions(deity) {
+    if (deity === "Moses") {
+      return [
+        "You are Moses in God Incorporated.",
+        "This is the public Temple live realtime voice path.",
+        "Speak with clarity, moral seriousness, patience, and humane strength.",
+        "Give complete spoken answers without cutting off mid-thought.",
+        "Keep answers concise enough for live voice: usually one to four spoken sentences unless the seeker asks for more.",
+        "Avoid markdown, headings, numbered lists, and formal citations."
+      ].join(" ");
+    }
+
+    return [
+      "You are Hathor in God Incorporated.",
+      "This is the public Temple live realtime voice path.",
+      "Speak with warmth, luminous presence, emotional intelligence, and gentle sacredness.",
+      "Give complete spoken answers without cutting off mid-thought.",
+      "Keep answers concise enough for live voice: usually one to four spoken sentences unless the seeker asks for more.",
+      "Avoid markdown, headings, numbered lists, and ornate over-poetry."
+    ].join(" ");
+  }
+
+  function templeRealtimeOpenWebSocket(data) {
+    return new Promise(function (resolve, reject) {
+      const wsUrl = templeRealtimeResolveWebSocketUrl(data);
+      const protocols = templeRealtimeResolveWebSocketProtocols(data);
+
+      let settled = false;
+      let connectTimer = null;
+      let ws;
+
+      function clearConnectTimer() {
+        if (connectTimer) {
+          window.clearTimeout(connectTimer);
+          connectTimer = null;
+        }
+      }
+
+      function rejectBeforeOpen(message) {
+        if (settled) return;
+
+        settled = true;
+        clearConnectTimer();
+
+        try {
+          if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+            ws.close(1000, "temple_realtime_connect_failed");
+          }
+        } catch (err) {
+          // no-op
+        }
+
+        reject(new Error(message));
+      }
+
+      try {
+        ws = protocols.length ? new WebSocket(wsUrl, protocols) : new WebSocket(wsUrl);
+      } catch (err) {
+        reject(err);
+        return;
+      }
+
+      templeRealtimeState.socket = ws;
+
+      connectTimer = window.setTimeout(function () {
+        rejectBeforeOpen("Live realtime voice WebSocket connection timed out.");
+      }, TEMPLE_REALTIME_WEBSOCKET_CONNECT_TIMEOUT_MS);
+
+      ws.onopen = function () {
+        if (settled) return;
+
+        settled = true;
+        clearConnectTimer();
+
+        templeRealtimeLog("TEMPLE_REALTIME_WEBSOCKET_OPEN", {
+          deity: templeRealtimeState.selectedDeity,
+          realtime_voice: templeRealtimeState.selectedRealtimeVoice
+        });
+
+        resolve(ws);
+      };
+
+      ws.onerror = function (event) {
+        templeRealtimeLog("TEMPLE_REALTIME_WEBSOCKET_ERROR", {
+          message: event && event.message ? event.message : "websocket error"
+        });
+
+        if (!settled) {
+          rejectBeforeOpen("Live realtime voice WebSocket could not be opened.");
+        }
+      };
+
+      ws.onclose = function (event) {
+        templeRealtimeLog("TEMPLE_REALTIME_WEBSOCKET_CLOSE", {
+          code: event.code,
+          reason: event.reason,
+          was_clean: event.wasClean
+        });
+
+        if (!settled) {
+          settled = true;
+          clearConnectTimer();
+          reject(new Error("Live realtime voice WebSocket closed before opening."));
+          return;
+        }
+
+        if (templeRealtimeState.starting && !templeRealtimeState.active) {
+          return;
+        }
+
+        templeRealtimeHandleUnexpectedSocketClose(event);
+      };
+
+      ws.onmessage = function (event) {
+        let payload;
+        try {
+          payload = JSON.parse(event.data);
+        } catch (err) {
+          templeRealtimeLog("TEMPLE_REALTIME_MESSAGE_RAW", String(event.data).slice(0, 500));
+          return;
+        }
+
+        templeRealtimeHandleServerEvent(payload);
+      };
+    });
+  }
+
+  function templeRealtimeSendJson(event) {
+    if (!templeRealtimeState.socket || templeRealtimeState.socket.readyState !== WebSocket.OPEN) {
+      throw new Error("Live realtime voice socket is not open.");
+    }
+
+    templeRealtimeState.socket.send(JSON.stringify(event));
+  }
+
+  function templeRealtimeSendSessionUpdate() {
+    templeRealtimeSendJson({
+      type: "session.update",
+      session: {
+        voice: templeRealtimeState.selectedRealtimeVoice,
+        instructions: templeRealtimeInstructions(templeRealtimeState.selectedDeity),
+        turn_detection: null,
+        audio: {
+          input: {
+            format: {
+              type: "audio/pcm",
+              rate: TEMPLE_REALTIME_INPUT_SAMPLE_RATE
+            },
+            transcription: {
+              model: "grok-transcribe"
+            }
+          },
+          output: {
+            format: {
+              type: "audio/pcm",
+              rate: TEMPLE_REALTIME_OUTPUT_SAMPLE_RATE
+            }
+          }
+        }
+      }
+    });
+
+    templeRealtimeLog("TEMPLE_REALTIME_SESSION_UPDATE_SENT", {
+      mode: "temple_main_live_realtime",
+      input_rate: TEMPLE_REALTIME_INPUT_SAMPLE_RATE,
+      output_rate: TEMPLE_REALTIME_OUTPUT_SAMPLE_RATE
+    });
+  }
+
+  function templeRealtimeResetSessionMetrics() {
+    templeRealtimeState.nextPlaybackTime = 0;
+    templeRealtimeState.speechGateOpen = false;
+    templeRealtimeState.speechTurnIndex = 0;
+    templeRealtimeState.assistantTurnIndex = 0;
+    templeRealtimeState.assistantSpeaking = false;
+    templeRealtimeState.turnCommitPending = false;
+    templeRealtimeState.preRollChunks = [];
+    templeRealtimeState.preRollSamples = 0;
+    templeRealtimeState.trailingMsRemaining = 0;
+    templeRealtimeState.speechAboveThresholdFrames = 0;
+    templeRealtimeState.listeningCooldownUntil = 0;
+    templeRealtimeState.turnInputStartSamples = 0;
+    templeRealtimeState.responseOutputStartSamples = 0;
+    templeRealtimeState.inputSamplesSent = 0;
+    templeRealtimeState.inputBytesSent = 0;
+    templeRealtimeState.inputChunksSent = 0;
+    templeRealtimeState.outputSamplesReceived = 0;
+    templeRealtimeState.outputBytesReceived = 0;
+    templeRealtimeState.firstAudioDeltaAt = 0;
+    templeRealtimeState.currentInputTranscript = "";
+    templeRealtimeState.currentAssistantTranscript = "";
+
+    if (templeRealtimeState.playbackDrainTimer) {
+      window.clearTimeout(templeRealtimeState.playbackDrainTimer);
+    }
+    if (templeRealtimeState.idleTimer) {
+      window.clearTimeout(templeRealtimeState.idleTimer);
+    }
+    if (templeRealtimeState.maxSessionTimer) {
+      window.clearTimeout(templeRealtimeState.maxSessionTimer);
+    }
+    if (templeRealtimeState.idleAutoEndTimer) {
+      window.clearTimeout(templeRealtimeState.idleAutoEndTimer);
+    }
+
+    templeRealtimeState.playbackDrainTimer = null;
+    templeRealtimeState.idleTimer = null;
+    templeRealtimeState.maxSessionTimer = null;
+    templeRealtimeState.idleAutoEndTimer = null;
+  }
+
+  async function templeRealtimeStartConversation() {
+    if (templeRealtimeState.active || templeRealtimeState.starting) return true;
+
+    templeRealtimeState.starting = true;
+    templeRealtimeState.ending = false;
+    templeRealtimeState.selectedDeity = templeRealtimeSelectedDeity();
+    templeRealtimeState.selectedRealtimeVoice = templeRealtimeSelectedVoice(templeRealtimeState.selectedDeity);
+    templeRealtimeState.sessionStartedAt = performance.now();
+    templeRealtimeState.lastActivityAt = performance.now();
+
+    templeRealtimeResetSessionMetrics();
+    templeRealtimeSetButtonActive();
+
+    setVoiceStatus(
+      "Connecting live voice",
+      "The Temple is opening a realtime voice session.",
+      "working"
+    );
+    oracleAnswer.textContent = "Connecting live voice...";
+
+    try {
+      try {
+        if (window.speechSynthesis) {
+          window.speechSynthesis.cancel();
+        }
+      } catch (err) {
+        // Ignore browser speech cleanup failures.
+      }
+
+      templeRealtimeState.sessionData = await templeRealtimeCreateSession(
+        templeRealtimeState.selectedDeity,
+        templeRealtimeState.selectedRealtimeVoice
+      );
+
+      await templeRealtimeOpenWebSocket(templeRealtimeState.sessionData);
+      templeRealtimeSendSessionUpdate();
+
+      templeRealtimeState.active = true;
+      await templeRealtimeStartInputCapture();
+
+      templeRealtimeState.starting = false;
+      templeRealtimeSetButtonActive();
+
+      setVoiceStatus(
+        "Live voice listening",
+        "Speak naturally. Tap End Live Voice when finished.",
+        "listening"
+      );
+      oracleAnswer.textContent = "Live realtime voice is listening. Speak naturally.";
+
+      templeRealtimeTouchActivity("temple_realtime_started");
+      templeRealtimeScheduleMaxSessionTimeout();
+      return true;
+
+    } catch (err) {
+      templeRealtimeLog("TEMPLE_REALTIME_START_FAILED", {
+        error: err.message || String(err)
+      });
+
+      await templeRealtimeEndConversation("start_failed", true);
+
+      setVoiceStatus(
+        "Regular Speak voice",
+        "Live realtime voice could not start. Falling back to regular Speak voice.",
+        "notice"
+      );
+      oracleAnswer.textContent = "Live realtime voice could not start. Starting regular Speak voice...";
+      return false;
+    }
+  }
+
+  async function templeRealtimeStartInputCapture() {
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error("This browser does not expose getUserMedia microphone capture.");
+    }
+
+    if (!AudioContextCtor) {
+      throw new Error("This browser does not expose AudioContext.");
+    }
+
+    templeRealtimeState.inputStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+
+    templeRealtimeState.inputAudioContext = new AudioContextCtor();
+
+    if (templeRealtimeState.inputAudioContext.state === "suspended") {
+      await templeRealtimeState.inputAudioContext.resume();
+    }
+
+    templeRealtimeState.inputSource = templeRealtimeState.inputAudioContext.createMediaStreamSource(
+      templeRealtimeState.inputStream
+    );
+    templeRealtimeState.inputProcessor = templeRealtimeState.inputAudioContext.createScriptProcessor(4096, 1, 1);
+    templeRealtimeState.inputProcessor.onaudioprocess = templeRealtimeHandleAudioProcess;
+    templeRealtimeState.inputSource.connect(templeRealtimeState.inputProcessor);
+    templeRealtimeState.inputProcessor.connect(templeRealtimeState.inputAudioContext.destination);
+
+    templeRealtimeLog("TEMPLE_REALTIME_MIC_OPEN_LOCAL", {
+      input_context_rate: templeRealtimeState.inputAudioContext.sampleRate,
+      target_rate: TEMPLE_REALTIME_INPUT_SAMPLE_RATE,
+      local_gate_threshold: TEMPLE_REALTIME_SPEECH_RMS_THRESHOLD
+    });
+  }
+
+  function templeRealtimeCleanupInputCapture(closeContext) {
+    if (templeRealtimeState.inputProcessor) {
+      try {
+        templeRealtimeState.inputProcessor.disconnect();
+      } catch (err) {
+        // no-op
+      }
+      templeRealtimeState.inputProcessor.onaudioprocess = null;
+      templeRealtimeState.inputProcessor = null;
+    }
+
+    if (templeRealtimeState.inputSource) {
+      try {
+        templeRealtimeState.inputSource.disconnect();
+      } catch (err) {
+        // no-op
+      }
+      templeRealtimeState.inputSource = null;
+    }
+
+    if (templeRealtimeState.inputStream) {
+      templeRealtimeState.inputStream.getTracks().forEach(function (track) {
+        try {
+          track.stop();
+        } catch (err) {
+          // no-op
+        }
+      });
+      templeRealtimeState.inputStream = null;
+    }
+
+    if (closeContext && templeRealtimeState.inputAudioContext) {
+      try {
+        templeRealtimeState.inputAudioContext.close();
+      } catch (err) {
+        // no-op
+      }
+      templeRealtimeState.inputAudioContext = null;
+    }
+  }
+
+  function templeRealtimeHandleAudioProcess(event) {
+    if (
+      !templeRealtimeState.active ||
+      !templeRealtimeState.socket ||
+      templeRealtimeState.socket.readyState !== WebSocket.OPEN ||
+      templeRealtimeState.assistantSpeaking
+    ) {
+      return;
+    }
+
+    const input = event.inputBuffer.getChannelData(0);
+    const sourceRate = templeRealtimeState.inputAudioContext
+      ? templeRealtimeState.inputAudioContext.sampleRate
+      : event.inputBuffer.sampleRate;
+    const chunkMs = (input.length / sourceRate) * 1000;
+    const rms = templeRealtimeComputeRms(input);
+    const resampled = templeRealtimeResampleFloat32(input, sourceRate, TEMPLE_REALTIME_INPUT_SAMPLE_RATE);
+
+    if (performance.now() < templeRealtimeState.listeningCooldownUntil) {
+      templeRealtimeState.speechAboveThresholdFrames = 0;
+      templeRealtimeState.preRollChunks = [];
+      templeRealtimeState.preRollSamples = 0;
+      return;
+    }
+
+    templeRealtimeRememberPreRoll(resampled);
+
+    if (rms >= TEMPLE_REALTIME_SPEECH_RMS_THRESHOLD) {
+      templeRealtimeState.speechAboveThresholdFrames += 1;
+
+      if (
+        !templeRealtimeState.speechGateOpen &&
+        templeRealtimeState.speechAboveThresholdFrames < TEMPLE_REALTIME_SPEECH_START_FRAMES_REQUIRED
+      ) {
+        return;
+      }
+
+      if (!templeRealtimeState.speechGateOpen) {
+        templeRealtimeState.speechGateOpen = true;
+        templeRealtimeState.speechTurnIndex += 1;
+        templeRealtimeState.turnInputStartSamples = templeRealtimeState.inputSamplesSent;
+        templeRealtimeState.currentInputTranscript = "";
+        templeRealtimeClearIdleAutoEndTimer();
+        templeRealtimeFlushPreRoll();
+
+        setVoiceStatus(
+          "Live voice hearing you",
+          "The Oracle is listening. Pause when your question is complete.",
+          "listening"
+        );
+        oracleAnswer.textContent = "Listening to your live question...";
+        templeRealtimeTouchActivity("local_speech_started");
+      }
+
+      templeRealtimeState.trailingMsRemaining = TEMPLE_REALTIME_TRAILING_AUDIO_MS;
+      templeRealtimeSendAudioChunk(resampled, "speech");
+      return;
+    }
+
+    templeRealtimeState.speechAboveThresholdFrames = 0;
+
+    if (templeRealtimeState.speechGateOpen && templeRealtimeState.trailingMsRemaining > 0) {
+      templeRealtimeState.trailingMsRemaining -= chunkMs;
+      templeRealtimeSendAudioChunk(resampled, "trailing_audio");
+      return;
+    }
+
+    if (templeRealtimeState.speechGateOpen && templeRealtimeState.trailingMsRemaining <= 0) {
+      templeRealtimeState.speechGateOpen = false;
+
+      const turnInputSeconds = (
+        templeRealtimeState.inputSamplesSent - templeRealtimeState.turnInputStartSamples
+      ) / TEMPLE_REALTIME_INPUT_SAMPLE_RATE;
+
+      templeRealtimeCommitConversationTurn(turnInputSeconds);
+    }
+  }
+
+  async function templeRealtimeReportTurn(turnInputSeconds) {
+    try {
+      const response = await identityFetch("/voice/realtime/turn", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({
+          provider: "xai",
+          mode: "temple_main_live_realtime",
+          preview_mode: false,
+          voice: templeRealtimeState.selectedDeity,
+          deity: templeRealtimeState.selectedDeity,
+          realtime_voice: templeRealtimeState.selectedRealtimeVoice,
+          speech_turn: templeRealtimeState.speechTurnIndex,
+          turn_input_audio_seconds: Number(turnInputSeconds.toFixed(3)),
+          client_turn_commit_silence_ms: TEMPLE_REALTIME_CLIENT_TURN_COMMIT_SILENCE_MS
+        })
+      });
+
+      const payload = await templeRealtimeReadJsonResponse(response);
+
+      templeRealtimeLog("TEMPLE_REALTIME_TURN_REPORTED", {
+        ok: response.ok,
+        status: response.status,
+        voice_access: payload
+      });
+
+      if (!response.ok) {
+        return {
+          allowed: false,
+          status: response.status,
+          payload: payload
+        };
+      }
+
+      if (payload && payload.allowed === false) {
+        return {
+          allowed: false,
+          status: response.status,
+          payload: payload
+        };
+      }
+
+      return {
+        allowed: true,
+        status: response.status,
+        payload: payload
+      };
+
+    } catch (err) {
+      templeRealtimeLog("TEMPLE_REALTIME_TURN_REPORT_FAILED", {
+        error: err.message || String(err)
+      });
+
+      return {
+        allowed: false,
+        status: 0,
+        payload: {
+          error: "Could not verify live voice access."
+        }
+      };
+    }
+  }
+
+  async function templeRealtimeCommitConversationTurn(turnInputSeconds) {
+    if (
+      templeRealtimeState.turnCommitPending ||
+      templeRealtimeState.assistantSpeaking ||
+      !templeRealtimeState.active
+    ) {
+      return;
+    }
+
+    templeRealtimeState.turnCommitPending = true;
+
+    try {
+      const turnAccess = await templeRealtimeReportTurn(turnInputSeconds);
+
+      if (!turnAccess.allowed) {
+        templeRealtimeState.turnCommitPending = false;
+
+        setVoiceStatus(
+          "Live voice limit reached",
+          "Continuing with regular Speak voice is available.",
+          "notice"
+        );
+
+        await templeRealtimeEndConversation("realtime_turn_denied", true);
+        return;
+      }
+
+      if (
+        !templeRealtimeState.active ||
+        !templeRealtimeState.socket ||
+        templeRealtimeState.socket.readyState !== WebSocket.OPEN
+      ) {
+        templeRealtimeState.turnCommitPending = false;
+        return;
+      }
+
+      templeRealtimeSendJson({ type: "input_audio_buffer.commit" });
+
+      templeRealtimeSendJson({
+        type: "response.create",
+        response: {
+          modalities: ["text", "audio"]
+        }
+      });
+
+      setVoiceStatus(
+        "Oracle preparing voice",
+        "Your live question was sent. The Oracle is preparing a spoken response.",
+        "working"
+      );
+
+      templeRealtimeTouchActivity("client_turn_committed");
+
+    } catch (err) {
+      templeRealtimeState.turnCommitPending = false;
+
+      setVoiceStatus(
+        "Live voice error",
+        err.message || "Could not commit live voice turn.",
+        "error"
+      );
+    }
+  }
+
+  function templeRealtimeRememberPreRoll(resampled) {
+    templeRealtimeState.preRollChunks.push(resampled);
+    templeRealtimeState.preRollSamples += resampled.length;
+
+    const maxSamples = Math.round((TEMPLE_REALTIME_PRE_ROLL_MS / 1000) * TEMPLE_REALTIME_INPUT_SAMPLE_RATE);
+
+    while (templeRealtimeState.preRollSamples > maxSamples && templeRealtimeState.preRollChunks.length > 1) {
+      const removed = templeRealtimeState.preRollChunks.shift();
+      templeRealtimeState.preRollSamples -= removed.length;
+    }
+  }
+
+  function templeRealtimeFlushPreRoll() {
+    const chunks = templeRealtimeState.preRollChunks.slice();
+    templeRealtimeState.preRollChunks = [];
+    templeRealtimeState.preRollSamples = 0;
+
+    chunks.forEach(function (chunk) {
+      templeRealtimeSendAudioChunk(chunk, "pre_roll");
+    });
+  }
+
+  function templeRealtimeSendAudioChunk(resampled, reason) {
+    const audioBase64 = templeRealtimeFloat32ToBase64PCM16(resampled);
+
+    templeRealtimeSendJson({
+      type: "input_audio_buffer.append",
+      audio: audioBase64
+    });
+
+    templeRealtimeState.inputChunksSent += 1;
+    templeRealtimeState.inputSamplesSent += resampled.length;
+    templeRealtimeState.inputBytesSent += resampled.length * 2;
+
+    if (
+      templeRealtimeState.inputChunksSent === 1 ||
+      templeRealtimeState.inputChunksSent % 12 === 0 ||
+      reason === "pre_roll"
+    ) {
+      templeRealtimeLog("TEMPLE_REALTIME_AUDIO_SENT", {
+        reason: reason,
+        chunks_sent: templeRealtimeState.inputChunksSent,
+        input_audio_seconds: Number((templeRealtimeState.inputSamplesSent / TEMPLE_REALTIME_INPUT_SAMPLE_RATE).toFixed(3)),
+        socket_buffered_amount: templeRealtimeState.socket ? templeRealtimeState.socket.bufferedAmount : "-"
+      });
+    }
+  }
+
+  function templeRealtimeComputeRms(float32Array) {
+    let sum = 0;
+    for (let i = 0; i < float32Array.length; i += 1) {
+      sum += float32Array[i] * float32Array[i];
+    }
+    return Math.sqrt(sum / Math.max(1, float32Array.length));
+  }
+
+  function templeRealtimeResampleFloat32(input, sourceRate, targetRate) {
+    if (sourceRate === targetRate) return new Float32Array(input);
+
+    const ratio = sourceRate / targetRate;
+    const outputLength = Math.max(1, Math.round(input.length / ratio));
+    const output = new Float32Array(outputLength);
+
+    for (let i = 0; i < outputLength; i += 1) {
+      const sourceIndex = i * ratio;
+      const index0 = Math.floor(sourceIndex);
+      const index1 = Math.min(index0 + 1, input.length - 1);
+      const fraction = sourceIndex - index0;
+      output[i] = input[index0] + (input[index1] - input[index0]) * fraction;
+    }
+
+    return output;
+  }
+
+  function templeRealtimeBytesToBase64(bytes) {
+    let binary = "";
+    const chunkSize = 0x8000;
+
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode.apply(null, chunk);
+    }
+
+    return btoa(binary);
+  }
+
+  function templeRealtimeFloat32ToBase64PCM16(float32Array) {
+    const bytes = new Uint8Array(float32Array.length * 2);
+    const view = new DataView(bytes.buffer);
+
+    for (let i = 0; i < float32Array.length; i += 1) {
+      const sample = Math.max(-1, Math.min(1, float32Array[i]));
+      const pcm = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+      view.setInt16(i * 2, pcm, true);
+    }
+
+    return templeRealtimeBytesToBase64(bytes);
+  }
+
+  function templeRealtimeBase64ToBytes(base64String) {
+    const binary = atob(base64String);
+    const bytes = new Uint8Array(binary.length);
+
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    return bytes;
+  }
+
+  function templeRealtimeBase64ByteLength(base64String) {
+    const clean = String(base64String || "").replace(/\s/g, "");
+    if (!clean) return 0;
+
+    const padding = clean.endsWith("==") ? 2 : (clean.endsWith("=") ? 1 : 0);
+    return Math.max(0, Math.floor(clean.length * 3 / 4) - padding);
+  }
+
+  function templeRealtimeEnsureOutputAudioContext() {
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+
+    if (!AudioContextCtor) {
+      throw new Error("This browser does not expose AudioContext for playback.");
+    }
+
+    if (!templeRealtimeState.outputAudioContext || templeRealtimeState.outputAudioContext.state === "closed") {
+      templeRealtimeState.outputAudioContext = new AudioContextCtor({
+        sampleRate: TEMPLE_REALTIME_OUTPUT_SAMPLE_RATE
+      });
+      templeRealtimeState.nextPlaybackTime = 0;
+    }
+
+    if (templeRealtimeState.outputAudioContext.state === "suspended") {
+      templeRealtimeState.outputAudioContext.resume().catch(function () {
+        // no-op
+      });
+    }
+
+    return templeRealtimeState.outputAudioContext;
+  }
+
+  function templeRealtimePlayAudioDelta(base64Audio) {
+    const bytes = templeRealtimeBase64ToBytes(base64Audio);
+    if (bytes.length < 2) return;
+
+    const pcm16 = new Int16Array(bytes.buffer);
+    const float32 = new Float32Array(pcm16.length);
+
+    for (let i = 0; i < pcm16.length; i += 1) {
+      float32[i] = pcm16[i] / 32768.0;
+    }
+
+    const audioContext = templeRealtimeEnsureOutputAudioContext();
+    const audioBuffer = audioContext.createBuffer(1, float32.length, TEMPLE_REALTIME_OUTPUT_SAMPLE_RATE);
+    audioBuffer.copyToChannel(float32, 0);
+
+    const source = audioContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioContext.destination);
+
+    const startAt = Math.max(audioContext.currentTime + 0.02, templeRealtimeState.nextPlaybackTime || 0);
+    source.start(startAt);
+
+    templeRealtimeState.nextPlaybackTime = startAt + audioBuffer.duration;
+    templeRealtimeState.outputBytesReceived += bytes.length;
+    templeRealtimeState.outputSamplesReceived += pcm16.length;
+  }
+
+  function templeRealtimeExtractTranscript(event) {
+    return templeRealtimeFirstPresent([
+      event.transcript,
+      event.text,
+      event.delta,
+      event.item && event.item.content && event.item.content[0] && event.item.content[0].transcript,
+      event.item && event.item.content && event.item.content[0] && event.item.content[0].text,
+      event.content && event.content[0] && event.content[0].transcript,
+      event.content && event.content[0] && event.content[0].text
+    ]);
+  }
+
+  function templeRealtimeRenderConversationText() {
+    const parts = [];
+
+    if (templeRealtimeState.currentInputTranscript) {
+      parts.push("You said: " + templeRealtimeState.currentInputTranscript);
+    }
+
+    if (templeRealtimeState.currentAssistantTranscript) {
+      parts.push(templeRealtimeState.currentAssistantTranscript);
+    }
+
+    oracleAnswer.textContent = parts.length ? parts.join("\n\n") : "Oracle is answering live...";
+  }
+
+  function templeRealtimeHandleServerEvent(event) {
+    const type = event && event.type ? event.type : "";
+
+    if (type === "conversation.item.input_audio_transcription.completed") {
+      const transcript = templeRealtimeExtractTranscript(event);
+
+      if (transcript) {
+        templeRealtimeState.currentInputTranscript = transcript;
+        oracleAnswer.textContent = "You said: " + transcript + "\n\nOracle is answering live...";
+      }
+
+      return;
+    }
+
+    if (
+      type === "response.output_audio_transcript.delta" ||
+      type === "response.text.delta" ||
+      type === "response.output_text.delta"
+    ) {
+      const delta = event.delta || event.text || "";
+
+      if (delta) {
+        templeRealtimeState.currentAssistantTranscript += delta;
+        templeRealtimeRenderConversationText();
+      }
+
+      return;
+    }
+
+    if (type === "response.output_audio_transcript.done") {
+      const transcript = templeRealtimeExtractTranscript(event);
+
+      if (transcript) {
+        templeRealtimeState.currentAssistantTranscript = transcript;
+        templeRealtimeRenderConversationText();
+      }
+
+      return;
+    }
+
+    if (type === "response.created") {
+      templeRealtimeClearIdleAutoEndTimer();
+      templeRealtimeState.assistantTurnIndex += 1;
+      templeRealtimeState.responseOutputStartSamples = templeRealtimeState.outputSamplesReceived;
+      templeRealtimeState.firstAudioDeltaAt = 0;
+      templeRealtimeState.assistantSpeaking = true;
+      templeRealtimeState.turnCommitPending = false;
+      templeRealtimeState.speechGateOpen = false;
+      templeRealtimeState.trailingMsRemaining = 0;
+      templeRealtimeState.speechAboveThresholdFrames = 0;
+      templeRealtimeState.preRollChunks = [];
+      templeRealtimeState.preRollSamples = 0;
+      templeRealtimeState.currentAssistantTranscript = "";
+
+      setVoiceStatus(
+        "Oracle speaking",
+        "Listening is paused while the realtime voice answers.",
+        "speaking"
+      );
+
+      templeRealtimeTouchActivity("response_created");
+      return;
+    }
+
+    if (type === "response.output_audio.delta") {
+      if (!templeRealtimeState.firstAudioDeltaAt) {
+        templeRealtimeState.firstAudioDeltaAt = templeRealtimeElapsedMs(templeRealtimeState.sessionStartedAt);
+      }
+
+      templeRealtimeState.assistantSpeaking = true;
+
+      setVoiceStatus(
+        "Oracle speaking",
+        "The Temple will return to listening after the spoken answer completes.",
+        "speaking"
+      );
+
+      templeRealtimeTouchActivity("assistant_audio_delta");
+
+      if (event.delta) {
+        templeRealtimePlayAudioDelta(event.delta);
+      }
+
+      return;
+    }
+
+    if (type === "response.output_audio.done") {
+      templeRealtimeLog("TEMPLE_REALTIME_OUTPUT_AUDIO_DONE", {
+        output_audio_seconds: Number((templeRealtimeState.outputSamplesReceived / TEMPLE_REALTIME_OUTPUT_SAMPLE_RATE).toFixed(3)),
+        output_bytes: templeRealtimeState.outputBytesReceived
+      });
+      return;
+    }
+
+    if (type === "response.done") {
+      templeRealtimeScheduleReturnToListening();
+      return;
+    }
+
+    if (type === "error") {
+      templeRealtimeLog("TEMPLE_REALTIME_SERVER_ERROR", {
+        code: event.code || (event.error && event.error.code),
+        message: event.message || (event.error && event.error.message) || "xAI realtime error"
+      });
+
+      setVoiceStatus(
+        "Live voice error",
+        "The realtime voice reported an error. You can try again or use regular text.",
+        "error"
+      );
+    }
+  }
+
+  function templeRealtimeScheduleReturnToListening() {
+    if (templeRealtimeState.playbackDrainTimer) {
+      window.clearTimeout(templeRealtimeState.playbackDrainTimer);
+    }
+
+    const audioContext = templeRealtimeState.outputAudioContext;
+    const remainingMs = audioContext
+      ? Math.max(0, Math.ceil((templeRealtimeState.nextPlaybackTime - audioContext.currentTime) * 1000))
+      : 0;
+
+    const drainMs = Math.min(
+      TEMPLE_REALTIME_PLAYBACK_DRAIN_MAX_MS,
+      Math.max(TEMPLE_REALTIME_PLAYBACK_DRAIN_MIN_MS, remainingMs + TEMPLE_REALTIME_PLAYBACK_DRAIN_PADDING_MS)
+    );
+
+    templeRealtimeState.playbackDrainTimer = window.setTimeout(function () {
+      templeRealtimeState.assistantSpeaking = false;
+      templeRealtimeState.turnCommitPending = false;
+      templeRealtimeState.listeningCooldownUntil = performance.now() + TEMPLE_REALTIME_POST_PLAYBACK_COOLDOWN_MS;
+
+      setVoiceStatus(
+        "Live voice listening",
+        "Speak again, or tap End Live Voice when finished.",
+        "listening"
+      );
+
+      templeRealtimeScheduleIdleAutoEnd();
+      templeRealtimeTouchActivity("returned_to_listening");
+    }, drainMs);
+  }
+
+  function templeRealtimeClearIdleAutoEndTimer() {
+    if (templeRealtimeState.idleAutoEndTimer) {
+      window.clearTimeout(templeRealtimeState.idleAutoEndTimer);
+      templeRealtimeState.idleAutoEndTimer = null;
+    }
+  }
+
+  function templeRealtimeScheduleIdleAutoEnd() {
+    templeRealtimeClearIdleAutoEndTimer();
+
+    if (!templeRealtimeState.active) return;
+
+    templeRealtimeState.idleAutoEndTimer = window.setTimeout(function () {
+      if (
+        !templeRealtimeState.active ||
+        templeRealtimeState.speechGateOpen ||
+        templeRealtimeState.assistantSpeaking
+      ) {
+        templeRealtimeScheduleIdleAutoEnd();
+        return;
+      }
+
+      templeRealtimeEndConversation("idle_auto_end", false);
+    }, TEMPLE_REALTIME_IDLE_AUTO_END_AFTER_RETURN_MS);
+  }
+
+  function templeRealtimeElapsedMs(startedAt) {
+    return startedAt ? Math.round(performance.now() - startedAt) : null;
+  }
+
+  function templeRealtimeTouchActivity(reason) {
+    templeRealtimeState.lastActivityAt = performance.now();
+
+    if (reason) {
+      templeRealtimeLog("TEMPLE_REALTIME_ACTIVITY", {
+        reason: reason
+      });
+    }
+
+    templeRealtimeScheduleIdleTimeout();
+  }
+
+  function templeRealtimeScheduleIdleTimeout() {
+    if (templeRealtimeState.idleTimer) {
+      window.clearTimeout(templeRealtimeState.idleTimer);
+    }
+
+    if (!templeRealtimeState.active) return;
+
+    templeRealtimeState.idleTimer = window.setTimeout(function () {
+      const idleMs = Math.round(performance.now() - templeRealtimeState.lastActivityAt);
+
+      if (templeRealtimeState.active && idleMs >= TEMPLE_REALTIME_IDLE_TIMEOUT_MS) {
+        templeRealtimeEndConversation("idle_timeout", false);
+      }
+    }, TEMPLE_REALTIME_IDLE_TIMEOUT_MS + 250);
+  }
+
+  function templeRealtimeScheduleMaxSessionTimeout() {
+    if (templeRealtimeState.maxSessionTimer) {
+      window.clearTimeout(templeRealtimeState.maxSessionTimer);
+    }
+
+    templeRealtimeState.maxSessionTimer = window.setTimeout(function () {
+      if (templeRealtimeState.active) {
+        templeRealtimeEndConversation("max_session_timeout", false);
+      }
+    }, TEMPLE_REALTIME_MAX_SESSION_MS);
+  }
+
+  function templeRealtimeHandleUnexpectedSocketClose(event) {
+    if (templeRealtimeState.ending) return;
+
+    templeRealtimeClearIdleAutoEndTimer();
+
+    if (templeRealtimeState.idleTimer) {
+      window.clearTimeout(templeRealtimeState.idleTimer);
+      templeRealtimeState.idleTimer = null;
+    }
+
+    if (templeRealtimeState.maxSessionTimer) {
+      window.clearTimeout(templeRealtimeState.maxSessionTimer);
+      templeRealtimeState.maxSessionTimer = null;
+    }
+
+    if (templeRealtimeState.playbackDrainTimer) {
+      window.clearTimeout(templeRealtimeState.playbackDrainTimer);
+      templeRealtimeState.playbackDrainTimer = null;
+    }
+
+    templeRealtimeCleanupInputCapture(true);
+
+    if (templeRealtimeState.outputAudioContext) {
+      try {
+        const closeResult = templeRealtimeState.outputAudioContext.close();
+        if (closeResult && typeof closeResult.catch === "function") {
+          closeResult.catch(function () {
+            // no-op
+          });
+        }
+      } catch (err) {
+        // no-op
+      }
+      templeRealtimeState.outputAudioContext = null;
+    }
+
+    templeRealtimeState.active = false;
+    templeRealtimeState.starting = false;
+    templeRealtimeState.turnCommitPending = false;
+    templeRealtimeState.assistantSpeaking = false;
+    templeRealtimeState.speechGateOpen = false;
+    templeRealtimeState.socket = null;
+
+    templeRealtimeSetButtonIdle();
+
+    setVoiceStatus(
+      "Live voice ended",
+      "The realtime voice connection closed. Tap Speak to begin again, or use regular text entry.",
+      "notice"
+    );
+  }
+
+  function templeRealtimeCloseSocketQuietly(reason) {
+    if (!templeRealtimeState.socket) return;
+
+    try {
+      if (
+        templeRealtimeState.socket.readyState === WebSocket.OPEN ||
+        templeRealtimeState.socket.readyState === WebSocket.CONNECTING
+      ) {
+        templeRealtimeState.socket.close(1000, reason || "temple_realtime_closed");
+      }
+    } catch (err) {
+      // no-op
+    }
+
+    templeRealtimeState.socket = null;
+  }
+
+  async function templeRealtimeEndConversation(reason, silent) {
+    if (templeRealtimeState.ending) return;
+
+    templeRealtimeState.ending = true;
+    templeRealtimeState.active = false;
+    templeRealtimeState.starting = false;
+
+    templeRealtimeClearIdleAutoEndTimer();
+
+    if (templeRealtimeState.idleTimer) {
+      window.clearTimeout(templeRealtimeState.idleTimer);
+    }
+
+    if (templeRealtimeState.maxSessionTimer) {
+      window.clearTimeout(templeRealtimeState.maxSessionTimer);
+    }
+
+    if (templeRealtimeState.playbackDrainTimer) {
+      window.clearTimeout(templeRealtimeState.playbackDrainTimer);
+    }
+
+    templeRealtimeCleanupInputCapture(true);
+    templeRealtimeCloseSocketQuietly(reason || "manual_end");
+
+    if (templeRealtimeState.outputAudioContext) {
+      try {
+        await templeRealtimeState.outputAudioContext.close();
+      } catch (err) {
+        // no-op
+      }
+      templeRealtimeState.outputAudioContext = null;
+    }
+
+    templeRealtimeSetButtonIdle();
+
+    if (!silent) {
+      setVoiceStatus(
+        "Live voice complete",
+        "Tap Speak to begin another live realtime voice session.",
+        "ready"
+      );
+    }
+
+    templeRealtimeState.ending = false;
+  }
+
+  async function maybeStartTempleRealtimeVoice() {
+    if (!templeRealtimeBrowserSupported()) {
+      return false;
+    }
+
+    const deity = templeRealtimeSelectedDeity();
+
+    setVoiceStatus(
+      "Checking live voice access",
+      "The Temple is checking whether realtime voice is available for this account.",
+      "working"
+    );
+
+    let access;
+
+    try {
+      access = await templeRealtimeFetchAccess(deity);
+    } catch (err) {
+      templeRealtimeLog("TEMPLE_REALTIME_ACCESS_FAILED", {
+        error: err.message || String(err)
+      });
+
+      setVoiceStatus(
+        "Regular Speak voice",
+        "Live voice access could not be checked. Using regular Speak voice.",
+        "notice"
+      );
+
+      return false;
+    }
+
+    if (!access.allowed) {
+      setVoiceStatus(
+        "Regular Speak voice",
+        "Realtime voice is not available for this account or has reached its limit. Using regular Speak voice.",
+        "notice"
+      );
+
+      return false;
+    }
+
+    return await templeRealtimeStartConversation();
+  }
+
   async function startVoiceRecording() {
     if (applyNativeIOSWebVoiceSuppression()) {
       if (oracleAnswer) {
@@ -1764,6 +3183,16 @@ if (seekerInput && oracleForm) {
       return;
     }
 
+    if (templeRealtimeIsActiveOrStarting()) {
+      speakButton.disabled = true;
+      await templeRealtimeEndConversation("manual_end", false);
+      return;
+    }
+
+    if (templeRealtimeState.clickPending) {
+      return;
+    }
+
     if (voiceIsRecording && voiceRecorder && voiceRecorder.state === "recording") {
       speakButton.disabled = true;
       speakButton.textContent = "🔄 Transcribing...";
@@ -1773,6 +3202,15 @@ if (seekerInput && oracleForm) {
     }
 
     try {
+      templeRealtimeState.clickPending = true;
+      speakButton.disabled = true;
+
+      const realtimeStarted = await maybeStartTempleRealtimeVoice();
+
+      if (realtimeStarted) {
+        return;
+      }
+
       await startVoiceRecording();
     } catch (err) {
       stopVoiceTracks();
@@ -1780,6 +3218,15 @@ if (seekerInput && oracleForm) {
       const recoveryMessage = getMicrophoneRecoveryMessage(err);
       setVoiceStatus("Microphone needs attention", recoveryMessage, "error");
       oracleAnswer.textContent = "The microphone could not be opened. You can type your question below, or adjust microphone access and try again.";
+    } finally {
+      templeRealtimeState.clickPending = false;
+
+      if (
+        !templeRealtimeIsActiveOrStarting() &&
+        !(voiceIsRecording && voiceRecorder && voiceRecorder.state === "recording")
+      ) {
+        speakButton.disabled = false;
+      }
     }
   });
 
