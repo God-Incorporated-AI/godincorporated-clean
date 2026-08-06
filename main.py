@@ -7357,6 +7357,280 @@ async def voice_realtime_turn_endpoint(request: Request):
     return access_after
 
 
+def _normalize_realtime_interaction_text(value, max_chars=12000):
+    if value is None:
+        return ""
+    text = str(value).replace("\x00", " ").strip()
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip()
+    return text
+
+
+def _normalize_realtime_interaction_label(value, default="", max_chars=120):
+    text = _normalize_realtime_interaction_text(value, max_chars=max_chars)
+    return text or default
+
+
+@app.post("/voice/realtime/interaction")
+async def voice_realtime_interaction_endpoint(request: Request):
+    """
+    Phase 11.10A provider-neutral completed-turn logging.
+
+    /voice/realtime/turn remains the pre-commit quota and cost gate.
+    This endpoint stores completed realtime Q/A text into oracle_interactions
+    so realtime conversations contribute to seeker memory and future corpus.
+    """
+    import json
+    import logging as _logging
+    import time
+    import uuid
+
+    started = time.perf_counter()
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    deity = _normalize_realtime_interaction_label(
+        body.get("deity") or body.get("voice"),
+        default="Hathor",
+        max_chars=40,
+    )
+
+    usage_context = get_voice_usage_context(request, deity)
+    user_transcript = _normalize_realtime_interaction_text(
+        body.get("input_transcript") or body.get("user_transcript"),
+        max_chars=12000,
+    )
+    assistant_transcript = _normalize_realtime_interaction_text(
+        body.get("assistant_transcript") or body.get("response_transcript"),
+        max_chars=12000,
+    )
+
+    provider = _normalize_realtime_interaction_label(
+        body.get("provider") or body.get("model_provider"),
+        default="unknown",
+        max_chars=80,
+    )
+    model = _normalize_realtime_interaction_label(
+        body.get("model") or body.get("model_name"),
+        default="",
+        max_chars=160,
+    )
+    transport = _normalize_realtime_interaction_label(
+        body.get("transport"),
+        default="",
+        max_chars=80,
+    )
+    provider_voice = _normalize_realtime_interaction_label(
+        body.get("provider_voice") or body.get("realtime_voice") or body.get("voice_name"),
+        default="",
+        max_chars=80,
+    )
+    route = _normalize_realtime_interaction_label(
+        body.get("route") or body.get("mode"),
+        default="temple_main_live_realtime",
+        max_chars=120,
+    )
+    input_mode = _normalize_realtime_interaction_label(
+        body.get("input_mode"),
+        default="realtime_voice",
+        max_chars=80,
+    )
+
+    client_interaction_id = _normalize_realtime_interaction_label(
+        body.get("client_interaction_id"),
+        default="",
+        max_chars=160,
+    )
+
+    if not client_interaction_id:
+        client_interaction_id = "rt-" + str(uuid.uuid4())
+
+    metadata = {
+        "phase": "11.10A",
+        "event_source": "voice_realtime_interaction_endpoint",
+        "source": _normalize_realtime_interaction_label(body.get("source"), default="temple", max_chars=80),
+        "route": route,
+        "input_mode": input_mode,
+        "provider": provider,
+        "model": model,
+        "transport": transport,
+        "provider_voice": provider_voice,
+        "client_session_id": _normalize_realtime_interaction_label(body.get("client_session_id"), default="", max_chars=160),
+        "provider_session_id": _normalize_realtime_interaction_label(body.get("provider_session_id"), default="", max_chars=160),
+        "client_interaction_id": client_interaction_id,
+        "speech_turn": body.get("speech_turn"),
+        "assistant_turn": body.get("assistant_turn"),
+        "input_transcript_source": _normalize_realtime_interaction_label(body.get("input_transcript_source"), default="provider_realtime", max_chars=80),
+        "assistant_transcript_source": _normalize_realtime_interaction_label(body.get("assistant_transcript_source"), default="provider_audio_transcript", max_chars=80),
+        "turn_input_audio_seconds": body.get("turn_input_audio_seconds"),
+        "output_audio_seconds": body.get("output_audio_seconds"),
+        "first_audio_delta_ms": body.get("first_audio_delta_ms"),
+        "preview_mode": body.get("preview_mode"),
+        "client_observed_provider_realtime": True,
+        "note": "Completed realtime turn transcript captured by client and normalized for provider-neutral Oracle memory.",
+    }
+
+    if not user_transcript or not assistant_transcript:
+        record_voice_usage_event(
+            **usage_context,
+            input_mode="realtime_voice",
+            deity=deity,
+            stage="realtime_interaction",
+            status="skipped",
+            total_ms=round((time.perf_counter() - started) * 1000, 2),
+            transcript_chars=len(user_transcript),
+            answer_chars=len(assistant_transcript),
+            metadata_json={
+                **metadata,
+                "reason": "missing_transcript",
+                "has_input_transcript": bool(user_transcript),
+                "has_assistant_transcript": bool(assistant_transcript),
+            },
+        )
+        return {
+            "stored": False,
+            "reason": "missing_transcript",
+            "client_interaction_id": client_interaction_id,
+        }
+
+    conn = None
+    inserted_id = None
+    duplicate = False
+
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO oracle_interactions
+                    (
+                        session_id,
+                        user_id,
+                        input_type,
+                        question_text,
+                        response_text,
+                        model_provider,
+                        model_name,
+                        mode,
+                        reason,
+                        client_interaction_id,
+                        metadata_json
+                    )
+                VALUES
+                    (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                ON CONFLICT (client_interaction_id)
+                    WHERE client_interaction_id IS NOT NULL
+                    DO NOTHING
+                RETURNING id
+                """,
+                (
+                    usage_context.get("session_id"),
+                    usage_context.get("user_id"),
+                    "voice",
+                    user_transcript,
+                    assistant_transcript,
+                    provider,
+                    model,
+                    deity,
+                    "realtime_voice",
+                    client_interaction_id,
+                    json.dumps(metadata),
+                ),
+            )
+            row = cur.fetchone()
+
+            if row:
+                inserted_id = str(row["id"] if isinstance(row, dict) else row[0])
+            else:
+                duplicate = True
+                cur.execute(
+                    """
+                    SELECT id
+                    FROM oracle_interactions
+                    WHERE client_interaction_id = %s
+                    LIMIT 1
+                    """,
+                    (client_interaction_id,),
+                )
+                existing = cur.fetchone()
+                inserted_id = str(existing["id"] if isinstance(existing, dict) else existing[0]) if existing else None
+
+        conn.commit()
+
+        record_voice_usage_event(
+            **usage_context,
+            input_mode="realtime_voice",
+            deity=deity,
+            stage="realtime_interaction",
+            status="duplicate" if duplicate else "ok",
+            total_ms=round((time.perf_counter() - started) * 1000, 2),
+            transcript_chars=len(user_transcript),
+            answer_chars=len(assistant_transcript),
+            metadata_json={
+                **metadata,
+                "oracle_interaction_id": inserted_id,
+                "duplicate": duplicate,
+            },
+        )
+
+        _logging.info(
+            "REALTIME_INTERACTION_STAGE status=%s provider=%s model=%s deity=%s provider_voice=%s question_chars=%s answer_chars=%s oracle_interaction_id=%s client_interaction_id=%s",
+            "duplicate" if duplicate else "ok",
+            provider,
+            model,
+            deity,
+            provider_voice,
+            len(user_transcript),
+            len(assistant_transcript),
+            inserted_id,
+            client_interaction_id,
+        )
+
+        return {
+            "stored": not duplicate,
+            "duplicate": duplicate,
+            "oracle_interaction_id": inserted_id,
+            "client_interaction_id": client_interaction_id,
+        }
+
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+
+        logger.error("Realtime interaction logging failed: %s", exc)
+
+        record_voice_usage_event(
+            **usage_context,
+            input_mode="realtime_voice",
+            deity=deity,
+            stage="realtime_interaction",
+            status="error",
+            total_ms=round((time.perf_counter() - started) * 1000, 2),
+            transcript_chars=len(user_transcript),
+            answer_chars=len(assistant_transcript),
+            metadata_json={
+                **metadata,
+                "error": str(exc),
+            },
+        )
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "stored": False,
+                "error": "Realtime interaction could not be logged.",
+                "client_interaction_id": client_interaction_id,
+            },
+        )
+
+    finally:
+        if conn:
+            conn.close()
+
+
 @app.post("/voice/xai/realtime/session")
 async def voice_xai_realtime_session_endpoint(request: Request):
     import logging as _logging

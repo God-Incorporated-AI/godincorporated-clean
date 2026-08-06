@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS oracle_interactions (
     mode TEXT,
     confidence NUMERIC,
     reason TEXT,
+    client_interaction_id TEXT,
+    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
 
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -79,6 +81,11 @@ CREATE TABLE IF NOT EXISTS oracle_interactions (
 CREATE INDEX IF NOT EXISTS idx_oracle_created_at ON oracle_interactions(created_at);
 CREATE INDEX IF NOT EXISTS idx_oracle_session_id ON oracle_interactions(session_id);
 CREATE INDEX IF NOT EXISTS idx_oracle_user_id ON oracle_interactions(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_oracle_interactions_client_interaction_id
+    ON oracle_interactions (client_interaction_id)
+    WHERE client_interaction_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_oracle_interactions_metadata_input_mode
+    ON oracle_interactions ((metadata_json->>'input_mode'));
 
 -- =====================
 -- DONATIONS

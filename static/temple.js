@@ -1716,8 +1716,116 @@ if (seekerInput && oracleForm) {
     firstAudioDeltaAt: 0,
 
     currentInputTranscript: "",
-    currentAssistantTranscript: ""
+    currentAssistantTranscript: "",
+    currentClientInteractionId: "",
+    interactionReportPending: false,
+    interactionReportedIds: {}
   };
+
+  function templeRealtimeGenerateInteractionId() {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      return window.crypto.randomUUID();
+    }
+
+    return "rt-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+  }
+
+  function templeRealtimeEnsureInteractionId() {
+    if (!templeRealtimeState.currentClientInteractionId) {
+      templeRealtimeState.currentClientInteractionId = templeRealtimeGenerateInteractionId();
+    }
+
+    return templeRealtimeState.currentClientInteractionId;
+  }
+
+  function templeRealtimeCompletedInteractionPayload(reason) {
+    const sessionData = templeRealtimeState.sessionData || {};
+    const inputTranscript = (templeRealtimeState.currentInputTranscript || "").trim();
+    const assistantTranscript = (templeRealtimeState.currentAssistantTranscript || "").trim();
+    const clientInteractionId = templeRealtimeEnsureInteractionId();
+
+    return {
+      client_interaction_id: clientInteractionId,
+      client_session_id: sessionData.id || sessionData.session_id || "",
+      provider_session_id: sessionData.provider_session_id || sessionData.id || sessionData.session_id || "",
+      source: "temple",
+      route: "temple_main_live_realtime",
+      input_mode: "realtime_voice",
+      provider: sessionData.provider || "xai",
+      model: sessionData.model || "",
+      transport: sessionData.transport || "websocket",
+      deity: templeRealtimeState.selectedDeity,
+      provider_voice: templeRealtimeState.selectedRealtimeVoice,
+      realtime_voice: templeRealtimeState.selectedRealtimeVoice,
+      speech_turn: templeRealtimeState.speechTurnIndex,
+      assistant_turn: templeRealtimeState.assistantTurnIndex,
+      input_transcript: inputTranscript,
+      assistant_transcript: assistantTranscript,
+      input_transcript_source: "provider_realtime",
+      assistant_transcript_source: "provider_audio_transcript",
+      turn_input_audio_seconds: Number(((templeRealtimeState.inputSamplesSent - templeRealtimeState.turnInputStartSamples) / TEMPLE_REALTIME_INPUT_SAMPLE_RATE).toFixed(3)),
+      output_audio_seconds: Number(((templeRealtimeState.outputSamplesReceived - templeRealtimeState.responseOutputStartSamples) / TEMPLE_REALTIME_OUTPUT_SAMPLE_RATE).toFixed(3)),
+      first_audio_delta_ms: templeRealtimeState.firstAudioDeltaAt || null,
+      preview_mode: false,
+      completion_reason: reason || "response.done"
+    };
+  }
+
+  async function templeRealtimeReportInteraction(reason) {
+    const inputTranscript = (templeRealtimeState.currentInputTranscript || "").trim();
+    const assistantTranscript = (templeRealtimeState.currentAssistantTranscript || "").trim();
+    const clientInteractionId = templeRealtimeEnsureInteractionId();
+
+    if (!inputTranscript || !assistantTranscript) {
+      templeRealtimeLog("TEMPLE_REALTIME_INTERACTION_LOG_SKIPPED", {
+        reason: "missing_transcript",
+        has_input_transcript: Boolean(inputTranscript),
+        has_assistant_transcript: Boolean(assistantTranscript),
+        client_interaction_id: clientInteractionId
+      });
+      return;
+    }
+
+    if (templeRealtimeState.interactionReportPending || templeRealtimeState.interactionReportedIds[clientInteractionId]) {
+      return;
+    }
+
+    templeRealtimeState.interactionReportPending = true;
+
+    try {
+      const payload = templeRealtimeCompletedInteractionPayload(reason);
+      const response = await identityFetch("/voice/realtime/interaction", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await templeRealtimeReadJsonResponse(response);
+
+      templeRealtimeLog("TEMPLE_REALTIME_INTERACTION_REPORTED", {
+        ok: response.ok,
+        status: response.status,
+        result: result,
+        client_interaction_id: clientInteractionId
+      });
+
+      if (response.ok) {
+        templeRealtimeState.interactionReportedIds[clientInteractionId] = true;
+      }
+
+    } catch (err) {
+      templeRealtimeLog("TEMPLE_REALTIME_INTERACTION_REPORT_FAILED", {
+        error: err.message || String(err),
+        client_interaction_id: clientInteractionId
+      });
+
+    } finally {
+      templeRealtimeState.interactionReportPending = false;
+    }
+  }
 
   function templeRealtimeLog(label, payload) {
     try {
@@ -2122,6 +2230,9 @@ if (seekerInput && oracleForm) {
     templeRealtimeState.firstAudioDeltaAt = 0;
     templeRealtimeState.currentInputTranscript = "";
     templeRealtimeState.currentAssistantTranscript = "";
+    templeRealtimeState.currentClientInteractionId = "";
+    templeRealtimeState.interactionReportPending = false;
+    templeRealtimeState.interactionReportedIds = {};
 
     if (templeRealtimeState.playbackDrainTimer) {
       window.clearTimeout(templeRealtimeState.playbackDrainTimer);
@@ -2337,6 +2448,9 @@ if (seekerInput && oracleForm) {
         templeRealtimeState.speechTurnIndex += 1;
         templeRealtimeState.turnInputStartSamples = templeRealtimeState.inputSamplesSent;
         templeRealtimeState.currentInputTranscript = "";
+        templeRealtimeState.currentAssistantTranscript = "";
+        templeRealtimeState.currentClientInteractionId = templeRealtimeGenerateInteractionId();
+        templeRealtimeState.interactionReportPending = false;
         templeRealtimeClearIdleAutoEndTimer();
         templeRealtimeFlushPreRoll();
 
@@ -2734,6 +2848,7 @@ if (seekerInput && oracleForm) {
         templeRealtimeRenderConversationText();
       }
 
+      templeRealtimeReportInteraction("response.output_audio_transcript.done");
       return;
     }
 
@@ -2750,6 +2865,8 @@ if (seekerInput && oracleForm) {
       templeRealtimeState.preRollChunks = [];
       templeRealtimeState.preRollSamples = 0;
       templeRealtimeState.currentAssistantTranscript = "";
+      templeRealtimeState.interactionReportPending = false;
+      templeRealtimeEnsureInteractionId();
 
       setVoiceStatus(
         "Oracle speaking",
@@ -2792,6 +2909,7 @@ if (seekerInput && oracleForm) {
     }
 
     if (type === "response.done") {
+      templeRealtimeReportInteraction("response.done");
       templeRealtimeScheduleReturnToListening();
       return;
     }
@@ -2836,6 +2954,7 @@ if (seekerInput && oracleForm) {
         "listening"
       );
 
+      templeRealtimeReportInteraction("playback_drain_complete");
       templeRealtimeScheduleIdleAutoEnd();
       templeRealtimeTouchActivity("returned_to_listening");
     }, drainMs);
