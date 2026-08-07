@@ -1862,6 +1862,11 @@ struct NativeSupportView: View {
 }
 
 struct NativeInfoView: View {
+#if DEBUG
+    @State private var pccResult = "PCC smoke test has not been run."
+    @State private var pccIsRunning = false
+#endif
+
     var body: some View {
         NavigationStack {
             TempleScreen {
@@ -1896,6 +1901,40 @@ struct NativeInfoView: View {
                             }
                             .foregroundStyle(TemplePalette.crimson)
                         }
+
+#if DEBUG
+                        TempleCard {
+                            VStack(alignment: .leading, spacing: 14) {
+                                Text("Apple Private Cloud Compute")
+                                    .font(.title3.weight(.bold))
+                                    .foregroundStyle(TemplePalette.ink)
+
+                                Text("Debug-only PCC connection test.")
+                                    .foregroundStyle(TemplePalette.ink.opacity(0.74))
+
+                                Button {
+                                    pccIsRunning = true
+                                    pccResult = "Contacting Apple Private Cloud Compute..."
+
+                                    Task {
+                                        let result = await PCCSmokeTest.run()
+                                        pccResult = result
+                                        pccIsRunning = false
+                                    }
+                                } label: {
+                                    Text(pccIsRunning ? "Running..." : "Run PCC Smoke Test")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(pccIsRunning)
+
+                                Text(pccResult)
+                                    .font(.footnote)
+                                    .foregroundStyle(TemplePalette.ink.opacity(0.82))
+                                    .textSelection(.enabled)
+                            }
+                        }
+#endif
                     }
                     .padding(.horizontal, 18)
                 }
