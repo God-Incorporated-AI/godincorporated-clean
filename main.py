@@ -1201,6 +1201,16 @@ def choose_hathor_provider(plan_code: Optional[str], input_mode: str = "text") -
 
 
 
+async def execute_oracle_inference(*args, **kwargs):
+    """
+    Provider-neutral inference execution seam.
+
+    Phase 11.10Q initially delegates to the existing provider executor
+    without changing prompt construction, routing, or provider behavior.
+    """
+    return await get_oracle_response(*args, **kwargs)
+
+
 async def get_oracle_response(
     question: str,
     deity: str,
@@ -11335,7 +11345,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             )
 
         final_model_started_at = datetime.datetime.now()
-        result = await get_oracle_response(
+        result = await execute_oracle_inference(
             enhanced_question,
             deity,
             force_mode=memory_intent,
