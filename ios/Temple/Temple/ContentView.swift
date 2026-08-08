@@ -1863,6 +1863,7 @@ struct NativeSupportView: View {
 
 struct NativeInfoView: View {
 #if DEBUG
+    @State private var pccPrompt = ""
     @State private var pccResult = "PCC smoke test has not been run."
     @State private var pccIsRunning = false
 #endif
@@ -1909,8 +1910,48 @@ struct NativeInfoView: View {
                                     .font(.title3.weight(.bold))
                                     .foregroundStyle(TemplePalette.ink)
 
-                                Text("Debug-only PCC connection test.")
+                                Text("Debug-only PCC connection and free-form inference test.")
                                     .foregroundStyle(TemplePalette.ink.opacity(0.74))
+
+                                TextField(
+                                    "Ask PCC a question",
+                                    text: $pccPrompt,
+                                    axis: .vertical
+                                )
+                                .textFieldStyle(.roundedBorder)
+                                .lineLimit(2...5)
+
+                                Button {
+                                    let prompt = pccPrompt.trimmingCharacters(
+                                        in: .whitespacesAndNewlines
+                                    )
+
+                                    pccIsRunning = true
+                                    pccResult = "Asking Apple Private Cloud Compute..."
+
+                                    Task {
+                                        let result = await PCCSmokeTest.ask(prompt: prompt)
+                                        pccResult = result
+                                        pccIsRunning = false
+                                    }
+                                } label: {
+                                    Text(pccIsRunning ? "Running..." : "Ask PCC")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(
+                                    pccIsRunning ||
+                                    pccPrompt.trimmingCharacters(
+                                        in: .whitespacesAndNewlines
+                                    ).isEmpty
+                                )
+
+                                Divider()
+                                    .overlay(TemplePalette.warmGold.opacity(0.45))
+
+                                Text("Fixed PCC diagnostic")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(TemplePalette.ink.opacity(0.72))
 
                                 Button {
                                     pccIsRunning = true
@@ -1925,7 +1966,7 @@ struct NativeInfoView: View {
                                     Text(pccIsRunning ? "Running..." : "Run PCC Smoke Test")
                                         .frame(maxWidth: .infinity)
                                 }
-                                .buttonStyle(.borderedProminent)
+                                .buttonStyle(.bordered)
                                 .disabled(pccIsRunning)
 
                                 Text(pccResult)

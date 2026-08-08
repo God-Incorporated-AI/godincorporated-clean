@@ -6,6 +6,14 @@ import FoundationModels
 enum PCCSmokeTest {
 
     static func run() async -> String {
+        await respond(to: "Reply with exactly: PCC smoke test successful.")
+    }
+
+    static func ask(prompt: String) async -> String {
+        await respond(to: prompt)
+    }
+
+    private static func respond(to prompt: String) async -> String {
 
         #if compiler(>=6.4)
 
@@ -33,7 +41,7 @@ enum PCCSmokeTest {
                 let session = LanguageModelSession(model: model)
 
                 let response = try await session.respond(
-                    to: "Reply with exactly: PCC smoke test successful."
+                    to: prompt
                 )
 
                 return response.content
