@@ -11538,7 +11538,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
                 (
                     session_id,
                     user_id,
-                    "text",
+                    "voice" if normalized_input_mode == "voice" else "text",
                     question,
                     raw_answer,
                     model_provider,
