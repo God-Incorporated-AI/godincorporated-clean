@@ -1334,6 +1334,26 @@ def build_prepared_oracle_inference(
     }
 
 
+def normalize_oracle_inference_result(result: dict, deity: str) -> dict:
+    """
+    Normalize provider execution output into the God Incorporated
+    inference-result contract without changing answer semantics.
+    """
+    source_model = result["source_model"]
+
+    return {
+        "answer": result["answer"],
+        "source_model": source_model,
+        "model_provider": result.get(
+            "model_provider",
+            "xai" if deity == "Hathor" else "openai",
+        ),
+        "model_name": result.get("model_name", source_model),
+        "token_usage": result.get("token_usage") or {},
+        "route_reason": result.get("route_reason"),
+    }
+
+
 async def execute_oracle_inference(prepared: dict):
     """
     Provider-neutral inference execution seam.
@@ -1341,7 +1361,7 @@ async def execute_oracle_inference(prepared: dict):
     The prepared packet is owned by God Incorporated. Provider execution
     remains delegated to the existing executor during Phase 11.10Q.
     """
-    return await get_oracle_response(
+    result = await get_oracle_response(
         prepared["question"],
         prepared["deity"],
         force_mode=prepared.get("force_mode"),
@@ -1355,6 +1375,11 @@ async def execute_oracle_inference(prepared: dict):
         selected_moses_model=prepared.get("selected_moses_model"),
         moses_route_reason=prepared.get("moses_route_reason"),
         moses_prompt_chars=prepared.get("moses_prompt_chars"),
+    )
+
+    return normalize_oracle_inference_result(
+        result,
+        prepared["deity"],
     )
 
 
