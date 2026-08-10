@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS oracle_pending_inferences (
         CHECK (input_mode IN ('text', 'voice')),
 
     status TEXT NOT NULL DEFAULT 'prepared'
-        CHECK (status IN ('prepared', 'completed', 'expired')),
+        CHECK (status IN ('prepared', 'completing', 'completed', 'expired')),
 
     prepared_state JSONB NOT NULL DEFAULT '{}'::jsonb,
 
