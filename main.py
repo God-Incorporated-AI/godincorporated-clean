@@ -1295,20 +1295,74 @@ def build_oracle_system_prompt(
     raise ValueError(f"Unknown deity: {deity}")
 
 
-async def execute_oracle_inference(*args, **kwargs):
+def build_prepared_oracle_inference(
+    question: str,
+    deity: str,
+    force_mode: Optional[str] = None,
+    memory_block: Optional[str] = None,
+    context_block: Optional[str] = None,
+    max_output_tokens: Optional[int] = None,
+    memory_intent: str = "reflection",
+    plan_code: str = "anon",
+    input_mode: str = "text",
+    selected_moses_model: Optional[str] = None,
+    moses_route_reason: Optional[str] = None,
+    moses_prompt_chars: Optional[int] = None,
+) -> dict:
+    """
+    Build the God Incorporated-owned inference packet before provider
+    execution without changing current provider routing or prompt semantics.
+    """
+    system_prompt = None
+    if deity in {"Hathor", "Moses"}:
+        system_prompt = build_oracle_system_prompt(deity, force_mode)
+
+    return {
+        "question": question,
+        "deity": deity,
+        "force_mode": force_mode,
+        "system_prompt": system_prompt,
+        "memory_block": memory_block,
+        "context_block": context_block,
+        "max_output_tokens": max_output_tokens,
+        "memory_intent": memory_intent,
+        "plan_code": plan_code,
+        "input_mode": input_mode,
+        "selected_moses_model": selected_moses_model,
+        "moses_route_reason": moses_route_reason,
+        "moses_prompt_chars": moses_prompt_chars,
+    }
+
+
+async def execute_oracle_inference(prepared: dict):
     """
     Provider-neutral inference execution seam.
 
-    Phase 11.10Q initially delegates to the existing provider executor
-    without changing prompt construction, routing, or provider behavior.
+    The prepared packet is owned by God Incorporated. Provider execution
+    remains delegated to the existing executor during Phase 11.10Q.
     """
-    return await get_oracle_response(*args, **kwargs)
+    return await get_oracle_response(
+        prepared["question"],
+        prepared["deity"],
+        force_mode=prepared.get("force_mode"),
+        system_prompt=prepared.get("system_prompt"),
+        memory_block=prepared.get("memory_block"),
+        context_block=prepared.get("context_block"),
+        max_output_tokens=prepared.get("max_output_tokens"),
+        memory_intent=prepared.get("memory_intent", "reflection"),
+        plan_code=prepared.get("plan_code", "anon"),
+        input_mode=prepared.get("input_mode", "text"),
+        selected_moses_model=prepared.get("selected_moses_model"),
+        moses_route_reason=prepared.get("moses_route_reason"),
+        moses_prompt_chars=prepared.get("moses_prompt_chars"),
+    )
 
 
 async def get_oracle_response(
     question: str,
     deity: str,
     force_mode: str = None,
+    system_prompt: Optional[str] = None,
     memory_block: str = None,
     context_block: str = None,
     max_output_tokens: Optional[int] = None,
@@ -1325,7 +1379,8 @@ async def get_oracle_response(
         # Hathor uses xAI API with intuitive, poetic system prompt
         if not xai_api_key:
             raise ValueError("XAI_API_KEY not set for Hathor oracle")
-        system_prompt = build_oracle_system_prompt(deity, force_mode)
+        if system_prompt is None:
+            system_prompt = build_oracle_system_prompt(deity, force_mode)
 
 
         hathor_provider, hathor_route_reason = choose_hathor_provider(
@@ -1433,7 +1488,8 @@ async def get_oracle_response(
 
         # Moses uses OpenAI with logical, doctrinal system prompt
         client = get_openai_client()
-        system_prompt = build_oracle_system_prompt(deity, force_mode)
+        if system_prompt is None:
+            system_prompt = build_oracle_system_prompt(deity, force_mode)
 
         response = client.chat.completions.create(
             model=moses_model,  # Updated model
@@ -11360,7 +11416,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             )
 
         final_model_started_at = datetime.datetime.now()
-        result = await execute_oracle_inference(
+        prepared_inference = build_prepared_oracle_inference(
             enhanced_question,
             deity,
             force_mode=memory_intent,
@@ -11372,8 +11428,10 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             input_mode=input_mode,
             selected_moses_model=selected_moses_model,
             moses_route_reason=moses_route_reason,
-            moses_prompt_chars=moses_prompt_chars
+            moses_prompt_chars=moses_prompt_chars,
         )
+
+        result = await execute_oracle_inference(prepared_inference)
         final_model_finished_at = datetime.datetime.now()
 
         raw_answer = result["answer"]
