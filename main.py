@@ -3674,7 +3674,9 @@ def claim_pending_oracle_inference(
             cur.execute(
                 """
                 UPDATE oracle_pending_inferences
-                SET status = 'completing'
+                SET
+                    status = 'completing',
+                    expires_at = NOW() + INTERVAL '15 minutes'
                 WHERE id = %s::uuid
                   AND session_id = %s::uuid
                   AND user_id IS NOT DISTINCT FROM %s::uuid
