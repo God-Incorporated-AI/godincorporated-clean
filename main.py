@@ -1334,6 +1334,30 @@ def build_prepared_oracle_inference(
     }
 
 
+def build_oracle_device_execution_packet(
+    prepared: dict,
+    interaction_id: str,
+) -> dict:
+    """
+    Build the minimal God Incorporated-authorized inference packet that may
+    leave the server for device execution.
+
+    Durable identity, entitlement, retrieval authority, and finalization state
+    remain server-owned.
+    """
+    if not interaction_id:
+        raise ValueError("interaction_id is required")
+
+    return {
+        "interaction_id": interaction_id,
+        "deity": prepared["deity"],
+        "system_prompt": prepared.get("system_prompt"),
+        "memory_block": prepared.get("memory_block") or "",
+        "question": prepared["question"],
+        "max_output_tokens": prepared.get("max_output_tokens"),
+    }
+
+
 def normalize_oracle_inference_result(result: dict, deity: str) -> dict:
     """
     Normalize provider execution output into the God Incorporated
