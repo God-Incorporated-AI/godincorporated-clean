@@ -1383,6 +1383,281 @@ async def execute_oracle_inference(prepared: dict):
     )
 
 
+def finalize_oracle_inference(
+    *,
+    finalization_state: dict,
+    inference_result: dict,
+    timing_state: Optional[dict] = None,
+) -> dict:
+    """
+    Finalize one Oracle inference through the existing God Incorporated
+    persistence, usage, observation, logging, and durable-memory path.
+
+    Phase 11.10Q keeps current ordering and behavior intact. Retry and
+    idempotency hardening are deliberately handled separately.
+    """
+    timing_state = timing_state or {}
+
+    session_id = finalization_state["session_id"]
+    user_id = finalization_state.get("user_id")
+    question = finalization_state["question"]
+    deity = finalization_state["deity"]
+    input_mode = finalization_state["input_mode"]
+    plan_code = finalization_state["plan_code"]
+    memory_intent = finalization_state["memory_intent"]
+    oracle_interaction_style = finalization_state["oracle_interaction_style"]
+    response_word_cap = finalization_state["response_word_cap"]
+    enhanced_question_chars = int(
+        finalization_state.get("enhanced_question_chars") or 0
+    )
+    memory_has_content = bool(
+        finalization_state.get("memory_has_content")
+    )
+    llama_phase1 = finalization_state.get("llama_phase1")
+    llama_passages_before = int(
+        finalization_state.get("llama_passages_before") or 0
+    )
+    llama_passages_after = int(
+        finalization_state.get("llama_passages_after") or 0
+    )
+
+    normalized_input_mode = (input_mode or "text").strip().lower()
+
+    ask_started_at = timing_state.get("ask_started_at")
+    retrieval_started_at = timing_state.get("retrieval_started_at")
+    retrieval_finished_at = timing_state.get("retrieval_finished_at")
+    phase1_started_at = timing_state.get("phase1_started_at")
+    phase1_finished_at = timing_state.get("phase1_finished_at")
+    final_model_started_at = timing_state.get("final_model_started_at")
+    final_model_finished_at = timing_state.get("final_model_finished_at")
+
+    raw_answer = inference_result["answer"]
+    source_model = inference_result["source_model"]
+    model_provider = inference_result.get(
+        "model_provider",
+        "xai" if deity == "Hathor" else "openai",
+    )
+    model_name = inference_result.get("model_name", source_model)
+    token_usage = inference_result.get("token_usage") or {}
+    oracle_route_reason = inference_result.get("route_reason")
+
+    if not raw_answer:
+        raw_answer = "The Oracle is silent."
+
+    raw_answer = trim_response_to_word_cap(
+        raw_answer,
+        response_word_cap,
+    )
+
+    def _ms(started_at, finished_at):
+        if not started_at or not finished_at:
+            return "-"
+        return round(
+            (finished_at - started_at).total_seconds() * 1000,
+            2,
+        )
+
+    logger.info(
+        "ASK_STAGE_TIMING input_mode=%s deity=%s memory_intent=%s plan_code=%s retrieval_ms=%s phase1_ms=%s final_model_ms=%s total_ms=%s",
+        input_mode,
+        deity,
+        memory_intent,
+        plan_code,
+        _ms(retrieval_started_at, retrieval_finished_at),
+        _ms(phase1_started_at, phase1_finished_at),
+        _ms(final_model_started_at, final_model_finished_at),
+        _ms(ask_started_at, datetime.datetime.now()),
+    )
+
+    logger.info(f"ANSWER len={len(raw_answer)}")
+
+    # --- Token metering ---
+    estimated_tokens = estimate_tokens(question, raw_answer)
+    estimated_input_tokens = enhanced_question_chars // 4
+    estimated_output_tokens = estimate_tokens("", raw_answer)
+    estimated_total_tokens = (
+        enhanced_question_chars + len(raw_answer or "")
+    ) // 4
+    usage_class = "registered" if user_id else "anonymous"
+
+    actual_prompt_tokens = token_usage.get("prompt_tokens")
+    actual_completion_tokens = token_usage.get("completion_tokens")
+    actual_total_tokens = token_usage.get("total_tokens")
+
+    logger.info(
+        "TOKEN_USAGE provider=%s model=%s deity=%s plan_code=%s input_mode=%s retrieval_backend=%s pgvector_limit=%s usage_class=%s actual_prompt_tokens=%s actual_completion_tokens=%s actual_total_tokens=%s estimated_input_tokens=%s estimated_output_tokens=%s estimated_total_tokens=%s question_chars=%s enhanced_question_chars=%s answer_chars=%s final_model_ms=%s total_ms=%s",
+        model_provider,
+        model_name,
+        deity,
+        plan_code,
+        input_mode,
+        get_retrieval_backend(),
+        PGVECTOR_RETRIEVAL_LIMIT,
+        usage_class,
+        actual_prompt_tokens if actual_prompt_tokens is not None else "-",
+        actual_completion_tokens if actual_completion_tokens is not None else "-",
+        actual_total_tokens if actual_total_tokens is not None else "-",
+        estimated_input_tokens,
+        estimated_output_tokens,
+        estimated_total_tokens,
+        len(question or ""),
+        enhanced_question_chars,
+        len(raw_answer or ""),
+        _ms(final_model_started_at, final_model_finished_at),
+        _ms(ask_started_at, datetime.datetime.now()),
+    )
+
+    oracle_pricing = get_oracle_pricing_info(
+        model_provider,
+        model_name,
+    )
+    estimated_oracle_cost_usd = calculate_oracle_estimated_cost_usd(
+        provider=model_provider,
+        model=model_name,
+        prompt_tokens=actual_prompt_tokens,
+        completion_tokens=actual_completion_tokens,
+    )
+
+    record_oracle_usage_event(
+        session_id=session_id,
+        user_id=user_id,
+        anonymous_user_id=session_id,
+        plan_code=plan_code,
+        usage_class=usage_class,
+        input_mode=input_mode,
+        deity=deity,
+        provider=model_provider,
+        model=model_name,
+        retrieval_backend=get_retrieval_backend(),
+        pgvector_limit=PGVECTOR_RETRIEVAL_LIMIT,
+        prompt_tokens=actual_prompt_tokens,
+        completion_tokens=actual_completion_tokens,
+        total_tokens=actual_total_tokens,
+        estimated_input_tokens=estimated_input_tokens,
+        estimated_output_tokens=estimated_output_tokens,
+        estimated_total_tokens=estimated_total_tokens,
+        question_chars=len(question or ""),
+        enhanced_question_chars=enhanced_question_chars,
+        answer_chars=len(raw_answer or ""),
+        final_model_ms=_ms(
+            final_model_started_at,
+            final_model_finished_at,
+        ),
+        total_ms=_ms(
+            ask_started_at,
+            datetime.datetime.now(),
+        ),
+        estimated_cost_usd=estimated_oracle_cost_usd,
+        metadata_json={
+            "phase": "10.7",
+            "event_source": "ask_oracle",
+            "memory_intent": memory_intent,
+            "oracle_interaction_style": oracle_interaction_style,
+            "source_model": source_model,
+            "response_word_cap": response_word_cap,
+            "pricing_source": oracle_pricing.get("source"),
+            "pricing_input_per_1m": oracle_pricing.get(
+                "input_per_1m"
+            ),
+            "pricing_output_per_1m": oracle_pricing.get(
+                "output_per_1m"
+            ),
+            "route_reason": oracle_route_reason,
+        },
+    )
+
+    # --- Architect observation ---
+    architect_obs = architect_observe_v3(
+        question,
+        deity,
+        session_id,
+    )
+
+    # --- LLaMA observation ---
+    try:
+        llama_obs = get_llama_observation(
+            question,
+            deity,
+            raw_answer,
+            None,
+        )
+    except Exception as exc:
+        logger.warning(f"LLaMA observation error: {exc}")
+        llama_obs = None
+
+    # --- Logging ---
+    save_log({
+        "memory_intent": memory_intent,
+        "oracle_interaction_style": oracle_interaction_style,
+        "memory_has_content": memory_has_content,
+        "timestamp": str(datetime.datetime.now()),
+        "session_id": session_id,
+        "seeker_id": user_id,
+        "anonymous_user_id": session_id,
+        "question": question,
+        "oracle_used": deity,
+        "answer": raw_answer,
+        "architect_observation": architect_obs,
+        "llama_observation": llama_obs,
+        "llama_phase1": llama_phase1,
+        "llama_passages_before": llama_passages_before,
+        "llama_passages_after": llama_passages_after,
+        "source_model": source_model,
+        "phase": "5.5",
+        "corpus_intent": "authoritative_training_data",
+        "personal_retrieval_score": None,
+        "global_retrieval_score": None,
+        "shadow_delta": None,
+        "influence_state": "disabled",
+        "estimated_tokens": estimated_tokens,
+        "token_usage": {
+            "provider": model_provider,
+            "model": model_name,
+            "actual_prompt_tokens": actual_prompt_tokens,
+            "actual_completion_tokens": actual_completion_tokens,
+            "actual_total_tokens": actual_total_tokens,
+            "estimated_input_tokens": estimated_input_tokens,
+            "estimated_output_tokens": estimated_output_tokens,
+            "estimated_total_tokens": estimated_total_tokens,
+            "retrieval_backend": get_retrieval_backend(),
+            "pgvector_limit": PGVECTOR_RETRIEVAL_LIMIT,
+            "input_mode": input_mode,
+            "plan_code": plan_code,
+            "deity": deity,
+        },
+        "usage_class": usage_class,
+    })
+
+    # --- Database logging ---
+    conn = get_db_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO oracle_interactions
+            (session_id, user_id, input_type, question_text, response_text, model_provider, model_name, mode)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                session_id,
+                user_id,
+                "voice" if normalized_input_mode == "voice" else "text",
+                question,
+                raw_answer,
+                model_provider,
+                model_name,
+                deity,
+            ),
+        )
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "question": question,
+        "answer": raw_answer,
+    }
+
+
 async def get_oracle_response(
     question: str,
     deity: str,
@@ -11708,199 +11983,39 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         result = await execute_oracle_inference(prepared_inference)
         final_model_finished_at = datetime.datetime.now()
 
-        raw_answer = result["answer"]
-        source_model = result["source_model"]
-        model_provider = result.get("model_provider", "xai" if deity == "Hathor" else "openai")
-        model_name = result.get("model_name", source_model)
-        token_usage = result.get("token_usage") or {}
-        oracle_route_reason = result.get("route_reason")
-
-        if not raw_answer:
-            raw_answer = "The Oracle is silent."
-
-        raw_answer = trim_response_to_word_cap(raw_answer, response_word_cap)
-
-        def _ms(started_at, finished_at):
-            if not started_at or not finished_at:
-                return "-"
-            return round((finished_at - started_at).total_seconds() * 1000, 2)
-
-        logger.info(
-            "ASK_STAGE_TIMING input_mode=%s deity=%s memory_intent=%s plan_code=%s retrieval_ms=%s phase1_ms=%s final_model_ms=%s total_ms=%s",
-            input_mode,
-            deity,
-            memory_intent,
-            plan_code,
-            _ms(retrieval_started_at, retrieval_finished_at),
-            _ms(phase1_started_at, phase1_finished_at),
-            _ms(final_model_started_at, final_model_finished_at),
-            _ms(ask_started_at, datetime.datetime.now())
-        )
-
-        logger.info(f"ANSWER len={len(raw_answer)}")
-
-        # --- Token metering ---
-        estimated_tokens = estimate_tokens(question, raw_answer)
-        estimated_input_tokens = estimate_tokens(enhanced_question, "")
-        estimated_output_tokens = estimate_tokens("", raw_answer)
-        estimated_total_tokens = estimate_tokens(enhanced_question, raw_answer)
-        usage_class = "registered" if user_id else "anonymous"
-
-        actual_prompt_tokens = token_usage.get("prompt_tokens")
-        actual_completion_tokens = token_usage.get("completion_tokens")
-        actual_total_tokens = token_usage.get("total_tokens")
-
-        logger.info(
-            "TOKEN_USAGE provider=%s model=%s deity=%s plan_code=%s input_mode=%s retrieval_backend=%s pgvector_limit=%s usage_class=%s actual_prompt_tokens=%s actual_completion_tokens=%s actual_total_tokens=%s estimated_input_tokens=%s estimated_output_tokens=%s estimated_total_tokens=%s question_chars=%s enhanced_question_chars=%s answer_chars=%s final_model_ms=%s total_ms=%s",
-            model_provider,
-            model_name,
-            deity,
-            plan_code,
-            input_mode,
-            get_retrieval_backend(),
-            PGVECTOR_RETRIEVAL_LIMIT,
-            usage_class,
-            actual_prompt_tokens if actual_prompt_tokens is not None else "-",
-            actual_completion_tokens if actual_completion_tokens is not None else "-",
-            actual_total_tokens if actual_total_tokens is not None else "-",
-            estimated_input_tokens,
-            estimated_output_tokens,
-            estimated_total_tokens,
-            len(question or ""),
-            len(enhanced_question or ""),
-            len(raw_answer or ""),
-            _ms(final_model_started_at, final_model_finished_at),
-            _ms(ask_started_at, datetime.datetime.now())
-        )
-
-
-        oracle_pricing = get_oracle_pricing_info(model_provider, model_name)
-        estimated_oracle_cost_usd = calculate_oracle_estimated_cost_usd(
-            provider=model_provider,
-            model=model_name,
-            prompt_tokens=actual_prompt_tokens,
-            completion_tokens=actual_completion_tokens,
-        )
-
-        record_oracle_usage_event(
-            session_id=session_id,
-            user_id=user_id,
-            anonymous_user_id=session_id,
-            plan_code=plan_code,
-            usage_class=usage_class,
-            input_mode=input_mode,
-            deity=deity,
-            provider=model_provider,
-            model=model_name,
-            retrieval_backend=get_retrieval_backend(),
-            pgvector_limit=PGVECTOR_RETRIEVAL_LIMIT,
-            prompt_tokens=actual_prompt_tokens,
-            completion_tokens=actual_completion_tokens,
-            total_tokens=actual_total_tokens,
-            estimated_input_tokens=estimated_input_tokens,
-            estimated_output_tokens=estimated_output_tokens,
-            estimated_total_tokens=estimated_total_tokens,
-            question_chars=len(question or ""),
-            enhanced_question_chars=len(enhanced_question or ""),
-            answer_chars=len(raw_answer or ""),
-            final_model_ms=_ms(final_model_started_at, final_model_finished_at),
-            total_ms=_ms(ask_started_at, datetime.datetime.now()),
-            estimated_cost_usd=estimated_oracle_cost_usd,
-            metadata_json={
-                "phase": "10.7",
-                "event_source": "ask_oracle",
-                "memory_intent": memory_intent,
-                "oracle_interaction_style": oracle_interaction_style,
-                "source_model": source_model,
-                "response_word_cap": response_word_cap,
-                "pricing_source": oracle_pricing.get("source"),
-                "pricing_input_per_1m": oracle_pricing.get("input_per_1m"),
-                "pricing_output_per_1m": oracle_pricing.get("output_per_1m"),
-                "route_reason": oracle_route_reason,
-            }
-        )
-
-        # --- Architect observation ---
-        architect_obs = architect_observe_v3(question, deity, session_id)
-
-        # --- LLaMA observation ---
-        try:
-            llama_obs = get_llama_observation(question, deity, raw_answer, None)
-        except Exception as e:
-            logger.warning(f"LLaMA observation error: {e}")
-            llama_obs = None
-
-        # --- Logging ---
-        save_log({
+        finalization_state = {
+            "schema": "oracle_finalization_state.v1",
+            "session_id": str(session_id),
+            "user_id": str(user_id) if user_id else None,
+            "question": question,
+            "deity": deity,
+            "input_mode": input_mode,
+            "plan_code": plan_code,
             "memory_intent": memory_intent,
             "oracle_interaction_style": oracle_interaction_style,
+            "response_word_cap": response_word_cap,
+            "enhanced_question_chars": len(enhanced_question or ""),
             "memory_has_content": bool(memory_block.strip()),
-            "timestamp": str(datetime.datetime.now()),
-            "session_id": session_id,
-            "seeker_id": user_id,
-            "anonymous_user_id": session_id,
-            "question": question,
-            "oracle_used": deity,
-            "answer": raw_answer,
-            "architect_observation": architect_obs,
-            "llama_observation": llama_obs,
             "llama_phase1": llama_phase1,
             "llama_passages_before": len(passages_before_llama),
             "llama_passages_after": len(passages),
-            "source_model": source_model,
-            "phase": "5.5",
-            "corpus_intent": "authoritative_training_data",
-            "personal_retrieval_score": None,
-            "global_retrieval_score": None,
-            "shadow_delta": None,
-            "influence_state": "disabled",
-            "estimated_tokens": estimated_tokens,
-            "token_usage": {
-                "provider": model_provider,
-                "model": model_name,
-                "actual_prompt_tokens": actual_prompt_tokens,
-                "actual_completion_tokens": actual_completion_tokens,
-                "actual_total_tokens": actual_total_tokens,
-                "estimated_input_tokens": estimated_input_tokens,
-                "estimated_output_tokens": estimated_output_tokens,
-                "estimated_total_tokens": estimated_total_tokens,
-                "retrieval_backend": get_retrieval_backend(),
-                "pgvector_limit": PGVECTOR_RETRIEVAL_LIMIT,
-                "input_mode": input_mode,
-                "plan_code": plan_code,
-                "deity": deity,
-            },
-            "usage_class": usage_class
-        })
-
-        # --- Database logging ---
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO oracle_interactions
-                (session_id, user_id, input_type, question_text, response_text, model_provider, model_name, mode)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    session_id,
-                    user_id,
-                    "voice" if normalized_input_mode == "voice" else "text",
-                    question,
-                    raw_answer,
-                    model_provider,
-                    model_name,
-                    deity
-                )
-            )
-
-        conn.commit()
-        conn.close()
-
-        return {
-            "question": question,
-            "answer": raw_answer
         }
+
+        timing_state = {
+            "ask_started_at": ask_started_at,
+            "retrieval_started_at": retrieval_started_at,
+            "retrieval_finished_at": retrieval_finished_at,
+            "phase1_started_at": phase1_started_at,
+            "phase1_finished_at": phase1_finished_at,
+            "final_model_started_at": final_model_started_at,
+            "final_model_finished_at": final_model_finished_at,
+        }
+
+        return finalize_oracle_inference(
+            finalization_state=finalization_state,
+            inference_result=result,
+            timing_state=timing_state,
+        )
 
     except Exception as e:
         logger.error(f"Oracle endpoint error: {e}")
