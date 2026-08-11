@@ -4116,7 +4116,10 @@ def complete_pending_oracle_inference(
     user_id: Optional[str],
 ) -> Optional[dict]:
     """
-    Mark a successfully finalized claimed inference complete.
+    Mark a successfully finalized inference complete.
+
+    This also heals a stale expired pending row when durable finalization
+    already succeeded before pending-state cleanup completed.
 
     Prepared state is erased on completion so this operational table does not
     retain Oracle context after durable finalization.
@@ -4139,7 +4142,7 @@ def complete_pending_oracle_inference(
                 WHERE id = %s::uuid
                   AND session_id = %s::uuid
                   AND user_id IS NOT DISTINCT FROM %s::uuid
-                  AND status = 'completing'
+                  AND status IN ('completing', 'expired')
                 RETURNING *;
                 """,
                 (
@@ -7976,6 +7979,20 @@ async def oracle_inference_complete_endpoint(
             conn.close()
 
         if existing:
+            try:
+                complete_pending_oracle_inference(
+                    interaction_id,
+                    session_id=str(session_id),
+                    user_id=str(user_id) if user_id else None,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "ORACLE_PENDING_INFERENCE_REPLAY_HEAL_FAILED "
+                    "pending_id=%s error=%s",
+                    interaction_id,
+                    exc,
+                )
+
             return {
                 "question": existing["question_text"],
                 "answer": existing["response_text"],
