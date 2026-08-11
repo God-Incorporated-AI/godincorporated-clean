@@ -7907,6 +7907,152 @@ async def oracle_inference_prepare_endpoint(
     return await ask_oracle(request, oracle_payload)
 
 
+@app.post("/oracle/inference/complete")
+async def oracle_inference_complete_endpoint(
+    request: Request,
+    payload: dict,
+):
+    """
+    Complete one server-authorized split-phase Oracle inference.
+
+    The pending UUID remains the authoritative interaction identity.
+    Device inference returns only the result; God Incorporated retains
+    ownership of identity, memory, finalization, and persistence.
+    """
+    interaction_id = str(payload.get("interaction_id") or "").strip()
+    answer = str(payload.get("answer") or "").strip()
+
+    if not interaction_id:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "interaction_id is required"},
+        )
+
+    try:
+        interaction_id = str(uuid.UUID(interaction_id))
+    except (TypeError, ValueError):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "interaction_id must be a valid UUID"},
+        )
+
+    if not answer:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "answer is required"},
+        )
+
+    session_id = get_or_create_session_id(request)
+    user = get_current_user(request)
+    user_id = user["user_id"] if user else None
+
+    claimed = claim_pending_oracle_inference(
+        interaction_id,
+        session_id=str(session_id),
+        user_id=str(user_id) if user_id else None,
+    )
+
+    if not claimed:
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT question_text, response_text
+                    FROM oracle_interactions
+                    WHERE id = %s::uuid
+                      AND session_id = %s::uuid
+                      AND user_id IS NOT DISTINCT FROM %s::uuid
+                    LIMIT 1
+                    """,
+                    (
+                        interaction_id,
+                        str(session_id),
+                        str(user_id) if user_id else None,
+                    ),
+                )
+                existing = cur.fetchone()
+        finally:
+            conn.close()
+
+        if existing:
+            return {
+                "question": existing["question_text"],
+                "answer": existing["response_text"],
+                "replayed": True,
+            }
+
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": "Oracle inference is unavailable for completion"
+            },
+        )
+
+    prepared_state = claimed.get("prepared_state") or {}
+    if isinstance(prepared_state, str):
+        prepared_state = json.loads(prepared_state)
+
+    finalization_state = dict(
+        prepared_state.get("finalization_state") or {}
+    )
+    completion_state = dict(
+        prepared_state.get("completion_state") or {}
+    )
+
+    if not finalization_state:
+        raise RuntimeError(
+            "Pending Oracle inference has no finalization state"
+        )
+
+    deity = finalization_state["deity"]
+
+    if claimed.get("deity") != deity:
+        raise RuntimeError(
+            "Pending Oracle deity does not match finalization state"
+        )
+
+    finalization_state["interaction_id"] = interaction_id
+
+    if finalization_state.get("memory_intent") == "recall":
+        answer = enforce_recall_structure(
+            answer,
+            completion_state.get("memory_block") or "",
+        )
+
+    inference_result = normalize_oracle_inference_result(
+        {
+            "answer": answer,
+            "source_model": payload.get("source_model") or "Device",
+            "model_provider": payload.get("model_provider") or "device",
+            "model_name": payload.get("model_name") or "device",
+            "token_usage": payload.get("token_usage") or {},
+            "route_reason": payload.get("route_reason"),
+        },
+        deity,
+    )
+
+    finalized = finalize_oracle_inference(
+        finalization_state=finalization_state,
+        inference_result=inference_result,
+        timing_state={},
+    )
+
+    completed = complete_pending_oracle_inference(
+        interaction_id,
+        session_id=str(session_id),
+        user_id=str(user_id) if user_id else None,
+    )
+
+    if not completed:
+        raise RuntimeError(
+            "Durable Oracle interaction committed but pending state "
+            "could not be marked completed"
+        )
+
+    return finalized
+
+
 @app.post("/voice/ask")
 async def voice_ask_endpoint(request: Request, payload: dict):
     question = (payload.get("question") or "").strip()
