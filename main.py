@@ -1407,6 +1407,7 @@ def finalize_oracle_inference(
     memory_intent = finalization_state["memory_intent"]
     oracle_interaction_style = finalization_state["oracle_interaction_style"]
     response_word_cap = finalization_state["response_word_cap"]
+    interaction_id = finalization_state.get("interaction_id")
     enhanced_question_chars = int(
         finalization_state.get("enhanced_question_chars") or 0
     )
@@ -1448,6 +1449,124 @@ def finalize_oracle_inference(
         raw_answer,
         response_word_cap,
     )
+
+    # --- Authoritative durable completion ---
+    durable_input_type = (
+        "voice" if normalized_input_mode == "voice" else "text"
+    )
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            if interaction_id:
+                cur.execute(
+                    """
+                    INSERT INTO oracle_interactions
+                    (
+                        id,
+                        session_id,
+                        user_id,
+                        input_type,
+                        question_text,
+                        response_text,
+                        model_provider,
+                        model_name,
+                        mode
+                    )
+                    VALUES (
+                        %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT (id) DO NOTHING
+                    RETURNING id
+                    """,
+                    (
+                        interaction_id,
+                        session_id,
+                        user_id,
+                        durable_input_type,
+                        question,
+                        raw_answer,
+                        model_provider,
+                        model_name,
+                        deity,
+                    ),
+                )
+                inserted_row = cur.fetchone()
+
+                if not inserted_row:
+                    cur.execute(
+                        """
+                        SELECT question_text, response_text
+                        FROM oracle_interactions
+                        WHERE id = %s::uuid
+                          AND session_id = %s::uuid
+                          AND user_id IS NOT DISTINCT FROM %s::uuid
+                          AND input_type = %s
+                          AND question_text = %s
+                          AND mode = %s
+                        LIMIT 1
+                        """,
+                        (
+                            interaction_id,
+                            session_id,
+                            user_id,
+                            durable_input_type,
+                            question,
+                            deity,
+                        ),
+                    )
+                    existing_row = cur.fetchone()
+
+                    if not existing_row:
+                        raise RuntimeError(
+                            "Oracle interaction id conflict does not match "
+                            "authoritative finalization state"
+                        )
+
+                    conn.commit()
+
+                    return {
+                        "question": existing_row["question_text"],
+                        "answer": existing_row["response_text"],
+                    }
+
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO oracle_interactions
+                    (
+                        session_id,
+                        user_id,
+                        input_type,
+                        question_text,
+                        response_text,
+                        model_provider,
+                        model_name,
+                        mode
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        session_id,
+                        user_id,
+                        durable_input_type,
+                        question,
+                        raw_answer,
+                        model_provider,
+                        model_name,
+                        deity,
+                    ),
+                )
+
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
 
     def _ms(started_at, finished_at):
         if not started_at or not finished_at:
@@ -1627,30 +1746,6 @@ def finalize_oracle_inference(
         },
         "usage_class": usage_class,
     })
-
-    # --- Database logging ---
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO oracle_interactions
-            (session_id, user_id, input_type, question_text, response_text, model_provider, model_name, mode)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                session_id,
-                user_id,
-                "voice" if normalized_input_mode == "voice" else "text",
-                question,
-                raw_answer,
-                model_provider,
-                model_name,
-                deity,
-            ),
-        )
-
-    conn.commit()
-    conn.close()
 
     return {
         "question": question,
@@ -11985,6 +12080,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         finalization_state = {
             "schema": "oracle_finalization_state.v1",
+            "interaction_id": None,
             "session_id": str(session_id),
             "user_id": str(user_id) if user_id else None,
             "question": question,
