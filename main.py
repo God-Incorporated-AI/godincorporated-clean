@@ -7881,6 +7881,32 @@ def is_likely_no_speech_transcript(value: str) -> bool:
     return False
 
 
+@app.post("/oracle/inference/prepare")
+async def oracle_inference_prepare_endpoint(
+    request: Request,
+    payload: dict,
+):
+    """
+    Prepare one God Incorporated-authorized Oracle inference for
+    external/device execution without performing provider inference here.
+    """
+    input_mode = (payload.get("input_mode") or "text").strip().lower()
+    if input_mode not in {"text", "voice"}:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "input_mode must be text or voice"},
+        )
+
+    request.state.oracle_input_mode = input_mode
+    request.state.oracle_execution_mode = "device_prepare"
+
+    oracle_payload_data = dict(payload)
+    oracle_payload_data.pop("input_mode", None)
+
+    oracle_payload = QuestionInput(**oracle_payload_data)
+    return await ask_oracle(request, oracle_payload)
+
+
 @app.post("/voice/ask")
 async def voice_ask_endpoint(request: Request, payload: dict):
     question = (payload.get("question") or "").strip()
@@ -12099,9 +12125,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             moses_prompt_chars=moses_prompt_chars,
         )
 
-        result = await execute_oracle_inference(prepared_inference)
-        final_model_finished_at = datetime.datetime.now()
-
         finalization_state = {
             "schema": "oracle_finalization_state.v1",
             "interaction_id": None,
@@ -12120,6 +12143,45 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "llama_passages_before": len(passages_before_llama),
             "llama_passages_after": len(passages),
         }
+
+        execution_mode = getattr(
+            request.state,
+            "oracle_execution_mode",
+            "server",
+        )
+
+        if execution_mode == "device_prepare":
+            pending_state = {
+                "schema": "oracle_pending_inference_state.v1",
+                "finalization_state": finalization_state,
+                "completion_state": {
+                    "memory_block": memory_block or "",
+                },
+            }
+
+            pending_id = create_pending_oracle_inference(
+                session_id=str(session_id),
+                user_id=str(user_id) if user_id else None,
+                deity=deity,
+                input_mode=input_mode,
+                prepared_state=pending_state,
+            )
+
+            if not pending_id:
+                raise RuntimeError(
+                    "Could not create pending Oracle inference"
+                )
+
+            return {
+                "status": "prepared",
+                **build_oracle_device_execution_packet(
+                    prepared_inference,
+                    pending_id,
+                ),
+            }
+
+        result = await execute_oracle_inference(prepared_inference)
+        final_model_finished_at = datetime.datetime.now()
 
         timing_state = {
             "ask_started_at": ask_started_at,
