@@ -3530,6 +3530,253 @@ def _safe_json_payload(value) -> str:
     return json.dumps(value)
 
 
+def expire_stale_pending_oracle_inferences() -> int:
+    """
+    Expire abandoned split-phase inference state and clear prepared payloads.
+
+    This table is operational state only. It must not become a second
+    long-term Oracle memory store.
+    """
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE oracle_pending_inferences
+                SET
+                    status = 'expired',
+                    prepared_state = '{}'::jsonb
+                WHERE status IN ('prepared', 'completing')
+                  AND expires_at <= NOW();
+                """
+            )
+            expired_count = cur.rowcount
+
+        conn.commit()
+
+        if expired_count:
+            logger.info(
+                "ORACLE_PENDING_INFERENCES_EXPIRED count=%s",
+                expired_count,
+            )
+
+        return expired_count
+
+    except Exception as exc:
+        conn.rollback()
+        logger.error(
+            "ORACLE_PENDING_INFERENCE_EXPIRE_FAILED error=%s",
+            exc,
+        )
+        raise
+
+    finally:
+        conn.close()
+
+
+def create_pending_oracle_inference(
+    *,
+    session_id: str,
+    user_id: Optional[str],
+    deity: str,
+    input_mode: str,
+    prepared_state: dict,
+) -> Optional[str]:
+    """
+    Create short-lived server-owned state for split-phase inference.
+    """
+    if not session_id:
+        raise ValueError("session_id is required")
+
+    deity_key = (deity or "").strip()
+    if deity_key not in {"Hathor", "Moses"}:
+        raise ValueError("deity must be Hathor or Moses")
+
+    input_mode_key = (input_mode or "").strip().lower()
+    if input_mode_key not in {"text", "voice"}:
+        raise ValueError("input_mode must be text or voice")
+
+    expire_stale_pending_oracle_inferences()
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO oracle_pending_inferences (
+                    session_id,
+                    user_id,
+                    deity,
+                    input_mode,
+                    prepared_state
+                )
+                VALUES (%s, %s, %s, %s, %s::jsonb)
+                RETURNING id;
+                """,
+                (
+                    session_id,
+                    user_id,
+                    deity_key,
+                    input_mode_key,
+                    _safe_json_payload(prepared_state or {}),
+                ),
+            )
+            row = cur.fetchone()
+
+        conn.commit()
+
+        pending_id = str(row["id"]) if row and row.get("id") else None
+
+        logger.info(
+            "ORACLE_PENDING_INFERENCE_CREATED pending_id=%s deity=%s input_mode=%s user_id_present=%s",
+            pending_id,
+            deity_key,
+            input_mode_key,
+            bool(user_id),
+        )
+
+        return pending_id
+
+    except Exception as exc:
+        conn.rollback()
+        logger.error(
+            "ORACLE_PENDING_INFERENCE_CREATE_FAILED error=%s",
+            exc,
+        )
+        raise
+
+    finally:
+        conn.close()
+
+
+def claim_pending_oracle_inference(
+    interaction_id: str,
+    *,
+    session_id: str,
+    user_id: Optional[str],
+) -> Optional[dict]:
+    """
+    Atomically claim one prepared inference for completion.
+
+    Only the bound session/user may claim it. A claimed, completed, expired,
+    or replayed interaction cannot be claimed again.
+    """
+    if not interaction_id:
+        raise ValueError("interaction_id is required")
+    if not session_id:
+        raise ValueError("session_id is required")
+
+    expire_stale_pending_oracle_inferences()
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE oracle_pending_inferences
+                SET status = 'completing'
+                WHERE id = %s::uuid
+                  AND session_id = %s::uuid
+                  AND user_id IS NOT DISTINCT FROM %s::uuid
+                  AND status = 'prepared'
+                  AND expires_at > NOW()
+                RETURNING *;
+                """,
+                (
+                    interaction_id,
+                    session_id,
+                    user_id,
+                ),
+            )
+            row = cur.fetchone()
+
+        conn.commit()
+
+        if row:
+            logger.info(
+                "ORACLE_PENDING_INFERENCE_CLAIMED pending_id=%s",
+                interaction_id,
+            )
+
+        return row
+
+    except Exception as exc:
+        conn.rollback()
+        logger.error(
+            "ORACLE_PENDING_INFERENCE_CLAIM_FAILED pending_id=%s error=%s",
+            interaction_id,
+            exc,
+        )
+        raise
+
+    finally:
+        conn.close()
+
+
+def complete_pending_oracle_inference(
+    interaction_id: str,
+    *,
+    session_id: str,
+    user_id: Optional[str],
+) -> Optional[dict]:
+    """
+    Mark a successfully finalized claimed inference complete.
+
+    Prepared state is erased on completion so this operational table does not
+    retain Oracle context after durable finalization.
+    """
+    if not interaction_id:
+        raise ValueError("interaction_id is required")
+    if not session_id:
+        raise ValueError("session_id is required")
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE oracle_pending_inferences
+                SET
+                    status = 'completed',
+                    completed_at = NOW(),
+                    prepared_state = '{}'::jsonb
+                WHERE id = %s::uuid
+                  AND session_id = %s::uuid
+                  AND user_id IS NOT DISTINCT FROM %s::uuid
+                  AND status = 'completing'
+                RETURNING *;
+                """,
+                (
+                    interaction_id,
+                    session_id,
+                    user_id,
+                ),
+            )
+            row = cur.fetchone()
+
+        conn.commit()
+
+        if row:
+            logger.info(
+                "ORACLE_PENDING_INFERENCE_COMPLETED pending_id=%s",
+                interaction_id,
+            )
+
+        return row
+
+    except Exception as exc:
+        conn.rollback()
+        logger.error(
+            "ORACLE_PENDING_INFERENCE_COMPLETE_FAILED pending_id=%s error=%s",
+            interaction_id,
+            exc,
+        )
+        raise
+
+    finally:
+        conn.close()
+
+
 def _env_flag(name: str, default: bool = False) -> bool:
     """Read a conservative boolean env flag."""
     raw = os.getenv(name)
