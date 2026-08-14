@@ -3,17 +3,59 @@ import FoundationModels
 
 #if DEBUG
 
+private struct PreparedInferencePacket: Decodable {
+    let interaction_id: String
+    let deity: String
+    let system_prompt: String
+    let memory_block: String
+    let question: String
+    let max_output_tokens: Int?
+}
+
 enum PCCSmokeTest {
 
     static func run() async -> String {
-        await respond(to: "Reply with exactly: PCC smoke test successful.")
+        await respond(prompt: "Reply with exactly: PCC smoke test successful.")
     }
 
-    static func ask(prompt: String) async -> String {
-        await respond(to: prompt)
+    static func ask(packetJSON: String) async -> String {
+        guard let data = packetJSON.data(using: .utf8) else {
+            return "PCC packet could not be encoded."
+        }
+
+        do {
+            let packet = try JSONDecoder().decode(
+                PreparedInferencePacket.self,
+                from: data
+            )
+
+            var promptParts: [String] = []
+
+            let memoryBlock = packet.memory_block
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if !memoryBlock.isEmpty {
+                promptParts.append(
+                    "Background memory supplied by God Incorporated:\n"
+                    + memoryBlock
+                )
+            }
+
+            promptParts.append(packet.question)
+
+            return await respond(
+                instructions: packet.system_prompt,
+                prompt: promptParts.joined(separator: "\n\n")
+            )
+        } catch {
+            return "PCC packet decode failed: \(error.localizedDescription)"
+        }
     }
 
-    private static func respond(to prompt: String) async -> String {
+    private static func respond(
+        instructions: String? = nil,
+        prompt: String
+    ) async -> String {
 
         #if compiler(>=6.4)
 
@@ -38,7 +80,19 @@ enum PCCSmokeTest {
             }
 
             do {
-                let session = LanguageModelSession(model: model)
+                let trimmedInstructions = (instructions ?? "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                let session: LanguageModelSession
+
+                if trimmedInstructions.isEmpty {
+                    session = LanguageModelSession(model: model)
+                } else {
+                    session = LanguageModelSession(
+                        model: model,
+                        instructions: trimmedInstructions
+                    )
+                }
 
                 let response = try await session.respond(
                     to: prompt

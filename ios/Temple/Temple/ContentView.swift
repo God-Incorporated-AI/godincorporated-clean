@@ -1863,7 +1863,7 @@ struct NativeSupportView: View {
 
 struct NativeInfoView: View {
 #if DEBUG
-    @State private var pccPrompt = ""
+    @State private var pccPacketJSON = ""
     @State private var pccResult = "PCC smoke test has not been run."
     @State private var pccIsRunning = false
 #endif
@@ -1910,19 +1910,19 @@ struct NativeInfoView: View {
                                     .font(.title3.weight(.bold))
                                     .foregroundStyle(TemplePalette.ink)
 
-                                Text("Debug-only PCC connection and free-form inference test.")
+                                Text("Debug-only God Incorporated prepared-packet PCC test.")
                                     .foregroundStyle(TemplePalette.ink.opacity(0.74))
 
                                 TextField(
-                                    "Ask PCC a question",
-                                    text: $pccPrompt,
+                                    "Paste God Incorporated prepare JSON",
+                                    text: $pccPacketJSON,
                                     axis: .vertical
                                 )
                                 .textFieldStyle(.roundedBorder)
                                 .lineLimit(2...5)
 
                                 Button {
-                                    let prompt = pccPrompt.trimmingCharacters(
+                                    let packetJSON = pccPacketJSON.trimmingCharacters(
                                         in: .whitespacesAndNewlines
                                     )
 
@@ -1930,18 +1930,18 @@ struct NativeInfoView: View {
                                     pccResult = "Asking Apple Private Cloud Compute..."
 
                                     Task {
-                                        let result = await PCCSmokeTest.ask(prompt: prompt)
+                                        let result = await PCCSmokeTest.ask(packetJSON: packetJSON)
                                         pccResult = result
                                         pccIsRunning = false
                                     }
                                 } label: {
-                                    Text(pccIsRunning ? "Running..." : "Ask PCC")
+                                    Text(pccIsRunning ? "Running..." : "Run God Inc → PCC")
                                         .frame(maxWidth: .infinity)
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(
                                     pccIsRunning ||
-                                    pccPrompt.trimmingCharacters(
+                                    pccPacketJSON.trimmingCharacters(
                                         in: .whitespacesAndNewlines
                                     ).isEmpty
                                 )
