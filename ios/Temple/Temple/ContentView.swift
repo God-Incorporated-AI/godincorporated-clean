@@ -1864,7 +1864,7 @@ struct NativeSupportView: View {
 struct NativeInfoView: View {
 #if DEBUG
     @State private var pccPacketJSON = ""
-    @State private var pccResult = "PCC smoke test has not been run."
+    @State private var pccResult = "Prepared PCC packet has not been run."
     @State private var pccIsRunning = false
 #endif
 
@@ -1945,29 +1945,6 @@ struct NativeInfoView: View {
                                         in: .whitespacesAndNewlines
                                     ).isEmpty
                                 )
-
-                                Divider()
-                                    .overlay(TemplePalette.warmGold.opacity(0.45))
-
-                                Text("Fixed PCC diagnostic")
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(TemplePalette.ink.opacity(0.72))
-
-                                Button {
-                                    pccIsRunning = true
-                                    pccResult = "Contacting Apple Private Cloud Compute..."
-
-                                    Task {
-                                        let result = await PCCSmokeTest.run()
-                                        pccResult = result
-                                        pccIsRunning = false
-                                    }
-                                } label: {
-                                    Text(pccIsRunning ? "Running..." : "Run PCC Smoke Test")
-                                        .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(pccIsRunning)
 
                                 Text(pccResult)
                                     .font(.footnote)

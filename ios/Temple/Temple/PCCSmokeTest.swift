@@ -14,10 +14,6 @@ private struct PreparedInferencePacket: Decodable {
 
 enum PCCSmokeTest {
 
-    static func run() async -> String {
-        await respond(prompt: "Reply with exactly: PCC smoke test successful.")
-    }
-
     static func ask(packetJSON: String) async -> String {
         guard let data = packetJSON.data(using: .utf8) else {
             return "PCC packet could not be encoded."
