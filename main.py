@@ -4043,6 +4043,74 @@ def create_pending_oracle_inference(
         conn.close()
 
 
+def abandon_pending_oracle_inference(
+    interaction_id: str,
+    *,
+    session_id: str,
+    user_id: Optional[str],
+) -> Optional[dict]:
+    """
+    Explicitly abandon one prepared split-phase inference.
+
+    Only a still-prepared turn may be abandoned. A completing or completed
+    turn must not be changed because durable finalization may already be
+    underway.
+    """
+    if not interaction_id:
+        raise ValueError("interaction_id is required")
+    if not session_id:
+        raise ValueError("session_id is required")
+
+    expire_stale_pending_oracle_inferences()
+
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE oracle_pending_inferences
+                SET
+                    status = 'expired',
+                    expires_at = NOW(),
+                    prepared_state = '{}'::jsonb
+                WHERE id = %s::uuid
+                  AND session_id = %s::uuid
+                  AND user_id IS NOT DISTINCT FROM %s::uuid
+                  AND status = 'prepared'
+                RETURNING id, status;
+                """,
+                (
+                    interaction_id,
+                    session_id,
+                    user_id,
+                ),
+            )
+            row = cur.fetchone()
+
+        conn.commit()
+
+        if row:
+            logger.info(
+                "ORACLE_PENDING_INFERENCE_ABANDONED pending_id=%s",
+                interaction_id,
+            )
+
+        return row
+
+    except Exception as exc:
+        conn.rollback()
+        logger.error(
+            "ORACLE_PENDING_INFERENCE_ABANDON_FAILED "
+            "pending_id=%s error=%s",
+            interaction_id,
+            exc,
+        )
+        raise
+
+    finally:
+        conn.close()
+
+
 def claim_pending_oracle_inference(
     interaction_id: str,
     *,
@@ -7882,6 +7950,87 @@ def is_likely_no_speech_transcript(value: str) -> bool:
         return True
 
     return False
+
+
+@app.post("/oracle/inference/abandon")
+async def oracle_inference_abandon_endpoint(
+    request: Request,
+    payload: dict,
+):
+    """
+    Retire one server-authorized prepared inference before fallback.
+
+    This is intentionally limited to prepared state so it cannot race a
+    completion that has already been claimed.
+    """
+    interaction_id = str(payload.get("interaction_id") or "").strip()
+
+    if not interaction_id:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "interaction_id is required"},
+        )
+
+    try:
+        interaction_id = str(uuid.UUID(interaction_id))
+    except (TypeError, ValueError):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "interaction_id must be a valid UUID"},
+        )
+
+    session_id = get_or_create_session_id(request)
+    user = get_current_user(request)
+    user_id = user["user_id"] if user else None
+
+    abandoned = abandon_pending_oracle_inference(
+        interaction_id,
+        session_id=str(session_id),
+        user_id=str(user_id) if user_id else None,
+    )
+
+    if abandoned:
+        return {
+            "interaction_id": interaction_id,
+            "status": "abandoned",
+        }
+
+    # Make retries safe when the same bound turn was already expired.
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT status
+                FROM oracle_pending_inferences
+                WHERE id = %s::uuid
+                  AND session_id = %s::uuid
+                  AND user_id IS NOT DISTINCT FROM %s::uuid
+                LIMIT 1
+                """,
+                (
+                    interaction_id,
+                    str(session_id),
+                    str(user_id) if user_id else None,
+                ),
+            )
+            existing = cur.fetchone()
+    finally:
+        conn.close()
+
+    if existing and existing.get("status") == "expired":
+        return {
+            "interaction_id": interaction_id,
+            "status": "abandoned",
+            "replayed": True,
+        }
+
+    return JSONResponse(
+        status_code=409,
+        content={
+            "error": "Oracle inference is unavailable for abandonment"
+        },
+    )
 
 
 @app.post("/oracle/inference/prepare")
