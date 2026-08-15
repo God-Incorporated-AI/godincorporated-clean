@@ -10,6 +10,11 @@ struct PreparedOracleInferencePacket: Decodable {
     let max_output_tokens: Int?
 }
 
+enum ApplePCCAvailability {
+    case available
+    case unavailable(reason: String)
+}
+
 enum ApplePCCExecutionResult {
     case completed(answer: String)
     case unavailable(reason: String)
@@ -28,6 +33,50 @@ enum ApplePCCExecutionResult {
 }
 
 enum ApplePCCInferenceAdapter {
+
+    static func availability() -> ApplePCCAvailability {
+
+        #if compiler(>=6.4)
+
+        if #available(iOS 27.0, *) {
+            let model = PrivateCloudComputeLanguageModel()
+
+            switch model.availability {
+            case .available:
+                return .available
+
+            case .unavailable(let reason):
+                switch reason {
+                case .deviceNotEligible:
+                    return .unavailable(
+                        reason: "PCC unavailable: device not eligible."
+                    )
+
+                case .systemNotReady:
+                    return .unavailable(
+                        reason: "PCC unavailable: system not ready."
+                    )
+
+                @unknown default:
+                    return .unavailable(
+                        reason: "PCC unavailable: unknown reason."
+                    )
+                }
+            }
+        } else {
+            return .unavailable(
+                reason: "PCC unavailable: requires iOS 27 or later."
+            )
+        }
+
+        #else
+
+        return .unavailable(
+            reason: "PCC unavailable: requires Xcode 27 / Swift 6.4."
+        )
+
+        #endif
+    }
 
     static func execute(
         packetJSON: String
