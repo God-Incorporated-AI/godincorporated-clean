@@ -1252,7 +1252,10 @@ struct NativeVoiceSessionView: View {
         }
 
         do {
-            let nativeTranscript = try await transcribeRecordingWithAppleSpeech(at: url)
+            let nativeTranscript = try await transcribeRecordingWithAppleSpeech(
+                at: url,
+                voice: voice
+            )
             let trimmed = nativeTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty && !isLikelyNoSpeechTranscript(trimmed) {
                 return trimmed
@@ -1272,8 +1275,11 @@ struct NativeVoiceSessionView: View {
         return backendTranscript
     }
 
-    private func transcribeRecordingWithAppleSpeech(at url: URL) async throws -> String {
-        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")) else {
+    private func transcribeRecordingWithAppleSpeech(
+        at url: URL,
+        voice: String
+    ) async throws -> String {
+        guard let recognizer = SFSpeechRecognizer() else {
             throw TempleVoiceError.server("Native speech recognition was unavailable.")
         }
 
@@ -1291,6 +1297,23 @@ struct NativeVoiceSessionView: View {
         }
 
         let request = SFSpeechURLRecognitionRequest(url: url)
+
+        var contextualVocabulary = [
+            "Hathor",
+            "Moses",
+            "God Incorporated"
+        ]
+
+        let selectedOracle = voice
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !selectedOracle.isEmpty &&
+            !contextualVocabulary.contains(selectedOracle) {
+            contextualVocabulary.insert(selectedOracle, at: 0)
+        }
+
+        request.contextualStrings = contextualVocabulary
+        request.taskHint = .dictation
         request.shouldReportPartialResults = false
         request.requiresOnDeviceRecognition = true
 
