@@ -26,6 +26,8 @@ private enum TempleEnvironment {
     static let voiceTranscribeURL = URL(string: "voice/transcribe", relativeTo: baseAppURL)!
     static let voiceAskURL = URL(string: "voice/ask", relativeTo: baseAppURL)!
     static let voiceTTSURL = URL(string: "voice/tts", relativeTo: baseAppURL)!
+    static let oracleInferencePrepareURL = URL(string: "oracle/inference/prepare", relativeTo: baseAppURL)!
+    static let oracleInferenceCompleteURL = URL(string: "oracle/inference/complete", relativeTo: baseAppURL)!
     static let seekerMonthlyProductID = "ai.godincorporated.seeker.monthly"
 
     static func templeURL(voice: String?, entry: String? = nil, entryNonce: Int = 0) -> URL {
@@ -1358,6 +1360,120 @@ struct NativeVoiceSessionView: View {
         return result
     }
 
+    private func prepareOracleInference(
+        question: String,
+        voice: String
+    ) async throws -> PreparedOracleInferencePacket {
+        let nativeAnonymousUserID = NativeAnonymousIdentity.currentID
+
+        var request = await authenticatedVoiceRequest(
+            url: TempleEnvironment.oracleInferencePrepareURL,
+            method: "POST"
+        )
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Content-Type"
+        )
+
+        request.httpBody = try JSONEncoder().encode(
+            OracleInferencePreparePayload(
+                question: question,
+                deity: voice,
+                seeker_id: nil,
+                anonymous_user_id: nativeAnonymousUserID,
+                input_mode: "voice"
+            )
+        )
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateHTTP(response: response, data: data)
+
+        let decoded = try JSONDecoder().decode(
+            OracleInferencePrepareResponse.self,
+            from: data
+        )
+
+        if let error = decoded.error, !error.isEmpty {
+            throw TempleVoiceError.server(error)
+        }
+
+        guard decoded.status == "prepared",
+              let interactionID = decoded.interaction_id,
+              !interactionID.isEmpty,
+              let deity = decoded.deity,
+              !deity.isEmpty,
+              let systemPrompt = decoded.system_prompt,
+              !systemPrompt.isEmpty,
+              let preparedQuestion = decoded.question,
+              !preparedQuestion.isEmpty else {
+            throw TempleVoiceError.server(
+                "Oracle inference preparation returned an incomplete packet."
+            )
+        }
+
+        return PreparedOracleInferencePacket(
+            interaction_id: interactionID,
+            deity: deity,
+            system_prompt: systemPrompt,
+            memory_block: decoded.memory_block ?? "",
+            question: preparedQuestion,
+            max_output_tokens: decoded.max_output_tokens
+        )
+    }
+
+    private func completeOracleInference(
+        interactionID: String,
+        answer: String,
+        sourceModel: String,
+        modelProvider: String,
+        modelName: String,
+        routeReason: String?
+    ) async throws -> String {
+        var request = await authenticatedVoiceRequest(
+            url: TempleEnvironment.oracleInferenceCompleteURL,
+            method: "POST"
+        )
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Content-Type"
+        )
+
+        request.httpBody = try JSONEncoder().encode(
+            OracleInferenceCompletePayload(
+                interaction_id: interactionID,
+                answer: answer,
+                source_model: sourceModel,
+                model_provider: modelProvider,
+                model_name: modelName,
+                token_usage: [:],
+                route_reason: routeReason
+            )
+        )
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateHTTP(response: response, data: data)
+
+        let decoded = try JSONDecoder().decode(
+            OracleInferenceCompleteResponse.self,
+            from: data
+        )
+
+        if let error = decoded.error, !error.isEmpty {
+            throw TempleVoiceError.server(error)
+        }
+
+        let result = (decoded.answer ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !result.isEmpty else {
+            throw TempleVoiceError.server(
+                "Oracle inference completion returned no answer."
+            )
+        }
+
+        return result
+    }
+
     private func askOracle(question: String, voice: String) async throws -> String {
         let nativeAnonymousUserID = NativeAnonymousIdentity.currentID
         var request = await authenticatedVoiceRequest(url: TempleEnvironment.voiceAskURL, method: "POST")
@@ -1625,6 +1741,42 @@ struct NativeVoiceSessionView: View {
             throw TempleVoiceError.server(message)
         }
     }
+}
+
+struct OracleInferencePreparePayload: Encodable {
+    let question: String
+    let deity: String
+    let seeker_id: String?
+    let anonymous_user_id: String?
+    let input_mode: String
+}
+
+struct OracleInferencePrepareResponse: Decodable {
+    let status: String?
+    let interaction_id: String?
+    let deity: String?
+    let system_prompt: String?
+    let memory_block: String?
+    let question: String?
+    let max_output_tokens: Int?
+    let error: String?
+}
+
+struct OracleInferenceCompletePayload: Encodable {
+    let interaction_id: String
+    let answer: String
+    let source_model: String
+    let model_provider: String
+    let model_name: String
+    let token_usage: [String: Int]
+    let route_reason: String?
+}
+
+struct OracleInferenceCompleteResponse: Decodable {
+    let question: String?
+    let answer: String?
+    let replayed: Bool?
+    let error: String?
 }
 
 struct VoiceTTSPayload: Encodable {
