@@ -1513,6 +1513,74 @@ struct NativeVoiceSessionView: View {
     }
 
     private func askOracle(question: String, voice: String) async throws -> String {
+        switch ApplePCCInferenceAdapter.availability() {
+        case .unavailable:
+            return try await askOracleServerFallback(
+                question: question,
+                voice: voice
+            )
+
+        case .available:
+            break
+        }
+
+        // Once prepare succeeds, this interaction UUID is server-owned
+        // pending state and must be explicitly completed or abandoned.
+        let packet = try await prepareOracleInference(
+            question: question,
+            voice: voice
+        )
+
+        let executionResult = await ApplePCCInferenceAdapter.execute(
+            packet: packet
+        )
+
+        switch executionResult {
+        case .completed(let answer):
+            let trimmedAnswer = answer
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            // An empty PCC result is treated as an execution failure.
+            // Because prepare succeeded, retire the pending UUID before
+            // falling back to the existing server inference path.
+            guard !trimmedAnswer.isEmpty else {
+                try await abandonOracleInference(
+                    interactionID: packet.interaction_id
+                )
+
+                return try await askOracleServerFallback(
+                    question: question,
+                    voice: voice
+                )
+            }
+
+            // Do not fall back if completion throws. The server may already
+            // have durably finalized this UUID even if the response is lost.
+            return try await completeOracleInference(
+                interactionID: packet.interaction_id,
+                answer: trimmedAnswer,
+                sourceModel: "PrivateCloudComputeLanguageModel",
+                modelProvider: "apple",
+                modelName: "PrivateCloudComputeLanguageModel",
+                routeReason: "ios_pcc_split_phase"
+            )
+
+        case .unavailable(_), .failed(_):
+            // PCC became unavailable or failed after prepare. Only use the
+            // legacy inference path after the server confirms retirement of
+            // this pending interaction.
+            try await abandonOracleInference(
+                interactionID: packet.interaction_id
+            )
+
+            return try await askOracleServerFallback(
+                question: question,
+                voice: voice
+            )
+        }
+    }
+
+    private func askOracleServerFallback(question: String, voice: String) async throws -> String {
         let nativeAnonymousUserID = NativeAnonymousIdentity.currentID
         var request = await authenticatedVoiceRequest(url: TempleEnvironment.voiceAskURL, method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
