@@ -28,6 +28,7 @@ private enum TempleEnvironment {
     static let voiceTTSURL = URL(string: "voice/tts", relativeTo: baseAppURL)!
     static let oracleInferencePrepareURL = URL(string: "oracle/inference/prepare", relativeTo: baseAppURL)!
     static let oracleInferenceCompleteURL = URL(string: "oracle/inference/complete", relativeTo: baseAppURL)!
+    static let oracleInferenceAbandonURL = URL(string: "oracle/inference/abandon", relativeTo: baseAppURL)!
     static let seekerMonthlyProductID = "ai.godincorporated.seeker.monthly"
 
     static func templeURL(voice: String?, entry: String? = nil, entryNonce: Int = 0) -> URL {
@@ -1421,6 +1422,43 @@ struct NativeVoiceSessionView: View {
         )
     }
 
+    private func abandonOracleInference(
+        interactionID: String
+    ) async throws {
+        var request = await authenticatedVoiceRequest(
+            url: TempleEnvironment.oracleInferenceAbandonURL,
+            method: "POST"
+        )
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Content-Type"
+        )
+
+        request.httpBody = try JSONEncoder().encode(
+            OracleInferenceAbandonPayload(
+                interaction_id: interactionID
+            )
+        )
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try validateHTTP(response: response, data: data)
+
+        let decoded = try JSONDecoder().decode(
+            OracleInferenceAbandonResponse.self,
+            from: data
+        )
+
+        if let error = decoded.error, !error.isEmpty {
+            throw TempleVoiceError.server(error)
+        }
+
+        guard decoded.status == "abandoned" else {
+            throw TempleVoiceError.server(
+                "Oracle inference abandonment was not confirmed."
+            )
+        }
+    }
+
     private func completeOracleInference(
         interactionID: String,
         answer: String,
@@ -1759,6 +1797,17 @@ struct OracleInferencePrepareResponse: Decodable {
     let memory_block: String?
     let question: String?
     let max_output_tokens: Int?
+    let error: String?
+}
+
+struct OracleInferenceAbandonPayload: Encodable {
+    let interaction_id: String
+}
+
+struct OracleInferenceAbandonResponse: Decodable {
+    let interaction_id: String?
+    let status: String?
+    let replayed: Bool?
     let error: String?
 }
 
