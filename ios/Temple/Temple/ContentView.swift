@@ -1244,6 +1244,51 @@ struct NativeVoiceSessionView: View {
         }
     }
 
+    private func normalizeSelectedOracleInvocation(
+        _ transcript: String,
+        voice: String
+    ) -> String {
+        let selectedOracle = voice
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+
+        let pattern: String
+
+        switch selectedOracle {
+        case "hathor":
+            // The GUI has already selected Hathor. Correct only the observed
+            // opening invocation forms; do not rewrite Arthur elsewhere.
+            pattern = #"(?i)^\s*(?:(?:hello|hi|hey)\s*[,!.\-]?\s+)?(?:hathor|heather|arthur|hazard)\s*[,!?.:\-]?\s*"#
+
+        case "moses":
+            // Moses is already authoritative when selected in the GUI.
+            // No speculative recognition aliases are added until observed.
+            pattern = #"(?i)^\s*(?:(?:hello|hi|hey)\s*[,!.\-]?\s+)?moses\s*[,!?.:\-]?\s*"#
+
+        default:
+            return transcript
+        }
+
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return transcript
+        }
+
+        let fullRange = NSRange(
+            transcript.startIndex..<transcript.endIndex,
+            in: transcript
+        )
+
+        let normalized = regex.stringByReplacingMatches(
+            in: transcript,
+            range: fullRange,
+            withTemplate: ""
+        )
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Never turn a valid utterance into an empty question.
+        return normalized.isEmpty ? transcript : normalized
+    }
+
     private func transcribeRecordingNativeFirst(at url: URL, voice: String) async throws -> String {
         // If our own recorder meter never detected speech, do not trust Apple Speech
         // or backend transcription. Empty-room audio can produce junk tokens.
@@ -1258,7 +1303,10 @@ struct NativeVoiceSessionView: View {
             )
             let trimmed = nativeTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty && !isLikelyNoSpeechTranscript(trimmed) {
-                return trimmed
+                return normalizeSelectedOracleInvocation(
+                    trimmed,
+                    voice: voice
+                )
             }
         } catch {
             // Keep the existing backend transcription path as a fallback when native
@@ -1272,7 +1320,10 @@ struct NativeVoiceSessionView: View {
             throw TempleVoiceError.server("No clear spoken question was detected.")
         }
 
-        return backendTranscript
+        return normalizeSelectedOracleInvocation(
+            backendTranscript,
+            voice: voice
+        )
     }
 
     private func transcribeRecordingWithAppleSpeech(
