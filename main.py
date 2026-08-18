@@ -11787,68 +11787,61 @@ def detect_memory_intent(question: str) -> str:
 
 def detect_oracle_interaction_style(question: str) -> str:
     """
-    Keep simple greetings and presence checks gentle and conversational.
+    Keep only genuine greetings, acknowledgements, and presence checks
+    gentle and conversational.
 
-    Premium tiers unlock depth when the seeker asks for depth. They should not
-    force a greeting into a full memory synthesis.
+    A substantive question must remain standard even when it begins
+    with a greeting such as "hello" or addresses Hathor or Moses.
     """
     q = re.sub(r"\s+", " ", (question or "").lower()).strip(" .!?")
 
     if not q:
         return "gentle_conversation"
 
-    conversational_patterns = [
+    # Normalize punctuation only for interaction-style classification.
+    # The original seeker question itself is not changed here.
+    normalized = re.sub(r"[,;:!?.\-]+", " ", q)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+
+    simple_greetings = {
         "hello",
         "hi",
         "hey",
         "good morning",
         "good afternoon",
         "good evening",
-        "are you there",
-        "are you here",
-        "are you with me",
-        "can you hear me",
-        "hathor are you there",
-        "moses are you there",
+        "ok",
+        "okay",
         "thank you",
         "thanks",
-        "ok",
-        "okay"
-    ]
+    }
 
-    depth_terms = [
-        "why",
-        "what",
-        "how",
-        "explain",
-        "compare",
-        "contrast",
-        "analyze",
-        "critique",
-        "summarize",
-        "summary",
-        "synopsis",
-        "table",
-        "list",
-        "outline",
-        "teach",
-        "research",
-        "interpret",
-        "meaning",
-        "remember",
-        "recall",
-        "past",
-        "previous",
-        "before",
-        "dialogue",
-        "conversation",
-        "scroll",
-        "library"
-    ]
+    if normalized in simple_greetings:
+        return "gentle_conversation"
 
-    if len(q) <= 90 and any(pattern in q for pattern in conversational_patterns):
-        if not any(term in q for term in depth_terms):
-            return "gentle_conversation"
+    oracle_greeting_pattern = re.compile(
+        r"^(?:hello|hi|hey|good morning|good afternoon|good evening)"
+        r"(?:\s+(?:hathor|moses))?$"
+    )
+
+    if oracle_greeting_pattern.fullmatch(normalized):
+        return "gentle_conversation"
+
+    presence_pattern = re.compile(
+        r"^(?:(?:hello|hi|hey|good morning|good afternoon|good evening)\s+)?"
+        r"(?:(?:hathor|moses)\s+)?"
+        r"(?:are you there|are you here|are you with me|can you hear me)$"
+    )
+
+    if presence_pattern.fullmatch(normalized):
+        return "gentle_conversation"
+
+    acknowledgement_pattern = re.compile(
+        r"^(?:thank you|thanks|ok|okay)(?:\s+(?:hathor|moses))?$"
+    )
+
+    if acknowledgement_pattern.fullmatch(normalized):
+        return "gentle_conversation"
 
     return "standard"
 
