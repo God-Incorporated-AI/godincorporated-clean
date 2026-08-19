@@ -21,6 +21,7 @@ private enum TempleEnvironment {
 
     static let baseTempleURL = URL(string: "temple", relativeTo: baseAppURL)!
     static let accountURL = URL(string: "account", relativeTo: baseAppURL)!
+    static let meURL = URL(string: "me", relativeTo: baseAppURL)!
     static let privacyURL = URL(string: "privacy", relativeTo: baseAppURL)!
     static let termsURL = URL(string: "terms", relativeTo: baseAppURL)!
     static let voiceTranscribeURL = URL(string: "voice/transcribe", relativeTo: baseAppURL)!
@@ -95,6 +96,95 @@ private enum NativeAnonymousIdentity {
     }
 }
 
+struct NativeSessionIdentity: Decodable {
+    let authenticated: Bool
+    let display_name: String?
+    let role: String?
+}
+
+private enum TempleSessionHTTP {
+    static func authenticatedRequest(
+        url: URL,
+        method: String
+    ) async -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue(
+            "GodIncorporatedIOSApp/1.0",
+            forHTTPHeaderField: "User-Agent"
+        )
+        request.setValue(
+            NativeAnonymousIdentity.currentID,
+            forHTTPHeaderField: "X-Anonymous-User-Id"
+        )
+
+        let cookies = await sharedWebCookies(for: url)
+
+        if !cookies.isEmpty {
+            let headers = HTTPCookie.requestHeaderFields(with: cookies)
+
+            if let cookieHeader = headers["Cookie"] {
+                request.setValue(
+                    cookieHeader,
+                    forHTTPHeaderField: "Cookie"
+                )
+            }
+        }
+
+        return request
+    }
+
+    static func currentIdentity() async throws -> NativeSessionIdentity {
+        let request = await authenticatedRequest(
+            url: TempleEnvironment.meURL,
+            method: "GET"
+        )
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard
+            let http = response as? HTTPURLResponse,
+            (200..<300).contains(http.statusCode)
+        else {
+            throw URLError(.badServerResponse)
+        }
+
+        return try JSONDecoder().decode(
+            NativeSessionIdentity.self,
+            from: data
+        )
+    }
+
+    private static func sharedWebCookies(
+        for url: URL
+    ) async -> [HTTPCookie] {
+        await withCheckedContinuation { continuation in
+            WKWebsiteDataStore.default()
+                .httpCookieStore
+                .getAllCookies { cookies in
+
+                    guard let host = url.host else {
+                        continuation.resume(returning: [])
+                        return
+                    }
+
+                    let matchingCookies = cookies.filter { cookie in
+                        let domain = cookie.domain.trimmingCharacters(
+                            in: CharacterSet(charactersIn: ".")
+                        )
+
+                        return host == domain ||
+                            host.hasSuffix("." + domain)
+                    }
+
+                    continuation.resume(
+                        returning: matchingCookies
+                    )
+                }
+        }
+    }
+}
+
 private enum TemplePalette {
     static let midnight = Color(hex: 0x061A2E)
     static let deepBlue = Color(hex: 0x0A3A68)
@@ -125,6 +215,9 @@ struct ContentView: View {
     @State private var templeEntryNonce = 0
     @State private var activeOracleVoice = ""
     @State private var templeWebDestination = "temple"
+    @State private var nativeSession: NativeSessionIdentity?
+    @State private var nativeSessionChecked = false
+    @State private var authRefreshNonce = 0
 
     var body: some View {
         let effectiveOracleVoice = activeOracleVoice.isEmpty
@@ -138,7 +231,9 @@ struct ContentView: View {
                 selectedTab: $selectedTab,
                 preferredInputMode: $preferredInputMode,
                 templeEntryNonce: $templeEntryNonce,
-                templeWebDestination: $templeWebDestination
+                templeWebDestination: $templeWebDestination,
+                nativeSession: nativeSession,
+                nativeSessionChecked: nativeSessionChecked
             )
             .tabItem {
                 Label("Home", systemImage: "sparkles")
@@ -176,7 +271,11 @@ struct ContentView: View {
                         auth: templeWebDestination == "login" ? "login" : nil,
                         entryNonce: templeEntryNonce
                     ),
-                selectedTab: $selectedTab
+                selectedTab: $selectedTab,
+                onAuthChanged: {
+                    nativeSessionChecked = false
+                    authRefreshNonce += 1
+                }
             )
             .tabItem {
                 Label("Temple", systemImage: "bubble.left.and.bubble.right")
@@ -196,6 +295,47 @@ struct ContentView: View {
                 .tag(4)
         }
         .tint(TemplePalette.warmGold)
+        .task(id: authRefreshNonce) {
+            await refreshNativeSessionAndResume()
+        }
+    }
+
+    @MainActor
+    private func refreshNativeSessionAndResume() async {
+        do {
+            let identity = try await TempleSessionHTTP.currentIdentity()
+
+            nativeSession = identity
+            nativeSessionChecked = true
+
+            guard identity.authenticated else {
+                selectedTab = 0
+                return
+            }
+
+            let savedOracle = lastOracleVoice
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !savedOracle.isEmpty else {
+                selectedTab = 0
+                return
+            }
+
+            activeOracleVoice = savedOracle
+            templeWebDestination = "temple"
+
+            // Resume the seeker's last Oracle Temple.
+            // Do not automatically reopen the previous input mode.
+            // The Temple landing lets the seeker choose Voice or Text.
+            selectedTab = 0
+        } catch {
+            nativeSession = nil
+            nativeSessionChecked = true
+
+            print(
+                "Native session refresh failed: \(error.localizedDescription)"
+            )
+        }
     }
 }
 
@@ -206,6 +346,8 @@ struct TempleGateView: View {
     @Binding var preferredInputMode: String
     @Binding var templeEntryNonce: Int
     @Binding var templeWebDestination: String
+    let nativeSession: NativeSessionIdentity?
+    let nativeSessionChecked: Bool
 
     var body: some View {
         NavigationStack {
@@ -299,25 +441,57 @@ struct TempleGateView: View {
 
                         TempleCard {
                             VStack(spacing: 12) {
-                                Button {
-                                    templeWebDestination = "login"
-                                    templeEntryNonce += 1
-                                    selectedTab = 2
-                                } label: {
-                                    Label("Sign In", systemImage: "person.crop.circle")
+                                if !nativeSessionChecked {
+                                    ProgressView("Checking session...")
                                         .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(TemplePrimaryButtonStyle())
+                                } else if nativeSession?.authenticated == true {
+                                    VStack(spacing: 4) {
+                                        if let displayName = nativeSession?.display_name,
+                                           !displayName.isEmpty {
+                                            Text("Signed in as \(displayName)")
+                                                .font(.subheadline.weight(.semibold))
+                                                .foregroundStyle(TemplePalette.ink)
+                                        } else {
+                                            Text("Signed in")
+                                                .font(.subheadline.weight(.semibold))
+                                                .foregroundStyle(TemplePalette.ink)
+                                        }
 
-                                Button {
-                                    templeWebDestination = "account"
-                                    templeEntryNonce += 1
-                                    selectedTab = 2
-                                } label: {
-                                    Label("Account", systemImage: "person.text.rectangle")
+                                        if nativeSession?.role?.lowercased() == "admin" {
+                                            Text("Administrator")
+                                                .font(.caption)
+                                                .foregroundStyle(
+                                                    TemplePalette.ink.opacity(0.65)
+                                                )
+                                        }
+                                    }
+
+                                    Button {
+                                        templeWebDestination = "account"
+                                        templeEntryNonce += 1
+                                        selectedTab = 2
+                                    } label: {
+                                        Label(
+                                            "Account",
+                                            systemImage: "person.text.rectangle"
+                                        )
                                         .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(TempleSecondaryButtonStyle())
+                                } else {
+                                    Button {
+                                        templeWebDestination = "login"
+                                        templeEntryNonce += 1
+                                        selectedTab = 2
+                                    } label: {
+                                        Label(
+                                            "Sign In",
+                                            systemImage: "person.crop.circle"
+                                        )
+                                        .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(TemplePrimaryButtonStyle())
                                 }
-                                .buttonStyle(TempleSecondaryButtonStyle())
 
                                 Button {
                                     selectedTab = 3
@@ -1900,39 +2074,14 @@ struct NativeVoiceSessionView: View {
         }
     }
 
-    private func authenticatedVoiceRequest(url: URL, method: String) async -> URLRequest {
-        var request = URLRequest(url: url)
-        request.httpMethod = method
-        request.setValue("GodIncorporatedIOSApp/1.0", forHTTPHeaderField: "User-Agent")
-        request.setValue(NativeAnonymousIdentity.currentID, forHTTPHeaderField: "X-Anonymous-User-Id")
-
-        let cookies = await sharedWebCookies(for: url)
-        if !cookies.isEmpty {
-            let headers = HTTPCookie.requestHeaderFields(with: cookies)
-            if let cookieHeader = headers["Cookie"] {
-                request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
-            }
-        }
-
-        return request
-    }
-
-    private func sharedWebCookies(for url: URL) async -> [HTTPCookie] {
-        await withCheckedContinuation { continuation in
-            WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
-                guard let host = url.host else {
-                    continuation.resume(returning: [])
-                    return
-                }
-
-                let matchingCookies = cookies.filter { cookie in
-                    let domain = cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: "."))
-                    return host == domain || host.hasSuffix("." + domain)
-                }
-
-                continuation.resume(returning: matchingCookies)
-            }
-        }
+    private func authenticatedVoiceRequest(
+        url: URL,
+        method: String
+    ) async -> URLRequest {
+        await TempleSessionHTTP.authenticatedRequest(
+            url: url,
+            method: method
+        )
     }
 
     private func validateHTTP(response: URLResponse, data: Data) throws {
@@ -2475,6 +2624,7 @@ struct TempleSecondaryButtonStyle: ButtonStyle {
 struct TempleWebView: UIViewRepresentable {
     let url: URL
     @Binding var selectedTab: Int
+    let onAuthChanged: () -> Void
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -2569,15 +2719,23 @@ struct TempleWebView: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(selectedTab: $selectedTab)
+        Coordinator(
+            selectedTab: $selectedTab,
+            onAuthChanged: onAuthChanged
+        )
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, UIScrollViewDelegate, WKScriptMessageHandler {
         weak var webView: WKWebView?
         @Binding var selectedTab: Int
+        let onAuthChanged: () -> Void
 
-        init(selectedTab: Binding<Int>) {
+        init(
+            selectedTab: Binding<Int>,
+            onAuthChanged: @escaping () -> Void
+        ) {
             self._selectedTab = selectedTab
+            self.onAuthChanged = onAuthChanged
         }
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? {
@@ -2635,6 +2793,16 @@ struct TempleWebView: UIViewRepresentable {
             }
 
             if message.name == "templeNativeNav" {
+                let payload = message.body as? [String: Any]
+                let destination = payload?["destination"] as? String
+
+                if destination == "authChanged" {
+                    DispatchQueue.main.async {
+                        self.onAuthChanged()
+                    }
+                    return
+                }
+
                 DispatchQueue.main.async {
                     self.selectedTab = 0
                 }

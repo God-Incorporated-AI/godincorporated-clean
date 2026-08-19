@@ -1528,6 +1528,19 @@ if (seekerInput && oracleForm) {
   }
 
 
+  function notifyNativeIOSAuthChanged() {
+    const handler = window.webkit?.messageHandlers?.templeNativeNav;
+
+    if (!handler) {
+      return;
+    }
+
+    handler.postMessage({
+      destination: "authChanged"
+    });
+  }
+
+
   function openNativeIOSHomeForVoice() {
     const handler = window.webkit?.messageHandlers?.templeNativeNav;
     if (handler) {
@@ -3988,7 +4001,8 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       if (response.ok) {
         // Success
         closeModal(loginModal);
-        updateIdentityDisplay();
+        await updateIdentityDisplay();
+        notifyNativeIOSAuthChanged();
       } else {
         // Error
         loginError.textContent = data.error || "Login failed";
@@ -4150,6 +4164,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
 
         logoutBtn.onclick = async function() {
           await identityFetch("/auth/logout", { method: "POST" });
+          notifyNativeIOSAuthChanged();
           location.reload();
         };
       } else {
