@@ -31,7 +31,12 @@ private enum TempleEnvironment {
     static let oracleInferenceAbandonURL = URL(string: "oracle/inference/abandon", relativeTo: baseAppURL)!
     static let seekerMonthlyProductID = "ai.godincorporated.seeker.monthly"
 
-    static func templeURL(voice: String?, entry: String? = nil, entryNonce: Int = 0) -> URL {
+    static func templeURL(
+        voice: String?,
+        entry: String? = nil,
+        auth: String? = nil,
+        entryNonce: Int = 0
+    ) -> URL {
         var components = URLComponents(url: baseTempleURL.absoluteURL, resolvingAgainstBaseURL: true)
         var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "native", value: "ios")
@@ -43,6 +48,10 @@ private enum TempleEnvironment {
 
         if let entry, !entry.isEmpty {
             queryItems.append(URLQueryItem(name: "entry", value: entry.lowercased()))
+        }
+
+        if let auth, !auth.isEmpty {
+            queryItems.append(URLQueryItem(name: "auth", value: auth.lowercased()))
         }
 
         if entryNonce > 0 {
@@ -161,7 +170,12 @@ struct ContentView: View {
             TempleWebView(
                 url: templeWebDestination == "account"
                     ? TempleEnvironment.accountWebURL(entryNonce: templeEntryNonce)
-                    : TempleEnvironment.templeURL(voice: lastOracleVoice, entry: preferredInputMode, entryNonce: templeEntryNonce),
+                    : TempleEnvironment.templeURL(
+                        voice: lastOracleVoice,
+                        entry: preferredInputMode,
+                        auth: templeWebDestination == "login" ? "login" : nil,
+                        entryNonce: templeEntryNonce
+                    ),
                 selectedTab: $selectedTab
             )
             .tabItem {
@@ -286,19 +300,29 @@ struct TempleGateView: View {
                         TempleCard {
                             VStack(spacing: 12) {
                                 Button {
-                                    selectedTab = 3
+                                    templeWebDestination = "login"
+                                    templeEntryNonce += 1
+                                    selectedTab = 2
                                 } label: {
-                                    Label("Support with Apple", systemImage: "heart.fill")
+                                    Label("Sign In", systemImage: "person.crop.circle")
                                         .frame(maxWidth: .infinity)
                                 }
-                                .buttonStyle(TempleSecondaryButtonStyle())
+                                .buttonStyle(TemplePrimaryButtonStyle())
 
                                 Button {
                                     templeWebDestination = "account"
                                     templeEntryNonce += 1
                                     selectedTab = 2
                                 } label: {
-                                    Label("Account / Login", systemImage: "person.crop.circle")
+                                    Label("Account", systemImage: "person.text.rectangle")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(TempleSecondaryButtonStyle())
+
+                                Button {
+                                    selectedTab = 3
+                                } label: {
+                                    Label("Support with Apple", systemImage: "heart.fill")
                                         .frame(maxWidth: .infinity)
                                 }
                                 .buttonStyle(TempleSecondaryButtonStyle())
@@ -2517,7 +2541,29 @@ struct TempleWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        if webView.url?.absoluteString != url.absoluteString {
+        func navigationComparisonURL(_ candidate: URL?) -> String? {
+            guard let candidate else {
+                return nil
+            }
+
+            guard var components = URLComponents(
+                url: candidate,
+                resolvingAgainstBaseURL: false
+            ) else {
+                return candidate.absoluteString
+            }
+
+            // "auth" is a one-time native navigation instruction.
+            // The web page removes it after opening the requested auth modal,
+            // so it must not trigger a SwiftUI WebView reload afterward.
+            components.queryItems = components.queryItems?.filter {
+                $0.name != "auth"
+            }
+
+            return components.url?.absoluteString ?? candidate.absoluteString
+        }
+
+        if navigationComparisonURL(webView.url) != navigationComparisonURL(url) {
             webView.load(URLRequest(url: url))
         }
     }

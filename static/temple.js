@@ -3425,6 +3425,22 @@ if (seekerInput && oracleForm) {
 
   const loginBtn = document.getElementById("loginBtn");
   const registerBtn = document.getElementById("registerBtn");
+
+  const nativeAuthMode = new URLSearchParams(window.location.search).get("auth");
+
+  if (nativeAuthMode === "login" && loginBtn) {
+    const cleanURL = new URL(window.location.href);
+    cleanURL.searchParams.delete("auth");
+    window.history.replaceState(
+      {},
+      "",
+      cleanURL.pathname + cleanURL.search + cleanURL.hash
+    );
+
+    window.setTimeout(function() {
+      loginBtn.click();
+    }, 0);
+  }
   const logoutBtn = document.getElementById("logoutBtn");
   const adminNavBtn = document.getElementById("adminNavBtn");
   const supportBtnAnonymous = document.getElementById("supportBtnAnonymous");
