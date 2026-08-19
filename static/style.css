@@ -1719,10 +1719,21 @@ textarea#seekerInput.oracle-input {
     right: 0 !important;
     min-width: min(300px, calc(100vw - 2rem));
     padding: 0.8rem;
+    padding-bottom: calc(0.8rem + var(--gi-safe-bottom));
     border: 1px solid rgba(179,138,60,0.35);
     border-radius: 14px;
     background: rgba(255,248,237,0.98);
     box-shadow: 0 18px 40px rgba(22,32,51,0.16);
+
+    /* Keep expanded account/admin menus inside the visible iPhone viewport. */
+    max-height: calc(100vh - 6rem);
+    max-height: calc(
+      100dvh - 6rem - var(--gi-safe-top) - var(--gi-safe-bottom)
+    );
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    box-sizing: border-box;
   }
 
   .temple-nav .main-menu.show {
