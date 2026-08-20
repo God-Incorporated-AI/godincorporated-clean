@@ -1156,6 +1156,9 @@ main.temple-shell {
 }
 
 .temple-nav {
+  position: relative;
+  z-index: 100;
+  overflow: visible;
   display: grid;
   grid-template-columns: minmax(255px, 1fr) minmax(240px, 0.8fr) minmax(330px, 1fr);
   align-items: center;
