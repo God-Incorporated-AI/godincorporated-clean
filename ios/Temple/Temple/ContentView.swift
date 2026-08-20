@@ -617,7 +617,7 @@ struct NativeVoiceSessionView: View {
     @State private var isRecording = false
     @State private var isWorking = false
     @State private var statusTitle = "Voice ready"
-    @State private var statusMessage = "Have your question ready, then tap Start Speaking. iOS will ask for microphone access the first time."
+    @State private var statusMessage = "Have your question ready, then tap Start Conversation. iOS will ask for microphone access the first time."
     @State private var transcript = ""
     @State private var answer = ""
     @State private var recoveryMessage = ""
@@ -635,6 +635,15 @@ struct NativeVoiceSessionView: View {
     @State private var speechCandidateTickCount = 0
     @State private var strongestSpeechPowerDB: Float = -160.0
     @State private var currentSpeechPowerDB: Float = -160.0
+    @State private var isContinuousConversationActive = false
+    @State private var activePlaybackOrigin: VoicePlaybackOrigin?
+    @State private var pendingRearmTask: Task<Void, Never>?
+    @State private var voiceSessionGeneration = 0
+
+    private enum VoicePlaybackOrigin: Equatable {
+        case liveTurn
+        case replay
+    }
 
     private let noSpeechTimeoutSeconds: TimeInterval = 8.0
     private let silenceSubmitSeconds: TimeInterval = 4.0
@@ -725,20 +734,41 @@ struct NativeVoiceSessionView: View {
                                 if !lastSpokenOracleAnswer.isEmpty {
                                     Button {
                                         Task {
-                                            await speakOracleAnswerProviderFirst(lastSpokenOracleAnswer, deity: oracleVoice)
+                                            await speakOracleAnswerProviderFirst(
+                                                lastSpokenOracleAnswer,
+                                                deity: oracleVoice,
+                                                origin: .replay
+                                            )
                                         }
                                     } label: {
                                         Text(isPlayingAudio ? "Oracle Voice Speaking..." : "Replay Oracle Voice")
                                             .frame(maxWidth: .infinity)
                                     }
                                     .buttonStyle(TempleSecondaryButtonStyle())
-                                    .disabled(isWorking || isRecording || isPlayingAudio)
+                                    .disabled(
+                                        isWorking
+                                            || isRecording
+                                            || isPlayingAudio
+                                            || isContinuousConversationActive
+                                    )
                                 }
 
                                 oracleVoiceSwitcher
 
+                                if isContinuousConversationActive {
+                                    Button {
+                                        endContinuousConversation()
+                                    } label: {
+                                        Text("End Conversation")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(TempleSecondaryButtonStyle())
+                                }
+
                                 if showRecoveryActions {
                                     Button {
+                                        isContinuousConversationActive = true
+
                                         Task {
                                             await startRecording()
                                         }
@@ -759,6 +789,7 @@ struct NativeVoiceSessionView: View {
                                     .disabled(isWorking || isRecording)
 
                                     Button {
+                                        stopVoiceSessionActivity(clearExchange: false)
                                         onOpenTempleText()
                                     } label: {
                                         Text("Switch to Text Entry")
@@ -768,6 +799,7 @@ struct NativeVoiceSessionView: View {
                                     .disabled(isWorking || isRecording)
 
                                     Button {
+                                        stopVoiceSessionActivity(clearExchange: false)
                                         onReturnHome()
                                     } label: {
                                         Text("Return to Temple Gate")
@@ -790,6 +822,8 @@ struct NativeVoiceSessionView: View {
                                     .disabled(isWorking)
                                 } else {
                                     Button {
+                                        isContinuousConversationActive = true
+
                                         Task {
                                             await startRecording()
                                         }
@@ -799,14 +833,19 @@ struct NativeVoiceSessionView: View {
                                             ProgressView()
                                                 .frame(maxWidth: .infinity)
                                         } else {
-                                            Text(answer.isEmpty ? "Start Speaking" : "Ask Another Question")
+                                            Text("Start Conversation")
                                                 .frame(maxWidth: .infinity)
                                         }
                                     }
                                     .buttonStyle(TemplePrimaryButtonStyle())
-                                    .disabled(isWorking)
+                                    .disabled(
+                                        isWorking
+                                            || isPlayingAudio
+                                            || isContinuousConversationActive
+                                    )
 
                                     Button {
+                                        stopVoiceSessionActivity(clearExchange: false)
                                         onOpenTempleText()
                                     } label: {
                                         Text("Switch to Text Entry")
@@ -818,7 +857,7 @@ struct NativeVoiceSessionView: View {
                             }
                         }
 
-                        Text("The app listens only after you tap Start Speaking, then stops automatically after a pause or when you tap Stop.")
+                        Text("Start Conversation opens the microphone for your first question. End Conversation stops the active voice session.")
                             .font(.footnote)
                             .foregroundStyle(.white.opacity(0.72))
                             .multilineTextAlignment(.center)
@@ -829,6 +868,9 @@ struct NativeVoiceSessionView: View {
             }
             .navigationTitle("Voice")
             .navigationBarTitleDisplayMode(.inline)
+        }
+        .onDisappear {
+            stopVoiceSessionActivity(clearExchange: false)
         }
     }
 
@@ -918,36 +960,12 @@ struct NativeVoiceSessionView: View {
             return
         }
 
-        stopVoiceEndpointMonitor()
-        recorder?.stop()
-        recorder = nil
-        recordingURL = nil
+        stopVoiceSessionActivity(clearExchange: true)
 
-        speechSynthesizer.stopSpeaking(at: .immediate)
-        audioPlayer?.stop()
-        audioPlayer = nil
-
-        isRecording = false
-        isWorking = false
-        isAutoSubmittingRecording = false
-        isPlayingAudio = false
-
-        recordingStartTime = nil
-        speechDetectedTime = nil
-        lastSpeechTime = nil
-        quietTickCount = 0
-        speechCandidateTickCount = 0
-        strongestSpeechPowerDB = -160.0
-        currentSpeechPowerDB = -160.0
-
-        transcript = ""
-        answer = ""
-        lastSpokenOracleAnswer = ""
         recoveryMessage = ""
         showRecoveryActions = false
-
         statusTitle = "Voice ready"
-        statusMessage = "\(selectedVoice) is selected. Have your question ready, then tap Start Speaking."
+        statusMessage = "\(selectedVoice) is selected. Have your question ready, then tap Start Conversation."
 
         onOracleVoiceChange(selectedVoice)
     }
@@ -1010,19 +1028,31 @@ struct NativeVoiceSessionView: View {
         )
     }
 
-    private func resetVoiceSession() {
+    private func invalidateContinuousConversation() {
+        isContinuousConversationActive = false
+        pendingRearmTask?.cancel()
+        pendingRearmTask = nil
+        voiceSessionGeneration += 1
+        activePlaybackOrigin = nil
+    }
+
+    private func stopVoiceSessionActivity(clearExchange: Bool) {
+        invalidateContinuousConversation()
         stopVoiceEndpointMonitor()
+
         recorder?.stop()
+        recorder = nil
+        recordingURL = nil
+
         speechSynthesizer.stopSpeaking(at: .immediate)
         audioPlayer?.stop()
         audioPlayer = nil
-        lastSpokenOracleAnswer = ""
-        recorder = nil
-        recordingURL = nil
+
         isRecording = false
         isWorking = false
         isPlayingAudio = false
         isAutoSubmittingRecording = false
+
         recordingStartTime = nil
         speechDetectedTime = nil
         lastSpeechTime = nil
@@ -1030,12 +1060,28 @@ struct NativeVoiceSessionView: View {
         speechCandidateTickCount = 0
         strongestSpeechPowerDB = -160.0
         currentSpeechPowerDB = -160.0
-        transcript = ""
-        answer = ""
+
+        if clearExchange {
+            transcript = ""
+            answer = ""
+            lastSpokenOracleAnswer = ""
+        }
+    }
+
+    private func endContinuousConversation() {
+        stopVoiceSessionActivity(clearExchange: false)
+        recoveryMessage = ""
+        showRecoveryActions = false
+        statusTitle = "Conversation ended"
+        statusMessage = "The microphone is off. Your most recent exchange remains available."
+    }
+
+    private func resetVoiceSession() {
+        stopVoiceSessionActivity(clearExchange: true)
         recoveryMessage = ""
         showRecoveryActions = false
         statusTitle = "Voice ready"
-        statusMessage = "Have your question ready, then tap Start Speaking. iOS will ask for microphone access the first time."
+        statusMessage = "Have your question ready, then tap Start Conversation. iOS will ask for microphone access the first time."
     }
 
     private func requestMicrophonePermission() async -> Bool {
@@ -1046,25 +1092,65 @@ struct NativeVoiceSessionView: View {
         }
     }
 
-    private func startRecording() async {
-        await MainActor.run {
+    private func startRecording(
+        preserveCurrentExchange: Bool = false,
+        expectedGeneration: Int? = nil
+    ) async {
+        let generation: Int? = await MainActor.run {
+            if let expectedGeneration,
+               expectedGeneration != voiceSessionGeneration {
+                return nil
+            }
+
+            guard !isRecording, !isWorking, !isPlayingAudio else {
+                return nil
+            }
+
+            voiceSessionGeneration += 1
+            let generation = voiceSessionGeneration
+
             isWorking = true
             speechSynthesizer.stopSpeaking(at: .immediate)
             audioPlayer?.stop()
             audioPlayer = nil
-            lastSpokenOracleAnswer = ""
+            activePlaybackOrigin = nil
             isPlayingAudio = false
             recoveryMessage = ""
             showRecoveryActions = false
-            transcript = ""
-            answer = ""
+
+            if !preserveCurrentExchange {
+                lastSpokenOracleAnswer = ""
+                transcript = ""
+                answer = ""
+            }
+
             statusTitle = "Preparing microphone"
             statusMessage = "iOS may ask for permission. The Temple listens only while recording is active."
+
+            return generation
+        }
+
+        guard let generation else {
+            return
         }
 
         let granted = await requestMicrophonePermission()
+
+        let isCurrentGeneration = await MainActor.run {
+            generation == voiceSessionGeneration
+        }
+
+        guard isCurrentGeneration else {
+            return
+        }
+
         guard granted else {
             await MainActor.run {
+                guard generation == voiceSessionGeneration else {
+                    return
+                }
+
+                invalidateContinuousConversation()
                 isWorking = false
                 showRecoveryActions = true
                 statusTitle = "Microphone access needed"
@@ -1095,6 +1181,11 @@ struct NativeVoiceSessionView: View {
             newRecorder.record()
 
             await MainActor.run {
+                guard generation == voiceSessionGeneration else {
+                    newRecorder.stop()
+                    return
+                }
+
                 recorder = newRecorder
                 recordingURL = url
                 isRecording = true
@@ -1105,6 +1196,11 @@ struct NativeVoiceSessionView: View {
             }
         } catch {
             await MainActor.run {
+                guard generation == voiceSessionGeneration else {
+                    return
+                }
+
+                invalidateContinuousConversation()
                 isRecording = false
                 isWorking = false
                 showRecoveryActions = true
@@ -1116,23 +1212,42 @@ struct NativeVoiceSessionView: View {
     }
 
     private func stopAndSubmitRecording() async {
-        await MainActor.run {
+        let generation: Int? = await MainActor.run {
+            guard !isWorking else {
+                return nil
+            }
+
             stopVoiceEndpointMonitor()
             isWorking = true
             statusTitle = "Preparing your question"
             statusMessage = "Native iOS speech recognition is transcribing your recording."
+
+            return voiceSessionGeneration
+        }
+
+        guard let generation else {
+            return
         }
 
         recorder?.stop()
         let url = recordingURL
 
         await MainActor.run {
+            guard generation == voiceSessionGeneration else {
+                return
+            }
+
             isRecording = false
             recorder = nil
         }
 
         guard let url else {
             await MainActor.run {
+                guard generation == voiceSessionGeneration else {
+                    return
+                }
+
+                invalidateContinuousConversation()
                 isWorking = false
                 showRecoveryActions = true
                 statusTitle = "No recording found"
@@ -1143,10 +1258,23 @@ struct NativeVoiceSessionView: View {
         }
 
         do {
-            let spokenQuestion = try await transcribeRecordingNativeFirst(at: url, voice: oracleVoice)
+            let spokenQuestion = try await transcribeRecordingNativeFirst(
+                at: url,
+                voice: oracleVoice
+            )
+
+            let transcriptionIsCurrent = await MainActor.run {
+                generation == voiceSessionGeneration
+            }
+
+            guard transcriptionIsCurrent else {
+                return
+            }
 
             if isLikelyNoSpeechTranscript(spokenQuestion) {
-                throw TempleVoiceError.server("No clear spoken question was detected.")
+                throw TempleVoiceError.server(
+                    "No clear spoken question was detected."
+                )
             }
 
             await MainActor.run {
@@ -1155,7 +1283,19 @@ struct NativeVoiceSessionView: View {
                 statusMessage = "Your spoken question has been heard. \(oracleVoice) is answering."
             }
 
-            let oracleAnswer = try await askOracle(question: spokenQuestion, voice: oracleVoice)
+            let oracleAnswer = try await askOracle(
+                question: spokenQuestion,
+                voice: oracleVoice
+            )
+
+            let inferenceIsCurrent = await MainActor.run {
+                generation == voiceSessionGeneration
+            }
+
+            guard inferenceIsCurrent else {
+                return
+            }
+
             await MainActor.run {
                 answer = oracleAnswer
                 lastSpokenOracleAnswer = oracleAnswer
@@ -1166,11 +1306,21 @@ struct NativeVoiceSessionView: View {
                 statusMessage = "The written answer is ready. Provider voice is being prepared."
             }
 
-            await speakOracleAnswerProviderFirst(oracleAnswer, deity: oracleVoice)
+            await speakOracleAnswerProviderFirst(
+                oracleAnswer,
+                deity: oracleVoice,
+                origin: .liveTurn
+            )
         } catch {
             await MainActor.run {
+                guard generation == voiceSessionGeneration else {
+                    return
+                }
+
+                invalidateContinuousConversation()
                 isWorking = false
                 showRecoveryActions = true
+
                 let friendly = classifyVoiceFailure(error)
                 statusTitle = friendly.title
                 statusMessage = friendly.status
@@ -1313,23 +1463,33 @@ struct NativeVoiceSessionView: View {
         }
     }
 
-    private func stopRecordingWithoutSubmit(title: String, status: String, recovery: String) {
+    private func stopRecordingWithoutSubmit(
+        title: String,
+        status: String,
+        recovery: String
+    ) {
         guard !isAutoSubmittingRecording else {
             return
         }
 
+        invalidateContinuousConversation()
+
         isAutoSubmittingRecording = true
         stopVoiceEndpointMonitor()
+
         recorder?.stop()
         recorder = nil
         recordingURL = nil
+
         isRecording = false
         isWorking = false
         isAutoSubmittingRecording = false
+
         quietTickCount = 0
         speechCandidateTickCount = 0
         strongestSpeechPowerDB = -160.0
         currentSpeechPowerDB = -160.0
+
         statusTitle = title
         statusMessage = status
         recoveryMessage = recovery
@@ -1881,33 +2041,77 @@ struct NativeVoiceSessionView: View {
         return result
     }
 
-    private func speakOracleAnswerProviderFirst(_ spokenText: String, deity: String) async {
+    private func speakOracleAnswerProviderFirst(
+        _ spokenText: String,
+        deity: String,
+        origin: VoicePlaybackOrigin
+    ) async {
         let textToSpeak = spokenText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !textToSpeak.isEmpty else {
             return
         }
 
-        await MainActor.run {
+        let generation: Int? = await MainActor.run {
+            if origin == .replay && isContinuousConversationActive {
+                return nil
+            }
+
             if speechSynthesizer.isSpeaking {
                 speechSynthesizer.stopSpeaking(at: .immediate)
             }
+
             audioPlayer?.stop()
             audioPlayer = nil
+            activePlaybackOrigin = origin
             isPlayingAudio = true
             statusTitle = "Oracle speaking"
             statusMessage = "The written answer is ready. Provider voice is being prepared."
+
+            return voiceSessionGeneration
+        }
+
+        guard let generation else {
+            return
         }
 
         do {
-            let audioURL = try await requestProviderVoiceAudio(answer: textToSpeak, deity: deity)
-            try await playProviderVoiceAudio(from: audioURL)
+            let audioURL = try await requestProviderVoiceAudio(
+                answer: textToSpeak,
+                deity: deity
+            )
+
+            let playbackIsCurrent = await MainActor.run {
+                generation == voiceSessionGeneration
+                    && activePlaybackOrigin == origin
+            }
+
+            guard playbackIsCurrent else {
+                return
+            }
+
+            try await playProviderVoiceAudio(
+                from: audioURL,
+                origin: origin,
+                generation: generation
+            )
         } catch {
             await MainActor.run {
+                guard generation == voiceSessionGeneration,
+                      activePlaybackOrigin == origin else {
+                    return
+                }
+
                 audioPlayer?.stop()
                 audioPlayer = nil
                 statusTitle = "Oracle speaking"
                 statusMessage = "Provider voice was unavailable. Native iOS voice is speaking the response."
-                speakOracleAnswer(textToSpeak, deity: deity)
+
+                speakOracleAnswer(
+                    textToSpeak,
+                    deity: deity,
+                    origin: origin,
+                    generation: generation
+                )
             }
         }
     }
@@ -1934,8 +2138,16 @@ struct NativeVoiceSessionView: View {
         return audioURL
     }
 
-    private func playProviderVoiceAudio(from audioURL: URL) async throws {
-        let request = await authenticatedVoiceRequest(url: audioURL, method: "GET")
+    private func playProviderVoiceAudio(
+        from audioURL: URL,
+        origin: VoicePlaybackOrigin,
+        generation: Int
+    ) async throws {
+        let request = await authenticatedVoiceRequest(
+            url: audioURL,
+            method: "GET"
+        )
+
         let (data, response) = try await URLSession.shared.data(for: request)
         try validateHTTP(response: response, data: data)
 
@@ -1943,7 +2155,21 @@ struct NativeVoiceSessionView: View {
             throw TempleVoiceError.server("Provider voice audio was empty.")
         }
 
+        let playbackIsCurrent = await MainActor.run {
+            generation == voiceSessionGeneration
+                && activePlaybackOrigin == origin
+        }
+
+        guard playbackIsCurrent else {
+            return
+        }
+
         try await MainActor.run {
+            guard generation == voiceSessionGeneration,
+                  activePlaybackOrigin == origin else {
+                return
+            }
+
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .spokenAudio)
             try session.setActive(true)
@@ -1958,7 +2184,9 @@ struct NativeVoiceSessionView: View {
             player.prepareToPlay()
 
             guard player.play() else {
-                throw TempleVoiceError.server("Provider voice audio could not start.")
+                throw TempleVoiceError.server(
+                    "Provider voice audio could not start."
+                )
             }
 
             audioPlayer = player
@@ -1966,29 +2194,127 @@ struct NativeVoiceSessionView: View {
             statusTitle = "Oracle speaking"
             statusMessage = "Provider voice is speaking the response."
 
-            monitorProviderAudioCompletion()
+            monitorProviderAudioCompletion(
+                player: player,
+                origin: origin,
+                generation: generation
+            )
         }
     }
 
-    private func monitorProviderAudioCompletion() {
+    private func monitorProviderAudioCompletion(
+        player: AVAudioPlayer,
+        origin: VoicePlaybackOrigin,
+        generation: Int
+    ) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            if let player = audioPlayer, player.isPlaying {
-                monitorProviderAudioCompletion()
+            guard generation == voiceSessionGeneration,
+                  activePlaybackOrigin == origin,
+                  let currentPlayer = audioPlayer,
+                  currentPlayer === player else {
+                return
+            }
+
+            if player.isPlaying {
+                monitorProviderAudioCompletion(
+                    player: player,
+                    origin: origin,
+                    generation: generation
+                )
                 return
             }
 
             audioPlayer = nil
-            isPlayingAudio = false
-            if statusTitle == "Oracle speaking" {
-                statusTitle = "Oracle answered"
-                statusMessage = "You may ask another question, replay the provider voice, or continue by text."
-            }
+
+            finishVoicePlayback(
+                origin: origin,
+                generation: generation
+            )
         }
     }
 
-    private func speakOracleAnswer(_ spokenText: String, deity: String) {
+    private func finishVoicePlayback(
+        origin: VoicePlaybackOrigin,
+        generation: Int
+    ) {
+        guard generation == voiceSessionGeneration,
+              activePlaybackOrigin == origin else {
+            return
+        }
+
+        isPlayingAudio = false
+        activePlaybackOrigin = nil
+
+        if statusTitle == "Oracle speaking" {
+            statusTitle = "Oracle answered"
+
+            if origin == .liveTurn && isContinuousConversationActive {
+                statusMessage = "The response is complete. Listening will resume automatically."
+            } else {
+                statusMessage = "You may replay the Oracle voice or continue by text."
+            }
+        }
+
+        guard origin == .liveTurn,
+              isContinuousConversationActive else {
+            return
+        }
+
+        scheduleContinuousConversationRearm(
+            generation: generation
+        )
+    }
+
+    private func scheduleContinuousConversationRearm(
+        generation: Int
+    ) {
+        pendingRearmTask?.cancel()
+
+        pendingRearmTask = Task { @MainActor in
+            do {
+                try await Task.sleep(
+                    nanoseconds: 400_000_000
+                )
+            } catch {
+                return
+            }
+
+            guard generation == voiceSessionGeneration else {
+                return
+            }
+
+            guard isContinuousConversationActive,
+                  !isRecording,
+                  !isWorking,
+                  !isPlayingAudio,
+                  audioPlayer == nil,
+                  !speechSynthesizer.isSpeaking,
+                  !showRecoveryActions else {
+                pendingRearmTask = nil
+                isContinuousConversationActive = false
+                return
+            }
+
+            pendingRearmTask = nil
+
+            await startRecording(
+                preserveCurrentExchange: true,
+                expectedGeneration: generation
+            )
+        }
+    }
+
+    private func speakOracleAnswer(
+        _ spokenText: String,
+        deity: String,
+        origin: VoicePlaybackOrigin,
+        generation: Int
+    ) {
         let textToSpeak = spokenText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !textToSpeak.isEmpty else {
+
+        guard !textToSpeak.isEmpty,
+              generation == voiceSessionGeneration,
+              activePlaybackOrigin == origin else {
             return
         }
 
@@ -1997,9 +2323,16 @@ struct NativeVoiceSessionView: View {
             try session.setCategory(.playback, mode: .spokenAudio)
             try session.setActive(true)
         } catch {
+            if origin == .liveTurn {
+                invalidateContinuousConversation()
+            } else {
+                activePlaybackOrigin = nil
+            }
+
             statusTitle = "Voice playback unavailable"
             statusMessage = "The written answer is ready, but iOS voice playback could not start."
             recoveryMessage = "You can read the answer above, replay if available, ask another question, or switch to text entry."
+            showRecoveryActions = true
             isPlayingAudio = false
             return
         }
@@ -2027,7 +2360,11 @@ struct NativeVoiceSessionView: View {
         speechSynthesizer.speak(utterance)
         isPlayingAudio = true
 
-        monitorNativeSpeechCompletion(synthesizer: speechSynthesizer)
+        monitorNativeSpeechCompletion(
+            synthesizer: speechSynthesizer,
+            origin: origin,
+            generation: generation
+        )
     }
 
     private func preferredSpeechVoice(for deity: String) -> AVSpeechSynthesisVoice? {
@@ -2059,18 +2396,30 @@ struct NativeVoiceSessionView: View {
         return AVSpeechSynthesisVoice(language: "en-US")
     }
 
-    private func monitorNativeSpeechCompletion(synthesizer: AVSpeechSynthesizer) {
+    private func monitorNativeSpeechCompletion(
+        synthesizer: AVSpeechSynthesizer,
+        origin: VoicePlaybackOrigin,
+        generation: Int
+    ) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            if synthesizer.isSpeaking {
-                monitorNativeSpeechCompletion(synthesizer: synthesizer)
+            guard generation == voiceSessionGeneration,
+                  activePlaybackOrigin == origin else {
                 return
             }
 
-            isPlayingAudio = false
-            if statusTitle == "Oracle speaking" {
-                statusTitle = "Oracle answered"
-                statusMessage = "You may ask another question, replay the Oracle voice, or continue by text."
+            if synthesizer.isSpeaking {
+                monitorNativeSpeechCompletion(
+                    synthesizer: synthesizer,
+                    origin: origin,
+                    generation: generation
+                )
+                return
             }
+
+            finishVoicePlayback(
+                origin: origin,
+                generation: generation
+            )
         }
     }
 
