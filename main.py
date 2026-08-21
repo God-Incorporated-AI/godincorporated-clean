@@ -5650,13 +5650,14 @@ def get_response_word_cap(
     normalized_input = (input_mode or "text").strip().lower()
 
     # Ordered access levels:
-    # anon -> pilgrim -> seeker -> magister -> sovereign -> theoricus
+    # anon -> pilgrim -> seeker -> magister -> sovereign -> philosophus -> theoricus
     text_ranges = {
         "anon": (120, 190),
         "pilgrim": (180, 280),
         "seeker": (260, 400),
         "magister": (360, 540),
         "sovereign": (470, 650),
+        "philosophus": (521, 724),
         "theoricus": (560, 780),
     }
 
@@ -5666,6 +5667,7 @@ def get_response_word_cap(
         "seeker": (115, 170),
         "magister": (150, 210),
         "sovereign": (180, 250),
+        "philosophus": (197, 273),
         "theoricus": (210, 290),
     }
 
