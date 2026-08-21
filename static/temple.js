@@ -1688,6 +1688,8 @@ if (seekerInput && oracleForm) {
     starting: false,
     clickPending: false,
     ending: false,
+    previewMode: false,
+    endAfterCurrentResponse: false,
 
     selectedDeity: "Hathor",
     selectedRealtimeVoice: "eve",
@@ -1779,7 +1781,7 @@ if (seekerInput && oracleForm) {
       turn_input_audio_seconds: Number(((templeRealtimeState.inputSamplesSent - templeRealtimeState.turnInputStartSamples) / TEMPLE_REALTIME_INPUT_SAMPLE_RATE).toFixed(3)),
       output_audio_seconds: Number(((templeRealtimeState.outputSamplesReceived - templeRealtimeState.responseOutputStartSamples) / TEMPLE_REALTIME_OUTPUT_SAMPLE_RATE).toFixed(3)),
       first_audio_delta_ms: templeRealtimeState.firstAudioDeltaAt || null,
-      preview_mode: false,
+      preview_mode: templeRealtimeState.previewMode === true,
       completion_reason: reason || "response.done"
     };
   }
@@ -1912,7 +1914,7 @@ if (seekerInput && oracleForm) {
     const reason = String(access.reason || "");
     const isPreview = access.is_preview === true || access.preview_mode === true || reason.includes("preview");
 
-    if (isPreview) return false;
+    if (isPreview) return true;
 
     if (reason === "admin_unrestricted") return true;
     if (reason === "realtime_fair_use_allowed") return true;
@@ -2228,6 +2230,7 @@ if (seekerInput && oracleForm) {
     templeRealtimeState.assistantTurnIndex = 0;
     templeRealtimeState.assistantSpeaking = false;
     templeRealtimeState.turnCommitPending = false;
+    templeRealtimeState.endAfterCurrentResponse = false;
     templeRealtimeState.preRollChunks = [];
     templeRealtimeState.preRollSamples = 0;
     templeRealtimeState.trailingMsRemaining = 0;
@@ -2271,6 +2274,7 @@ if (seekerInput && oracleForm) {
 
     templeRealtimeState.starting = true;
     templeRealtimeState.ending = false;
+    templeRealtimeState.previewMode = false;
     templeRealtimeState.selectedDeity = templeRealtimeSelectedDeity();
     templeRealtimeState.selectedRealtimeVoice = templeRealtimeSelectedVoice(templeRealtimeState.selectedDeity);
     templeRealtimeState.sessionStartedAt = performance.now();
@@ -2298,6 +2302,17 @@ if (seekerInput && oracleForm) {
       templeRealtimeState.sessionData = await templeRealtimeCreateSession(
         templeRealtimeState.selectedDeity,
         templeRealtimeState.selectedRealtimeVoice
+      );
+
+      const sessionAccess = (
+        templeRealtimeState.sessionData &&
+        templeRealtimeState.sessionData.voice_access
+      ) || {};
+
+      templeRealtimeState.previewMode = (
+        sessionAccess.is_preview === true ||
+        sessionAccess.preview_mode === true ||
+        String(sessionAccess.reason || "").includes("preview")
       );
 
       await templeRealtimeOpenWebSocket(templeRealtimeState.sessionData);
@@ -2511,7 +2526,7 @@ if (seekerInput && oracleForm) {
         body: JSON.stringify({
           provider: "xai",
           mode: "temple_main_live_realtime",
-          preview_mode: false,
+          preview_mode: templeRealtimeState.previewMode === true,
           voice: templeRealtimeState.selectedDeity,
           deity: templeRealtimeState.selectedDeity,
           realtime_voice: templeRealtimeState.selectedRealtimeVoice,
@@ -2532,6 +2547,16 @@ if (seekerInput && oracleForm) {
       if (!response.ok) {
         return {
           allowed: false,
+          status: response.status,
+          payload: payload
+        };
+      }
+
+      if (payload && payload.turn_recorded === true) {
+        templeRealtimeState.endAfterCurrentResponse = payload.allowed === false;
+
+        return {
+          allowed: true,
           status: response.status,
           payload: payload
         };
@@ -2961,13 +2986,27 @@ if (seekerInput && oracleForm) {
       templeRealtimeState.turnCommitPending = false;
       templeRealtimeState.listeningCooldownUntil = performance.now() + TEMPLE_REALTIME_POST_PLAYBACK_COOLDOWN_MS;
 
+      templeRealtimeReportInteraction("playback_drain_complete");
+
+      if (templeRealtimeState.endAfterCurrentResponse) {
+        templeRealtimeState.endAfterCurrentResponse = false;
+        templeRealtimeEndConversation("realtime_allowance_complete", true);
+
+        setVoiceStatus(
+          "Live voice allowance complete",
+          "Your available realtime voice turns are complete. Regular Speak voice remains available.",
+          "notice"
+        );
+
+        return;
+      }
+
       setVoiceStatus(
         "Live voice listening",
         "Speak again, or tap End Live Voice when finished.",
         "listening"
       );
 
-      templeRealtimeReportInteraction("playback_drain_complete");
       templeRealtimeScheduleIdleAutoEnd();
       templeRealtimeTouchActivity("returned_to_listening");
     }, drainMs);
@@ -3084,6 +3123,8 @@ if (seekerInput && oracleForm) {
     templeRealtimeState.turnCommitPending = false;
     templeRealtimeState.assistantSpeaking = false;
     templeRealtimeState.speechGateOpen = false;
+    templeRealtimeState.previewMode = false;
+    templeRealtimeState.endAfterCurrentResponse = false;
     templeRealtimeState.socket = null;
 
     templeRealtimeSetButtonIdle();
@@ -3155,6 +3196,8 @@ if (seekerInput && oracleForm) {
       );
     }
 
+    templeRealtimeState.previewMode = false;
+    templeRealtimeState.endAfterCurrentResponse = false;
     templeRealtimeState.ending = false;
   }
 
