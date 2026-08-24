@@ -1616,7 +1616,7 @@ struct NativeVoiceSessionView: View {
         case "hathor":
             // The GUI has already selected Hathor. Correct only the observed
             // opening invocation forms; do not rewrite Arthur elsewhere.
-            pattern = #"(?i)^\s*(?:(?:hello|hi|hey)\s*[,!.\-]?\s+)?(?:hathor|heather|arthur|hazard)\s*[,!?.:\-]?\s*"#
+            pattern = #"(?i)^\s*(?:(?:hello|hi|hey)\s*[,!.\-]?\s+)?(?:hathor|heather|arthur|hazard|hatter)\s*[,!?.:\-]?\s*"#
 
         case "moses":
             // Moses is already authoritative when selected in the GUI.
@@ -1710,7 +1710,31 @@ struct NativeVoiceSessionView: View {
         var contextualVocabulary = [
             "Hathor",
             "Moses",
-            "God Incorporated"
+            "God Incorporated",
+            "Essene",
+            "Essenes",
+            "Nag Hammadi",
+            "Nag Hammadi texts",
+            "Nag Hammadi library",
+            "Gnostic",
+            "Gnosticism",
+            "Coptic",
+            "Qumran",
+            "Dead Sea Scrolls",
+            "Gospel of Thomas",
+            "Gospel of Mary",
+            "Apocryphon of John",
+            "Valentinus",
+            "Valentinian",
+            "Sethian",
+            "Sophia",
+            "Pleroma",
+            "Demiurge",
+            "Yaldabaoth",
+            "Hermetic",
+            "Hermetica",
+            "Rosicrucian",
+            "Templar"
         ]
 
         let selectedOracle = voice
