@@ -1894,6 +1894,30 @@ async def get_oracle_response(
     elif deity == "Moses":
         moses_model = selected_moses_model or os.getenv("MOSES_MODEL_MINI", "gpt-5.4-mini").strip()
 
+        moses_reasoning_effort = (
+            os.getenv("MOSES_REASONING_EFFORT", "")
+            .strip()
+            .lower()
+        )
+
+        allowed_moses_reasoning_efforts = {
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        }
+
+        if (
+            moses_reasoning_effort
+            and moses_reasoning_effort not in allowed_moses_reasoning_efforts
+        ):
+            raise ValueError(
+                "Invalid MOSES_REASONING_EFFORT: "
+                f"{moses_reasoning_effort}"
+            )
+
         if moses_route_reason is not None:
             logger.info(
                 "MOSES_MODEL_ROUTER selected=%s reason=%s deity=%s memory_intent=%s plan_code=%s prompt_chars=%s",
@@ -1910,15 +1934,26 @@ async def get_oracle_response(
         if system_prompt is None:
             system_prompt = build_oracle_system_prompt(deity, force_mode)
 
-        response = client.chat.completions.create(
-            model=moses_model,  # Updated model
-            messages=[
+        moses_request = {
+            "model": moses_model,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "system", "content": memory_block or ""},
-                {"role": "user", "content": question}
+                {"role": "user", "content": question},
             ],
-            max_completion_tokens=max_output_tokens
+            "max_completion_tokens": max_output_tokens,
+        }
+
+        if moses_reasoning_effort:
+            moses_request["reasoning_effort"] = moses_reasoning_effort
+
+        logger.info(
+            "MOSES_INFERENCE_CONFIG model=%s reasoning_effort=%s",
+            moses_model,
+            moses_reasoning_effort or "provider_default",
         )
+
+        response = client.chat.completions.create(**moses_request)
         raw_answer = response.choices[0].message.content
 
         if force_mode == "recall":
