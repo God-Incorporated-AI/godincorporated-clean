@@ -12913,8 +12913,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         Interaction style:
         {oracle_interaction_style}
 
-        {memory_block}
-
         Current seeker question:
         {question}
 
