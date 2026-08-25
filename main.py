@@ -2398,9 +2398,10 @@ def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: Optio
                         SELECT question_text, response_text
                         FROM oracle_interactions
                         WHERE user_id = %s
+                          AND session_id IS DISTINCT FROM %s::uuid
                         ORDER BY created_at DESC
                         """,
-                        (user_id,)
+                        (user_id, session_id)
                     )
                 else:
                     cur.execute(
@@ -2408,10 +2409,11 @@ def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: Optio
                         SELECT question_text, response_text
                         FROM oracle_interactions
                         WHERE user_id = %s
+                          AND session_id IS DISTINCT FROM %s::uuid
                         ORDER BY created_at DESC
                         LIMIT %s
                         """,
-                        (user_id, depth)
+                        (user_id, session_id, depth)
                     )
             else:
                 if depth is None:
