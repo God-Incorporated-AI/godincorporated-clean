@@ -1451,6 +1451,10 @@ def finalize_oracle_inference(
     enhanced_question_chars = int(
         finalization_state.get("enhanced_question_chars") or 0
     )
+    prepared_input_chars = int(
+        finalization_state.get("prepared_input_chars")
+        or enhanced_question_chars
+    )
     memory_has_content = bool(
         finalization_state.get("memory_has_content")
     )
@@ -1638,10 +1642,10 @@ def finalize_oracle_inference(
 
     # --- Token metering ---
     estimated_tokens = estimate_tokens(question, raw_answer)
-    estimated_input_tokens = enhanced_question_chars // 4
+    estimated_input_tokens = prepared_input_chars // 4
     estimated_output_tokens = estimate_tokens("", raw_answer)
     estimated_total_tokens = (
-        enhanced_question_chars + len(raw_answer or "")
+        prepared_input_chars + len(raw_answer or "")
     ) // 4
     usage_class = "registered" if user_id else "anonymous"
 
@@ -1650,7 +1654,7 @@ def finalize_oracle_inference(
     actual_total_tokens = token_usage.get("total_tokens")
 
     logger.info(
-        "TOKEN_USAGE provider=%s model=%s deity=%s plan_code=%s input_mode=%s retrieval_backend=%s pgvector_limit=%s usage_class=%s actual_prompt_tokens=%s actual_completion_tokens=%s actual_total_tokens=%s estimated_input_tokens=%s estimated_output_tokens=%s estimated_total_tokens=%s question_chars=%s enhanced_question_chars=%s answer_chars=%s final_model_ms=%s total_ms=%s",
+        "TOKEN_USAGE provider=%s model=%s deity=%s plan_code=%s input_mode=%s retrieval_backend=%s pgvector_limit=%s usage_class=%s actual_prompt_tokens=%s actual_completion_tokens=%s actual_total_tokens=%s estimated_input_tokens=%s estimated_output_tokens=%s estimated_total_tokens=%s question_chars=%s enhanced_question_chars=%s prepared_input_chars=%s answer_chars=%s final_model_ms=%s total_ms=%s",
         model_provider,
         model_name,
         deity,
@@ -1667,6 +1671,7 @@ def finalize_oracle_inference(
         estimated_total_tokens,
         len(question or ""),
         enhanced_question_chars,
+        prepared_input_chars,
         len(raw_answer or ""),
         _ms(final_model_started_at, final_model_finished_at),
         _ms(ask_started_at, datetime.datetime.now()),
@@ -1720,6 +1725,7 @@ def finalize_oracle_inference(
             "oracle_interaction_style": oracle_interaction_style,
             "source_model": source_model,
             "response_word_cap": response_word_cap,
+            "prepared_input_chars": prepared_input_chars,
             "pricing_source": oracle_pricing.get("source"),
             "pricing_input_per_1m": oracle_pricing.get(
                 "input_per_1m"
@@ -12971,6 +12977,12 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             moses_prompt_chars=moses_prompt_chars,
         )
 
+        prepared_input_chars = (
+            len(prepared_inference.get("system_prompt") or "")
+            + len(prepared_inference.get("memory_block") or "")
+            + len(prepared_inference.get("question") or "")
+        )
+
         finalization_state = {
             "schema": "oracle_finalization_state.v1",
             "interaction_id": None,
@@ -12985,6 +12997,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "oracle_interaction_style": oracle_interaction_style,
             "response_word_cap": response_word_cap,
             "enhanced_question_chars": len(enhanced_question or ""),
+            "prepared_input_chars": prepared_input_chars,
             "memory_has_content": bool(memory_block.strip()),
             "llama_phase1": llama_phase1,
             "llama_passages_before": len(passages_before_llama),
