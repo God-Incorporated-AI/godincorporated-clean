@@ -33,7 +33,6 @@ import stripe
 from config.settings import LLAMA_ENABLED, xai_api_key
 from services.tts import generate_tts_audio, get_openai_tts_model
 from services.voice_transcription import transcribe_audio_with_metrics
-from services.llama_phase1 import build_support_packet, run_llama_phase1, apply_phase1_result, summarize_phase1_result
 from services.mail import send_email
 from services.stripe_billing import create_checkout_session_for_user, change_existing_subscription_plan
 from storage.json_store import UPLOAD_DIR, AUDIO_DIR, save_log
@@ -81,12 +80,6 @@ def choose_moses_model(raw_question: str, memory_intent: str, plan_code: str, me
 
     return moses_model_mini, "default_mini", total_context_chars
 
-def _llama_preview(value: str, limit: int = 160) -> str:
-    text = " ".join((value or "").split())
-    if len(text) <= limit:
-        return text
-    return text[:limit - 3] + "..."
-
 load_dotenv()
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY")
@@ -105,30 +98,6 @@ VALID_RETRIEVAL_BACKENDS = {"legacy_embeddings", "pgvector", "fts"}
 BROWSER_TOKEN_HEADER = "x-anonymous-user-id"
 ANONYMOUS_UPLOAD_COOLDOWN_SECONDS = 5
 ANONYMOUS_UPLOAD_LIMIT = 3
-
-LLAMA_PHASE1_VOICE_BYPASS_ENABLED = os.getenv(
-    "LLAMA_PHASE1_VOICE_BYPASS_ENABLED", "true"
-).strip().lower() in {"1", "true", "yes", "on"}
-
-LLAMA_PHASE1_VOICE_BYPASS_PLANS = {
-    item.strip().lower()
-    for item in os.getenv("LLAMA_PHASE1_VOICE_BYPASS_PLANS", "anon,pilgrim").split(",")
-    if item.strip()
-}
-
-
-def should_bypass_llama_phase1_for_request(plan_code: Optional[str], input_mode: str) -> bool:
-    """
-    Phase 10 seeker-experience guardrail.
-    Voice-first anon/pilgrim requests should not wait on Ollama Phase 1.
-    Higher tiers keep the existing LLaMA shaping path.
-    """
-    if not LLAMA_PHASE1_VOICE_BYPASS_ENABLED:
-        return False
-    if (input_mode or "text").lower() != "voice":
-        return False
-    return normalize_plan_code(plan_code) in LLAMA_PHASE1_VOICE_BYPASS_PLANS
-
 
 def get_ip_hash(request: Request) -> str:
     ip = request.client.host if request.client else "unknown"
@@ -1458,21 +1427,12 @@ def finalize_oracle_inference(
     memory_has_content = bool(
         finalization_state.get("memory_has_content")
     )
-    llama_phase1 = finalization_state.get("llama_phase1")
-    llama_passages_before = int(
-        finalization_state.get("llama_passages_before") or 0
-    )
-    llama_passages_after = int(
-        finalization_state.get("llama_passages_after") or 0
-    )
 
     normalized_input_mode = (input_mode or "text").strip().lower()
 
     ask_started_at = timing_state.get("ask_started_at")
     retrieval_started_at = timing_state.get("retrieval_started_at")
     retrieval_finished_at = timing_state.get("retrieval_finished_at")
-    phase1_started_at = timing_state.get("phase1_started_at")
-    phase1_finished_at = timing_state.get("phase1_finished_at")
     final_model_started_at = timing_state.get("final_model_started_at")
     final_model_finished_at = timing_state.get("final_model_finished_at")
 
@@ -1627,13 +1587,12 @@ def finalize_oracle_inference(
         )
 
     logger.info(
-        "ASK_STAGE_TIMING input_mode=%s deity=%s memory_intent=%s plan_code=%s retrieval_ms=%s phase1_ms=%s final_model_ms=%s total_ms=%s",
+        "ASK_STAGE_TIMING input_mode=%s deity=%s memory_intent=%s plan_code=%s retrieval_ms=%s final_model_ms=%s total_ms=%s",
         input_mode,
         deity,
         memory_intent,
         plan_code,
         _ms(retrieval_started_at, retrieval_finished_at),
-        _ms(phase1_started_at, phase1_finished_at),
         _ms(final_model_started_at, final_model_finished_at),
         _ms(ask_started_at, datetime.datetime.now()),
     )
@@ -1778,9 +1737,6 @@ def finalize_oracle_inference(
         "answer": raw_answer,
         "architect_observation": architect_obs,
         "llama_observation": llama_obs,
-        "llama_phase1": llama_phase1,
-        "llama_passages_before": llama_passages_before,
-        "llama_passages_after": llama_passages_after,
         "source_model": source_model,
         "phase": "5.5",
         "corpus_intent": "authoritative_training_data",
@@ -12671,8 +12627,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         ask_started_at = datetime.datetime.now()
         retrieval_started_at = None
         retrieval_finished_at = None
-        phase1_started_at = None
-        phase1_finished_at = None
         final_model_started_at = None
         final_model_finished_at = None
 
@@ -12712,9 +12666,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         recent_memory = memory
         limited_memories = memories[:5] if memories else []
 
-        # Phase 1 helper stays flat across tiers:
-        # only the latest session exchange, no compressed history, no long-term memory.
-        helper_recent_memory = get_session_memory(session_id, 1)
 
         # --- Conditional retrieval based on memory intent ---
         passages = []
@@ -12736,7 +12687,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         if oracle_interaction_style == "gentle_conversation":
             recent_memory = ""
             limited_memories = []
-            helper_recent_memory = ""
 
         # --— structured memory weighting ---
         memory_block = ""
@@ -12762,92 +12712,10 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             passages = rank_passages(passages, question, max_items=2)
             retrieval_finished_at = datetime.datetime.now()
 
-        passages_before_llama = list(passages or [])
-        long_term_memory_count = len([item for item in limited_memories if (item or "").strip()])
-        recent_memory_present = bool((recent_memory or "").strip())
-        passage_preview_1 = _llama_preview(passages_before_llama[0]) if len(passages_before_llama) > 0 else ""
-        passage_preview_2 = _llama_preview(passages_before_llama[1]) if len(passages_before_llama) > 1 else ""
-
-        logger.info(
-            "LLAMA_INPUT deity=%s memory_intent=%s plan_code=%s recent_memory_present=%s long_term_memory_count=%s candidate_passages=%s passage_preview_1=%s passage_preview_2=%s",
-            deity,
-            memory_intent,
-            plan_code,
-            recent_memory_present,
-            long_term_memory_count,
-            len(passages_before_llama),
-            passage_preview_1,
-            passage_preview_2
-        )
-
-        llama_phase1 = None
-        llama_compact_brief = ""
-        phase1_started_at = None
-        phase1_finished_at = None
-        llama_bypass_reason = "gentle_conversation" if oracle_interaction_style == "gentle_conversation" else "voice_entry_plan"
-        bypass_llama_phase1 = (
-            oracle_interaction_style == "gentle_conversation"
-            or should_bypass_llama_phase1_for_request(
-                plan_code=plan_code,
-                input_mode=input_mode
-            )
-        )
-
-        if bypass_llama_phase1:
-            passages = passages_before_llama
-            llama_phase1 = {
-                "enabled": False,
-                "shadow_only": False,
-                "provider": "ollama",
-                "budget_tier": "skipped",
-                "selected_passage_indexes": [],
-                "compact_brief": "",
-                "reason": "skipped:" + llama_bypass_reason
-            }
-            logger.info(
-                "LLAMA_PHASE1_BYPASS input_mode=%s deity=%s memory_intent=%s plan_code=%s passages_before=%s reason=%s",
-                input_mode,
-                deity,
-                memory_intent,
-                plan_code,
-                len(passages_before_llama),
-                llama_bypass_reason
-            )
-        else:
-            support_packet = build_support_packet(
-                question=question,
-                deity=deity,
-                memory_intent=memory_intent,
-                plan_code=plan_code,
-                recent_memory=helper_recent_memory,
-                passages=passages_before_llama
-            )
-
-            phase1_started_at = datetime.datetime.now()
-            llama_phase1 = await run_llama_phase1(support_packet)
-            phase1_finished_at = datetime.datetime.now()
-            passages, llama_compact_brief = apply_phase1_result(passages_before_llama, llama_phase1)
-
-        logger.info(
-            "%s input_mode=%s deity=%s memory_intent=%s plan_code=%s",
-            summarize_phase1_result(
-                llama_phase1,
-                passages_before=len(passages_before_llama),
-                passages_after=len(passages)
-            ),
-            input_mode,
-            deity,
-            memory_intent,
-            plan_code
-        )
-
         context_block = ""
-        if passages or llama_compact_brief:
+        if passages:
             context_block = "\n\nBackground wisdom for reflection:\n\n"
-            if llama_compact_brief:
-                context_block += "LLaMA retrieval brief:\n" + llama_compact_brief + "\n\n"
-            if passages:
-                context_block += "\n\n".join(passages)
+            context_block += "\n\n".join(passages)
 
         # --— dual-mode prompt ---
 
@@ -13001,9 +12869,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "enhanced_question_chars": len(enhanced_question or ""),
             "prepared_input_chars": prepared_input_chars,
             "memory_has_content": bool(memory_block.strip()),
-            "llama_phase1": llama_phase1,
-            "llama_passages_before": len(passages_before_llama),
-            "llama_passages_after": len(passages),
         }
 
         execution_mode = getattr(
@@ -13049,8 +12914,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "ask_started_at": ask_started_at,
             "retrieval_started_at": retrieval_started_at,
             "retrieval_finished_at": retrieval_finished_at,
-            "phase1_started_at": phase1_started_at,
-            "phase1_finished_at": phase1_finished_at,
             "final_model_started_at": final_model_started_at,
             "final_model_finished_at": final_model_finished_at,
         }
