@@ -837,10 +837,13 @@ def record_oracle_usage_event(
 
 def get_voice_usage_context(request: Request, voice: Optional[str] = None) -> dict:
     """
-    Phase 10.5 helper for voice-stage persistence.
+    Resolve voice usage against three separate identity authorities:
 
-    This is intentionally defensive because voice transcription should not fail
-    just because reporting context could not be resolved.
+    - session_id: one Oracle conversation
+    - anonymous_user_id: persistent browser/device identity
+    - user_id: authenticated seeker identity
+
+    Reporting failures must not break the seeker voice experience.
     """
     context = {
         "session_id": None,
@@ -850,23 +853,36 @@ def get_voice_usage_context(request: Request, voice: Optional[str] = None) -> di
     }
 
     try:
-        session_id = get_or_create_session_id(request)
-        context["session_id"] = session_id
-        context["anonymous_user_id"] = session_id
-    except Exception as e:
-        logger.warning("VOICE_USAGE_CONTEXT session resolution failed: %s", e)
-
-    try:
         user = get_current_user(request)
         if user:
             context["user_id"] = user.get("user_id")
             entitlement = get_user_entitlement_snapshot(user["user_id"])
-            context["plan_code"] = entitlement.get("effective_plan_code") or "anon"
+            context["plan_code"] = (
+                entitlement.get("effective_plan_code") or "anon"
+            )
     except Exception as e:
-        logger.warning("VOICE_USAGE_CONTEXT user resolution failed: %s", e)
+        logger.warning(
+            "VOICE_USAGE_CONTEXT user resolution failed: %s",
+            e,
+        )
+
+    try:
+        anonymous_user_id = get_or_create_anonymous_user_id(request)
+        session_id = get_or_create_bound_session_id(
+            request,
+            anonymous_user_id,
+            context["user_id"],
+        )
+
+        context["anonymous_user_id"] = anonymous_user_id
+        context["session_id"] = session_id
+    except Exception as e:
+        logger.warning(
+            "VOICE_USAGE_CONTEXT identity resolution failed: %s",
+            e,
+        )
 
     return context
-
 
 def _voice_identity_filter(user_id=None, anonymous_user_id=None):
     if user_id:
@@ -1423,6 +1439,9 @@ def finalize_oracle_inference(
     timing_state = timing_state or {}
 
     session_id = finalization_state["session_id"]
+    anonymous_user_id = finalization_state.get(
+        "anonymous_user_id"
+    )
     user_id = finalization_state.get("user_id")
     question = finalization_state["question"]
     deity = finalization_state["deity"]
@@ -1489,6 +1508,7 @@ def finalize_oracle_inference(
                     (
                         id,
                         session_id,
+                        anonymous_user_id,
                         user_id,
                         input_type,
                         question_text,
@@ -1498,7 +1518,7 @@ def finalize_oracle_inference(
                         mode
                     )
                     VALUES (
-                        %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s
+                        %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (id) DO NOTHING
                     RETURNING id
@@ -1506,6 +1526,7 @@ def finalize_oracle_inference(
                     (
                         interaction_id,
                         session_id,
+                        anonymous_user_id,
                         user_id,
                         durable_input_type,
                         question,
@@ -1524,6 +1545,7 @@ def finalize_oracle_inference(
                         FROM oracle_interactions
                         WHERE id = %s::uuid
                           AND session_id = %s::uuid
+                          AND anonymous_user_id IS NOT DISTINCT FROM %s
                           AND user_id IS NOT DISTINCT FROM %s::uuid
                           AND input_type = %s
                           AND question_text = %s
@@ -1533,6 +1555,7 @@ def finalize_oracle_inference(
                         (
                             interaction_id,
                             session_id,
+                            anonymous_user_id,
                             user_id,
                             durable_input_type,
                             question,
@@ -1560,6 +1583,7 @@ def finalize_oracle_inference(
                     INSERT INTO oracle_interactions
                     (
                         session_id,
+                        anonymous_user_id,
                         user_id,
                         input_type,
                         question_text,
@@ -1568,11 +1592,12 @@ def finalize_oracle_inference(
                         model_name,
                         mode
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
                         session_id,
+                        anonymous_user_id,
                         user_id,
                         durable_input_type,
                         question,
@@ -1664,7 +1689,7 @@ def finalize_oracle_inference(
     record_oracle_usage_event(
         session_id=session_id,
         user_id=user_id,
-        anonymous_user_id=session_id,
+        anonymous_user_id=anonymous_user_id,
         plan_code=plan_code,
         usage_class=usage_class,
         input_mode=input_mode,
@@ -1736,7 +1761,7 @@ def finalize_oracle_inference(
         "timestamp": str(datetime.datetime.now()),
         "session_id": session_id,
         "seeker_id": user_id,
-        "anonymous_user_id": session_id,
+        "anonymous_user_id": anonymous_user_id,
         "question": question,
         "oracle_used": deity,
         "answer": raw_answer,
@@ -3450,6 +3475,7 @@ def create_ingestion_job(
     *,
     scroll_id: Optional[str] = None,
     session_id: Optional[str] = None,
+    anonymous_user_id: Optional[str] = None,
     user_id: Optional[str] = None,
     job_type: str = "scroll_upload",
     status: str = "queued",
@@ -3461,10 +3487,12 @@ def create_ingestion_job(
     """
     Create a durable ingestion job record.
 
-    This helper is intentionally not wired into /upload_scroll yet.
-    Phase 11.8C.2 only establishes safe queue primitives.
+    session_id is Oracle conversation identity.
+    anonymous_user_id is persistent browser/device identity.
+    user_id is authenticated seeker identity.
     """
     conn = get_db_connection()
+
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -3472,6 +3500,7 @@ def create_ingestion_job(
                 INSERT INTO ingestion_jobs (
                     scroll_id,
                     session_id,
+                    anonymous_user_id,
                     user_id,
                     job_type,
                     status,
@@ -3480,12 +3509,13 @@ def create_ingestion_job(
                     mime_type,
                     corpus_layer
                 )
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 RETURNING id;
                 """,
                 (
                     scroll_id,
                     session_id,
+                    anonymous_user_id,
                     user_id,
                     job_type,
                     status,
@@ -3495,29 +3525,42 @@ def create_ingestion_job(
                     corpus_layer,
                 )
             )
+
             row = cur.fetchone()
 
         conn.commit()
-        job_id = str(row["id"]) if row and row.get("id") else None
+
+        job_id = (
+            str(row["id"])
+            if row and row.get("id")
+            else None
+        )
+
         logger.info(
-            "INGESTION_JOB_CREATED job_id=%s scroll_id=%s user_id_present=%s session_id_present=%s status=%s storage_ref_present=%s",
+            "INGESTION_JOB_CREATED job_id=%s scroll_id=%s "
+            "user_id_present=%s anonymous_user_id_present=%s "
+            "session_id_present=%s status=%s storage_ref_present=%s",
             job_id,
             scroll_id,
             bool(user_id),
+            bool(anonymous_user_id),
             bool(session_id),
             status,
             bool(storage_ref),
         )
+
         return job_id
 
     except Exception as e:
         conn.rollback()
-        logger.error("INGESTION_JOB_CREATE_FAILED error=%s", e)
+        logger.error(
+            "INGESTION_JOB_CREATE_FAILED error=%s",
+            e,
+        )
         raise
 
     finally:
         conn.close()
-
 
 def update_ingestion_job_status(
     job_id: str,
@@ -3716,24 +3759,40 @@ def _isoformat_or_none(value):
     return str(value)
 
 
-def request_can_view_ingestion_job(request: Request, job: dict) -> bool:
+def request_can_view_ingestion_job(
+    request: Request,
+    job: dict,
+) -> bool:
     current_user = get_current_user(request)
-    job_user_id = str(job.get("user_id")) if job.get("user_id") else None
-
-    if current_user and job_user_id and str(current_user.get("user_id")) == job_user_id:
-        return True
 
     if current_user and current_user.get("role") == "admin":
         return True
 
-    request_anonymous_id = (request.headers.get("X-Anonymous-User-Id") or "").strip()
-    job_session_id = str(job.get("session_id")) if job.get("session_id") else None
+    job_user_id = _canonical_identity_uuid(
+        job.get("user_id")
+    )
 
-    if request_anonymous_id and job_session_id and request_anonymous_id == job_session_id:
-        return True
+    if job_user_id:
+        current_user_id = _canonical_identity_uuid(
+            current_user.get("user_id")
+            if current_user
+            else None
+        )
 
-    return False
+        return current_user_id == job_user_id
 
+    request_anonymous_id = _canonical_identity_uuid(
+        get_browser_token_from_request(request)
+    )
+    job_anonymous_id = _canonical_identity_uuid(
+        job.get("anonymous_user_id")
+    )
+
+    return bool(
+        request_anonymous_id
+        and job_anonymous_id
+        and request_anonymous_id == job_anonymous_id
+    )
 
 def serialize_ingestion_job_status(job: dict) -> dict:
     result_json = _safe_ingestion_result_json(job.get("result_json"))
@@ -5130,10 +5189,36 @@ def process_one_queued_scroll_ingestion_job() -> dict:
 
     job_id = str(job["id"])
     storage_ref = job.get("storage_ref")
-    original_filename = job.get("original_filename") or storage_ref or "queued_scroll"
+    original_filename = (
+        job.get("original_filename")
+        or storage_ref
+        or "queued_scroll"
+    )
     mime_type = job.get("mime_type")
-    session_id = str(job["session_id"]) if job.get("session_id") else None
-    user_id = str(job["user_id"]) if job.get("user_id") else None
+
+    session_id = _canonical_identity_uuid(
+        job.get("session_id")
+    )
+    anonymous_user_id = _canonical_identity_uuid(
+        job.get("anonymous_user_id")
+    )
+    user_id = _canonical_identity_uuid(
+        job.get("user_id")
+    )
+
+    # Backfilled legacy jobs may still contain the historical
+    # browser id in session_id. Never preserve that as conversation
+    # identity in newly ingested records.
+    if (
+        session_id
+        and anonymous_user_id
+        and session_id == anonymous_user_id
+    ):
+        logger.warning(
+            "INGESTION_JOB_LEGACY_SESSION_ID job_id=%s",
+            job_id,
+        )
+        session_id = None
 
     if not storage_ref:
         update_ingestion_job_status(
@@ -5155,24 +5240,30 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             "error": "missing_storage_ref",
         }
 
-    if not session_id:
+    # Anonymous jobs require browser identity. Authenticated legacy
+    # jobs may still be processed from their durable user ownership.
+    if not anonymous_user_id and not user_id:
         update_ingestion_job_status(
             job_id,
             "failed",
-            error_message="Queued ingestion job missing session_id",
+            error_message=(
+                "Queued ingestion job missing ownership identity"
+            ),
         )
         update_library_upload_for_ingestion_job(
             job_id,
             seeker_status="failed",
-            admin_status="missing_session_id",
-            metadata_json={"error": "missing_session_id"},
+            admin_status="missing_anonymous_user_id",
+            metadata_json={
+                "error": "missing_ownership_identity"
+            },
         )
         return {
             "ok": False,
             "processed": False,
             "job_id": job_id,
             "status": "failed",
-            "error": "missing_session_id",
+            "error": "missing_ownership_identity",
         }
 
     materialized_file_path = None
@@ -5232,7 +5323,8 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             safe_name=storage_ref,
             original_filename=original_filename,
             mime_type=mime_type,
-            anonymous_user_id=session_id,
+            session_id=session_id,
+            anonymous_user_id=anonymous_user_id,
             authenticated_user_id=user_id,
             preserve_unreadable_file=True,
             preserve_duplicate_file=True,
@@ -6297,64 +6389,33 @@ def apply_admin_entitlement_override(
 
 
 def get_oracle_usage_counts(
-    session_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    window_start: Optional[datetime.datetime] = None
+    user_id: str,
+    window_start: Optional[datetime.datetime] = None,
 ) -> dict:
+    """
+    Count authenticated seeker Oracle usage.
+
+    Anonymous browser usage is intentionally handled separately by
+    get_anonymous_oracle_usage_counts().
+    """
+    if not user_id:
+        raise ValueError(
+            "user_id is required for authenticated Oracle usage"
+        )
+
     conn = get_db_connection()
+
     try:
         with conn.cursor() as cur:
-            if user_id:
-                if window_start:
-                    cur.execute(
-                        """
-                        SELECT COUNT(*) AS total
-                        FROM oracle_interactions
-                        WHERE user_id = %s
-                          AND created_at >= %s
-                        """,
-                        (user_id, window_start)
-                    )
-                    usage_row = cur.fetchone()
-
-                    cur.execute(
-                        """
-                        SELECT mode, COUNT(*) AS total
-                        FROM oracle_interactions
-                        WHERE user_id = %s
-                          AND created_at >= %s
-                        GROUP BY mode
-                        """,
-                        (user_id, window_start)
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT COUNT(*) AS total
-                        FROM oracle_interactions
-                        WHERE user_id = %s
-                        """,
-                        (user_id,)
-                    )
-                    usage_row = cur.fetchone()
-
-                    cur.execute(
-                        """
-                        SELECT mode, COUNT(*) AS total
-                        FROM oracle_interactions
-                        WHERE user_id = %s
-                        GROUP BY mode
-                        """,
-                        (user_id,)
-                    )
-            else:
+            if window_start:
                 cur.execute(
                     """
                     SELECT COUNT(*) AS total
                     FROM oracle_interactions
-                    WHERE session_id = %s
+                    WHERE user_id = %s
+                      AND created_at >= %s
                     """,
-                    (session_id,)
+                    (user_id, window_start)
                 )
                 usage_row = cur.fetchone()
 
@@ -6362,10 +6423,31 @@ def get_oracle_usage_counts(
                     """
                     SELECT mode, COUNT(*) AS total
                     FROM oracle_interactions
-                    WHERE session_id = %s
+                    WHERE user_id = %s
+                      AND created_at >= %s
                     GROUP BY mode
                     """,
-                    (session_id,)
+                    (user_id, window_start)
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM oracle_interactions
+                    WHERE user_id = %s
+                    """,
+                    (user_id,)
+                )
+                usage_row = cur.fetchone()
+
+                cur.execute(
+                    """
+                    SELECT mode, COUNT(*) AS total
+                    FROM oracle_interactions
+                    WHERE user_id = %s
+                    GROUP BY mode
+                    """,
+                    (user_id,)
                 )
 
             mode_rows = cur.fetchall()
@@ -6375,7 +6457,10 @@ def get_oracle_usage_counts(
 
     return {
         "questions_used": usage_row["total"] if usage_row else 0,
-        "mode_counts": {row["mode"]: row["total"] for row in mode_rows},
+        "mode_counts": {
+            row["mode"]: row["total"]
+            for row in mode_rows
+        },
     }
 
 def get_question_limit(user: Optional[dict]) -> int:
@@ -6838,7 +6923,10 @@ def get_anonymous_oracle_usage_counts(
     }
 
 
-def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
+def can_user_ask(
+    anonymous_user_id: str,
+    user_id: Optional[str] = None,
+) -> bool:
     if user_id:
         entitlement = get_user_entitlement_snapshot(user_id)
         usage_window_start = get_effective_usage_window_start(entitlement)
@@ -6847,36 +6935,45 @@ def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
             window_start=usage_window_start
         )
 
-        if plan_has_unlimited_questions(entitlement["effective_plan_code"]):
+        if plan_has_unlimited_questions(
+            entitlement["effective_plan_code"]
+        ):
             return True
 
         limit = PLAN_LIMITS.get(
             entitlement["effective_plan_code"],
             PLAN_LIMITS["anon"]
         )
+
         return usage["questions_used"] < limit
 
-    usage = get_oracle_usage_counts(session_id=session_id)
+    usage = get_anonymous_oracle_usage_counts(anonymous_user_id)
     return usage["questions_used"] < PLAN_LIMITS["anon"]
 
+
 def get_or_create_session_id(request: Request) -> str:
-    browser_token = get_browser_token_from_request(request)
-    session_id = request.session.get("session_id")
+    """
+    Resolve the current Oracle conversation.
 
-    if browser_token:
-        if session_id != browser_token:
-            request.session["session_id"] = browser_token
-        return browser_token
+    Historical behavior promoted X-Anonymous-User-Id directly into
+    session_id. The browser identity is now resolved independently and
+    this wrapper returns only a bound conversation UUID.
+    """
+    anonymous_user_id = get_or_create_anonymous_user_id(request)
+    user_id = _canonical_identity_uuid(
+        request.session.get("user_id")
+    )
 
-    if not session_id:
-        session_id = str(uuid.uuid4())
-        request.session["session_id"] = session_id
-
-    return session_id
+    return get_or_create_bound_session_id(
+        request,
+        anonymous_user_id,
+        user_id,
+    )
 
 
 def get_anonymous_upload_stats(anonymous_user_id: str) -> dict:
     conn = get_db_connection()
+
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -6885,18 +6982,19 @@ def get_anonymous_upload_stats(anonymous_user_id: str) -> dict:
                     COUNT(*) AS upload_count,
                     MAX(created_at) AS last_uploaded_at
                 FROM scrolls
-                WHERE session_id = %s
+                WHERE anonymous_user_id = %s
                 """,
                 (anonymous_user_id,)
             )
+
             row = cur.fetchone() or {}
+
             return {
                 "upload_count": row.get("upload_count", 0) or 0,
                 "last_uploaded_at": row.get("last_uploaded_at"),
             }
     finally:
         conn.close()
-
 
 def build_claim_nudges(upload_count: int) -> list[str]:
     """
@@ -7020,68 +7118,106 @@ def refresh_user_scroll_count(user_id: str) -> int:
     return total
 
 
-def merge_anonymous_history_into_user(session_id: Optional[str], user_id: str) -> None:
+def claim_anonymous_history_into_user(
+    anonymous_user_id: str,
+    user_id: str,
+) -> None:
     """
-    Merge this browser's anonymous history into the authenticated user record.
-    This fixes /me skew after login/register in the same browser.
+    Claim only genuinely unowned activity from this browser identity.
+
+    Already-authenticated ownership is immutable here. In particular,
+    this routine must never move a scroll association from one user to
+    another user.
     """
-    if not session_id:
-        return
+    anonymous_user_id = _canonical_identity_uuid(
+        anonymous_user_id
+    )
+    user_id = _canonical_identity_uuid(user_id)
+
+    if not anonymous_user_id:
+        raise ValueError("anonymous_user_id must be a valid UUID")
+
+    if not user_id:
+        raise ValueError("user_id must be a valid UUID")
 
     conn = get_db_connection()
+
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE oracle_interactions
-                SET user_id = %s
-                WHERE session_id = %s
+                SET user_id = %s::uuid
+                WHERE anonymous_user_id = %s
                   AND user_id IS NULL
                 """,
-                (user_id, session_id)
+                (user_id, anonymous_user_id)
             )
 
             cur.execute(
                 """
                 DELETE FROM scroll_associations sa
                 USING scroll_associations existing
-                WHERE sa.session_id = %s
+                WHERE sa.anonymous_user_id = %s
+                  AND sa.user_id IS NULL
                   AND sa.scroll_id = existing.scroll_id
-                  AND existing.user_id = %s
+                  AND existing.user_id = %s::uuid
                   AND sa.id <> existing.id
-                  AND (sa.user_id IS NULL OR sa.user_id <> %s)
                 """,
-                (session_id, user_id, user_id)
+                (anonymous_user_id, user_id)
             )
 
             cur.execute(
                 """
                 UPDATE scroll_associations
-                SET user_id = %s
-                WHERE session_id = %s
-                  AND (user_id IS NULL OR user_id <> %s)
+                SET user_id = %s::uuid
+                WHERE anonymous_user_id = %s
+                  AND user_id IS NULL
                 """,
-                (user_id, session_id, user_id)
+                (user_id, anonymous_user_id)
             )
 
             cur.execute(
                 """
                 UPDATE scrolls
-                SET user_id = %s,
+                SET
+                    user_id = %s::uuid,
                     corpus_layer = CASE
                         WHEN corpus_layer = 'community' THEN 'personal'
                         ELSE corpus_layer
                     END
-                WHERE session_id = %s
+                WHERE anonymous_user_id = %s
                   AND user_id IS NULL
                 """,
-                (user_id, session_id)
+                (user_id, anonymous_user_id)
+            )
+
+            cur.execute(
+                """
+                UPDATE library_uploads
+                SET user_id = %s::uuid
+                WHERE anonymous_user_id = %s
+                  AND user_id IS NULL
+                """,
+                (user_id, anonymous_user_id)
+            )
+
+            cur.execute(
+                """
+                UPDATE ingestion_jobs
+                SET user_id = %s::uuid
+                WHERE anonymous_user_id = %s
+                  AND user_id IS NULL
+                """,
+                (user_id, anonymous_user_id)
             )
 
         conn.commit()
+
     except Exception:
         conn.rollback()
         raise
+
     finally:
         conn.close()
 
@@ -7827,7 +7963,7 @@ def get_admin_user_usage_report(user_id: str, days: int = 30) -> dict:
 
 
 
-def build_authenticated_me_response(user: dict, session_id: str) -> dict:
+def build_authenticated_me_response(user: dict, anonymous_user_id: str) -> dict:
     donation_stats = get_user_donation_stats(user["user_id"])
     entitlement = get_user_entitlement_snapshot(user["user_id"])
     support = build_support_status_payload(entitlement)
@@ -7892,7 +8028,7 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
         "role": normalize_user_role(user.get("role")),
         "last_login": user_row.get("last_login").isoformat() if user_row.get("last_login") else None,
         "seeker_id": user.get("seeker_id"),
-        "anonymous_user_id": session_id,
+        "anonymous_user_id": anonymous_user_id,
         "scroll_count": authoritative_scroll_count,
         "scrolls_donated": authoritative_scroll_count,
         "legacy_scroll_count": user_row.get("legacy_scroll_count", 0),
@@ -7946,55 +8082,53 @@ def build_authenticated_me_response(user: dict, session_id: str) -> dict:
     }
 
 
-def build_anonymous_me_response(session_id: str) -> dict:
+def build_anonymous_me_response(
+    anonymous_user_id: str,
+) -> dict:
+    usage = get_anonymous_oracle_usage_counts(
+        anonymous_user_id
+    )
+    questions_used = usage["questions_used"]
+    mode_counts = usage["mode_counts"]
+
     conn = get_db_connection()
+
     try:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT COUNT(*) AS total
-                FROM oracle_interactions
-                WHERE session_id = %s
-                """,
-                (session_id,)
-            )
-            usage_row = cur.fetchone()
-            questions_used = usage_row["total"] if usage_row else 0
-
-            cur.execute(
-                """
-                SELECT mode, COUNT(*) AS total
-                FROM oracle_interactions
-                WHERE session_id = %s
-                GROUP BY mode
-                """,
-                (session_id,)
-            )
-            mode_rows = cur.fetchall()
-
-            cur.execute(
-                """
                 SELECT COUNT(DISTINCT scroll_id) AS total
                 FROM scroll_associations
-                WHERE session_id = %s
+                WHERE anonymous_user_id = %s
+                  AND user_id IS NULL
                 """,
-                (session_id,)
+                (anonymous_user_id,)
             )
+
             scroll_row = cur.fetchone()
-            session_scroll_count = scroll_row["total"] if scroll_row else 0
+            anonymous_scroll_count = (
+                scroll_row["total"] if scroll_row else 0
+            )
     finally:
         conn.close()
 
-    question_limit = 9
-    question_display = get_question_display("anon", questions_used, question_limit)
-    mode_counts = {row["mode"]: row["total"] for row in mode_rows}
+    question_limit = PLAN_LIMITS["anon"]
+    question_display = get_question_display(
+        "anon",
+        questions_used,
+        question_limit,
+    )
+
     combined_title = compute_combined_title(
-        session_scroll_count,
+        anonymous_scroll_count,
         "anon",
         authenticated=False
     )
+
     support = build_anonymous_support_status_payload()
-    continuity_nudges = build_claim_nudges(session_scroll_count)
+    continuity_nudges = build_claim_nudges(
+        anonymous_scroll_count
+    )
 
     return {
         "authenticated": False,
@@ -8003,9 +8137,9 @@ def build_anonymous_me_response(session_id: str) -> dict:
         "email_verified": False,
         "last_login": None,
         "seeker_id": None,
-        "anonymous_user_id": session_id,
-        "scroll_count": session_scroll_count,
-        "scrolls_donated": session_scroll_count,
+        "anonymous_user_id": anonymous_user_id,
+        "scroll_count": anonymous_scroll_count,
+        "scrolls_donated": anonymous_scroll_count,
         "plan_code": None,
         "stored_plan_code": None,
         "current_access_plan_code": "anon",
@@ -8023,7 +8157,9 @@ def build_anonymous_me_response(session_id: str) -> dict:
         "voice_access": get_voice_policy("anon"),
         "continuity_nudges": continuity_nudges,
         "anonymous_upload_limit": ANONYMOUS_UPLOAD_LIMIT,
-        "claim_required": session_scroll_count >= ANONYMOUS_UPLOAD_LIMIT,
+        "claim_required": (
+            anonymous_scroll_count >= ANONYMOUS_UPLOAD_LIMIT
+        ),
         "entitlement": {
             "status": "none",
             "raw_plan_code": "anon",
@@ -8048,13 +8184,22 @@ def build_anonymous_me_response(session_id: str) -> dict:
             "questions_asked": questions_used,
             "questions_used": questions_used,
             "question_limit": question_limit,
-            "questions_remaining": max(question_limit - questions_used, 0),
-            "question_limit_display": question_display["question_limit_display"],
-            "questions_remaining_display": question_display["questions_remaining_display"],
-            "is_unlimited_questions": question_display["is_unlimited_questions"],
+            "questions_remaining": max(
+                question_limit - questions_used,
+                0,
+            ),
+            "question_limit_display": (
+                question_display["question_limit_display"]
+            ),
+            "questions_remaining_display": (
+                question_display["questions_remaining_display"]
+            ),
+            "is_unlimited_questions": (
+                question_display["is_unlimited_questions"]
+            ),
             "hathor_questions": mode_counts.get("Hathor", 0),
-            "moses_questions": mode_counts.get("Moses", 0)
-        }
+            "moses_questions": mode_counts.get("Moses", 0),
+        },
     }
 
 @app.get("/audio/{filename}")
@@ -8903,6 +9048,7 @@ async def voice_realtime_interaction_endpoint(request: Request):
                 INSERT INTO oracle_interactions
                     (
                         session_id,
+                        anonymous_user_id,
                         user_id,
                         input_type,
                         question_text,
@@ -8915,7 +9061,7 @@ async def voice_realtime_interaction_endpoint(request: Request):
                         metadata_json
                     )
                 VALUES
-                    (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                    (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
                 ON CONFLICT (client_interaction_id)
                     WHERE client_interaction_id IS NOT NULL
                     DO NOTHING
@@ -8923,6 +9069,7 @@ async def voice_realtime_interaction_endpoint(request: Request):
                 """,
                 (
                     usage_context.get("session_id"),
+                    usage_context.get("anonymous_user_id"),
                     usage_context.get("user_id"),
                     "voice",
                     user_transcript,
@@ -8946,12 +9093,31 @@ async def voice_realtime_interaction_endpoint(request: Request):
                     SELECT id
                     FROM oracle_interactions
                     WHERE client_interaction_id = %s
+                      AND session_id IS NOT DISTINCT FROM %s::uuid
+                      AND anonymous_user_id IS NOT DISTINCT FROM %s
+                      AND user_id IS NOT DISTINCT FROM %s::uuid
                     LIMIT 1
                     """,
-                    (client_interaction_id,),
+                    (
+                        client_interaction_id,
+                        usage_context.get("session_id"),
+                        usage_context.get("anonymous_user_id"),
+                        usage_context.get("user_id"),
+                    ),
                 )
                 existing = cur.fetchone()
-                inserted_id = str(existing["id"] if isinstance(existing, dict) else existing[0]) if existing else None
+
+                if not existing:
+                    raise RuntimeError(
+                        "Realtime interaction id conflict does not match "
+                        "authoritative identity context"
+                    )
+
+                inserted_id = str(
+                    existing["id"]
+                    if isinstance(existing, dict)
+                    else existing[0]
+                )
 
         conn.commit()
 
@@ -9620,8 +9786,11 @@ def auth_register(payload: AuthRegisterInput, request: Request):
     conn.commit()
     conn.close()
 
-    session_id = get_or_create_session_id(request)
-    merge_anonymous_history_into_user(session_id, user_id)
+    anonymous_user_id = get_or_create_anonymous_user_id(request)
+    claim_anonymous_history_into_user(
+        anonymous_user_id,
+        user_id,
+    )
 
     # Build verification link
     app_base_url = os.getenv("APP_BASE_URL", os.getenv("BASE_URL", "http://localhost:8000"))
@@ -9687,18 +9856,42 @@ def auth_login(payload: AuthLoginInput, request: Request):
     conn.commit()
     conn.close()
 
-    session_id = get_or_create_session_id(request)
+    anonymous_user_id = get_or_create_anonymous_user_id(request)
+
+    claim_anonymous_history_into_user(
+        anonymous_user_id,
+        user_id,
+    )
+
+    request.session.pop("session_id", None)
+
+    get_or_create_bound_session_id(
+        request,
+        anonymous_user_id,
+        user_id,
+    )
+
     request.session["user_id"] = user_id
     request.session["display_name"] = display_name
-
-    merge_anonymous_history_into_user(session_id, user_id)
 
     return {"message": "Login successful"}
 
 
 @app.post("/auth/logout")
 def auth_logout(request: Request):
+    anonymous_user_id = get_or_create_anonymous_user_id(
+        request
+    )
+
     request.session.clear()
+    request.session["anonymous_user_id"] = anonymous_user_id
+
+    get_or_create_bound_session_id(
+        request,
+        anonymous_user_id,
+        None,
+    )
+
     return {"message": "Logged out successfully"}
 
 @app.get("/auth/verify-email")
@@ -10330,13 +10523,28 @@ def admin_get_user_detail(request: Request, user_id: uuid.UUID):
 
 @app.get("/me")
 def get_me(request: Request):
-    session_id = get_or_create_session_id(request)
     user = get_current_user(request)
+    user_id = user["user_id"] if user else None
+
+    anonymous_user_id = get_or_create_anonymous_user_id(
+        request
+    )
+
+    get_or_create_bound_session_id(
+        request,
+        anonymous_user_id,
+        user_id,
+    )
 
     if user:
-        return build_authenticated_me_response(user, session_id)
+        return build_authenticated_me_response(
+            user,
+            anonymous_user_id,
+        )
 
-    return build_anonymous_me_response(session_id)
+    return build_anonymous_me_response(
+        anonymous_user_id
+    )
 
 class AdminSetRoleInput(BaseModel):
     user_id: str
@@ -10391,18 +10599,41 @@ def ingest_saved_scroll_file(
     safe_name: str,
     original_filename: str,
     mime_type: Optional[str],
-    anonymous_user_id: str,
+    session_id: Optional[str],
+    anonymous_user_id: Optional[str],
     authenticated_user_id: Optional[str],
     preserve_unreadable_file: bool = False,
     preserve_duplicate_file: bool = False,
 ):
     """
-    Ingest an already-saved scroll file using the current synchronous behavior.
+    Ingest an already-saved scroll using explicit ownership identities.
 
-    Phase 11.8E.1 only extracts the existing /upload_scroll ingestion path into
-    a reusable helper. It does not enable queued public uploads yet.
-    Future queued workers should call this same helper after claiming a job.
+    session_id is conversation provenance when one exists.
+    anonymous_user_id is persistent browser/device provenance.
+    authenticated_user_id is durable authenticated ownership.
     """
+    session_id = _canonical_identity_uuid(session_id)
+    anonymous_user_id = _canonical_identity_uuid(
+        anonymous_user_id
+    )
+    authenticated_user_id = _canonical_identity_uuid(
+        authenticated_user_id
+    )
+
+    if not anonymous_user_id and not authenticated_user_id:
+        raise ValueError(
+            "Scroll ingestion requires an ownership identity"
+        )
+
+    # Never carry the historical browser-id-as-session-id contract
+    # into newly written scroll records.
+    if (
+        session_id
+        and anonymous_user_id
+        and session_id == anonymous_user_id
+    ):
+        session_id = None
+
     file_ext = os.path.splitext(file_path)[1].lower()
 
     # Extract text
@@ -10450,20 +10681,6 @@ def ingest_saved_scroll_file(
     # Insert scroll into database
     word_count = len(extracted_text.split())
 
-    # Ensure session exists before inserting scroll
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO sessions (id)
-            VALUES (%s)
-            ON CONFLICT (id) DO NOTHING
-            """,
-            (anonymous_user_id,),
-        )
-    conn.commit()
-    conn.close()
-
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
@@ -10471,6 +10688,7 @@ def ingest_saved_scroll_file(
                 """
                 INSERT INTO scrolls (
                     session_id,
+                    anonymous_user_id,
                     user_id,
                     source_type,
                     original_filename,
@@ -10481,10 +10699,11 @@ def ingest_saved_scroll_file(
                     word_count,
                     corpus_layer
                 )
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 RETURNING id;
                 """,
                 (
+                    session_id,
                     anonymous_user_id,
                     authenticated_user_id,
                     "file",
@@ -10501,11 +10720,21 @@ def ingest_saved_scroll_file(
 
             cur.execute(
                 """
-                INSERT INTO scroll_associations (scroll_id, user_id, session_id)
-                VALUES (%s, %s, %s)
+                INSERT INTO scroll_associations (
+                    scroll_id,
+                    user_id,
+                    session_id,
+                    anonymous_user_id
+                )
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT DO NOTHING
                 """,
-                (scroll_id, authenticated_user_id, anonymous_user_id)
+                (
+                    scroll_id,
+                    authenticated_user_id,
+                    session_id,
+                    anonymous_user_id,
+                )
             )
 
         conn.commit()
@@ -10549,11 +10778,21 @@ def ingest_saved_scroll_file(
 
             cur.execute(
                 """
-                INSERT INTO scroll_associations (scroll_id, user_id, session_id)
-                VALUES (%s, %s, %s)
+                INSERT INTO scroll_associations (
+                    scroll_id,
+                    user_id,
+                    session_id,
+                    anonymous_user_id
+                )
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT DO NOTHING
                 """,
-                (scroll_id, authenticated_user_id, anonymous_user_id)
+                (
+                    scroll_id,
+                    authenticated_user_id,
+                    session_id,
+                    anonymous_user_id,
+                )
             )
 
         conn.commit()
@@ -10681,11 +10920,19 @@ def get_scroll_upload_queue_settings() -> dict:
 
 @app.post("/upload_scroll")
 async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scroll: UploadFile = File(...), seeker_id: str = Form(None), anonymous_user_id: str = Form(None)):
-    anonymous_user_id = anonymous_user_id or get_or_create_session_id(request)
-    ensure_anonymous_user(anonymous_user_id)
-
     user = get_current_user(request)
     authenticated_user_id = user["user_id"] if user else None
+
+    anonymous_user_id = get_or_create_anonymous_user_id(
+        request,
+        anonymous_user_id,
+    )
+
+    session_id = get_or_create_bound_session_id(
+        request,
+        anonymous_user_id,
+        authenticated_user_id,
+    )
 
     if not authenticated_user_id:
         stats = get_anonymous_upload_stats(anonymous_user_id)
@@ -10790,7 +11037,8 @@ async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scr
 
         corpus_layer = "personal" if authenticated_user_id else "community"
         job_id = create_ingestion_job(
-            session_id=anonymous_user_id,
+            session_id=session_id,
+            anonymous_user_id=anonymous_user_id,
             user_id=authenticated_user_id,
             job_type="scroll_upload",
             status="queued",
@@ -10903,6 +11151,7 @@ async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scr
         safe_name=safe_name,
         original_filename=scroll.filename,
         mime_type=scroll.content_type,
+        session_id=session_id,
         anonymous_user_id=anonymous_user_id,
         authenticated_user_id=authenticated_user_id,
     )
@@ -12391,15 +12640,24 @@ def admin_apply_cancel_at_period_end_downgrade(
 @app.post("/ask")
 async def ask_oracle(request: Request, payload: QuestionInput):
 
-    session_id = get_or_create_session_id(request)
-
     user = get_current_user(request)
     user_id = user["user_id"] if user else None
+
+    anonymous_user_id = get_or_create_anonymous_user_id(
+        request,
+        payload.anonymous_user_id,
+    )
+
+    session_id = get_or_create_bound_session_id(
+        request,
+        anonymous_user_id,
+        user_id,
+    )
 
     plan_code = "anon"
     memory_depth = 1
 
-    if not can_user_ask(session_id, user_id):
+    if not can_user_ask(anonymous_user_id, user_id):
         return JSONResponse(
             content={
             "oracle_message": "The Oracle grows quiet. To continue the dialogue, please log in or support the Temple."
@@ -12742,6 +13000,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "schema": "oracle_finalization_state.v1",
             "interaction_id": None,
             "session_id": str(session_id),
+            "anonymous_user_id": str(anonymous_user_id),
             "user_id": str(user_id) if user_id else None,
             "question": question,
             "deity": deity,
