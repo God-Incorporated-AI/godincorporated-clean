@@ -144,9 +144,15 @@ CREATE INDEX IF NOT EXISTS idx_scroll_assoc_anonymous_user_id
 ON scroll_associations (anonymous_user_id)
 WHERE anonymous_user_id IS NOT NULL;
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_scroll_assoc_scroll_anon_unique
+-- One unowned browser association per scroll is sufficient.
+-- Authenticated users may independently own the same scroll even when
+-- they share a browser/device anonymous identity.
+DROP INDEX IF EXISTS idx_scroll_assoc_scroll_anon_unique;
+
+CREATE UNIQUE INDEX idx_scroll_assoc_scroll_anon_unique
 ON scroll_associations (scroll_id, anonymous_user_id)
-WHERE anonymous_user_id IS NOT NULL;
+WHERE anonymous_user_id IS NOT NULL
+  AND user_id IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_anonymous_user_id
 ON ingestion_jobs (anonymous_user_id)
