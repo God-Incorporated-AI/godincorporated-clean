@@ -1684,8 +1684,16 @@ def finalize_oracle_inference(
     estimated_oracle_cost_usd = calculate_oracle_estimated_cost_usd(
         provider=model_provider,
         model=model_name,
-        prompt_tokens=actual_prompt_tokens,
-        completion_tokens=actual_completion_tokens,
+        prompt_tokens=(
+            actual_prompt_tokens
+            if actual_prompt_tokens is not None
+            else estimated_input_tokens
+        ),
+        completion_tokens=(
+            actual_completion_tokens
+            if actual_completion_tokens is not None
+            else estimated_output_tokens
+        ),
     )
 
     record_oracle_usage_event(
@@ -12707,8 +12715,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         # Phase 1 helper stays flat across tiers:
         # only the latest session exchange, no compressed history, no long-term memory.
         helper_recent_memory = get_session_memory(session_id, 1)
-        helper_compressed_memory = ""
-        helper_limited_memories = []
 
         # --- Conditional retrieval based on memory intent ---
         passages = []
@@ -12731,8 +12737,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             recent_memory = ""
             limited_memories = []
             helper_recent_memory = ""
-            helper_compressed_memory = ""
-            helper_limited_memories = []
 
         # --— structured memory weighting ---
         memory_block = ""
@@ -12816,8 +12820,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
                 memory_intent=memory_intent,
                 plan_code=plan_code,
                 recent_memory=helper_recent_memory,
-                compressed_memory=helper_compressed_memory,
-                limited_memories=helper_limited_memories,
                 passages=passages_before_llama
             )
 

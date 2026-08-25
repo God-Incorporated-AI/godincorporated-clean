@@ -19,7 +19,6 @@ LLAMA_PASSAGE_CHAR_LIMIT = int(os.getenv("LLAMA_PASSAGE_CHAR_LIMIT", "900"))
 LLAMA_MEMORY_CHAR_LIMIT = int(os.getenv("LLAMA_MEMORY_CHAR_LIMIT", "80"))
 LLAMA_BRIEF_CHAR_LIMIT = int(os.getenv("LLAMA_BRIEF_CHAR_LIMIT", "1200"))
 LLAMA_MAX_PASSAGES = int(os.getenv("LLAMA_MAX_PASSAGES", "3"))
-LLAMA_MAX_LONG_TERM_MEMORIES = int(os.getenv("LLAMA_MAX_LONG_TERM_MEMORIES", "0"))
 
 VALID_BUDGET_TIERS = {"low", "medium", "full"}
 
@@ -38,16 +37,8 @@ def build_support_packet(
     memory_intent: str,
     plan_code: str,
     recent_memory: Optional[str],
-    compressed_memory: Optional[str],
-    limited_memories: list[str],
     passages: list[str]
 ) -> dict:
-    trimmed_memories = []
-    for item in limited_memories[:LLAMA_MAX_LONG_TERM_MEMORIES]:
-        text = (item or "").strip()
-        if text:
-            trimmed_memories.append(text[:LLAMA_MEMORY_CHAR_LIMIT])
-
     trimmed_passages = []
     max_passages = 3
     count = 0
@@ -70,8 +61,6 @@ def build_support_packet(
         "memory_intent": memory_intent,
         "plan_code": plan_code,
         "recent_memory": (recent_memory or "").strip()[:LLAMA_MEMORY_CHAR_LIMIT],
-        "compressed_memory": (compressed_memory or "").strip()[:LLAMA_MEMORY_CHAR_LIMIT],
-        "long_term_memories": trimmed_memories,
         "candidate_passages": trimmed_passages
     }
 
@@ -140,18 +129,12 @@ Your job:
 
     candidate_passages = packet.get("candidate_passages") or []
     candidate_chars = sum(len((item.get("text") or "")) for item in candidate_passages if isinstance(item, dict))
-    long_term_memories = packet.get("long_term_memories") or []
-    long_term_memory_chars = sum(len(item or "") for item in long_term_memories)
-
     logger.info(
-        "LLAMA_OLLAMA_REQUEST model=%s timeout_s=%s question_chars=%s recent_memory_chars=%s compressed_memory_chars=%s long_term_memory_count=%s long_term_memory_chars=%s candidate_passages=%s candidate_chars=%s prompt_chars=%s",
+        "LLAMA_OLLAMA_REQUEST model=%s timeout_s=%s question_chars=%s recent_memory_chars=%s candidate_passages=%s candidate_chars=%s prompt_chars=%s",
         LLAMA_MODEL,
         LLAMA_TIMEOUT_SECONDS,
         len(packet.get("question") or ""),
         len(packet.get("recent_memory") or ""),
-        len(packet.get("compressed_memory") or ""),
-        len(long_term_memories),
-        long_term_memory_chars,
         len(candidate_passages),
         candidate_chars,
         len(user_prompt)
