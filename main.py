@@ -12287,16 +12287,6 @@ class QuestionInput(BaseModel):
     seeker_id: Optional[str] = None
     anonymous_user_id: Optional[str] = None
 
-def compress_dialogue(memory: str, max_chars: int = 1200) -> str:
-    if not memory:
-        return ""
-
-    if len(memory) <= max_chars:
-        return memory
-
-    # keep most recent portion
-    return "...earlier dialogue omitted...\n\n" + memory[-max_chars:]
-
 def normalize_for_scoring(text: str) -> list[str]:
     text = (text or "").lower()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
@@ -12710,7 +12700,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         # --— normalize memory inputs for prompt ---
         recent_memory = memory
-        compressed_memory = compress_dialogue(memory)
         limited_memories = memories[:5] if memories else []
 
         # Phase 1 helper stays flat across tiers:
@@ -12738,7 +12727,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         if oracle_interaction_style == "gentle_conversation":
             recent_memory = ""
-            compressed_memory = ""
             limited_memories = []
             helper_recent_memory = ""
             helper_compressed_memory = ""
@@ -12751,12 +12739,8 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             memory_block += "PRIMARY EVIDENCE — RECENT EXACT DIALOGUE:\n"
             memory_block += recent_memory + "\n\n"
 
-        if compressed_memory and compressed_memory != recent_memory:
-            memory_block += "SECONDARY EVIDENCE — EARLIER SESSION DIALOGUE:\n"
-            memory_block += compressed_memory + "\n\n"
-
         if limited_memories:
-            memory_block += "TERTIARY EVIDENCE — LONG-TERM SEEKER MEMORY:\n"
+            memory_block += "SECONDARY EVIDENCE — PRIOR SEEKER MEMORY:\n"
             memory_block += "\n\n".join(limited_memories) + "\n\n"
 
         # --— fallback retrieval if recall requested but memory is empty ---
@@ -12775,17 +12759,15 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         passages_before_llama = list(passages or [])
         long_term_memory_count = len([item for item in limited_memories if (item or "").strip()])
         recent_memory_present = bool((recent_memory or "").strip())
-        compressed_memory_present = bool((compressed_memory or "").strip())
         passage_preview_1 = _llama_preview(passages_before_llama[0]) if len(passages_before_llama) > 0 else ""
         passage_preview_2 = _llama_preview(passages_before_llama[1]) if len(passages_before_llama) > 1 else ""
 
         logger.info(
-            "LLAMA_INPUT deity=%s memory_intent=%s plan_code=%s recent_memory_present=%s compressed_memory_present=%s long_term_memory_count=%s candidate_passages=%s passage_preview_1=%s passage_preview_2=%s",
+            "LLAMA_INPUT deity=%s memory_intent=%s plan_code=%s recent_memory_present=%s long_term_memory_count=%s candidate_passages=%s passage_preview_1=%s passage_preview_2=%s",
             deity,
             memory_intent,
             plan_code,
             recent_memory_present,
-            compressed_memory_present,
             long_term_memory_count,
             len(passages_before_llama),
             passage_preview_1,
@@ -12940,7 +12922,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         """
 
         recent_memory_chars = len(recent_memory or "")
-        compressed_memory_chars = len(compressed_memory or "")
         limited_memories_chars = len("\n\n".join(limited_memories or []))
         memory_block_chars = len(memory_block or "")
         context_block_chars = len(context_block or "")
@@ -12948,7 +12929,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         enhanced_question_chars = len(enhanced_question or "")
 
         logger.info(
-            "PROMPT_BUDGET plan_code=%s deity=%s input_mode=%s memory_intent=%s interaction_style=%s response_word_cap=%s response_min_words=%s response_max_tokens=%s recent_memory_chars=%s compressed_memory_chars=%s limited_memories_count=%s limited_memories_chars=%s memory_block_chars=%s context_block_chars=%s instruction_block_chars=%s enhanced_question_chars=%s passages=%s",
+            "PROMPT_BUDGET plan_code=%s deity=%s input_mode=%s memory_intent=%s interaction_style=%s response_word_cap=%s response_min_words=%s response_max_tokens=%s recent_memory_chars=%s limited_memories_count=%s limited_memories_chars=%s memory_block_chars=%s context_block_chars=%s instruction_block_chars=%s enhanced_question_chars=%s passages=%s",
             plan_code,
             deity,
             input_mode,
@@ -12958,7 +12939,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             response_min_words,
             response_max_tokens,
             recent_memory_chars,
-            compressed_memory_chars,
             len(limited_memories or []),
             limited_memories_chars,
             memory_block_chars,
