@@ -6567,6 +6567,277 @@ def get_question_display(plan_code: str, questions_used: int, question_limit: Op
         "is_unlimited_questions": False
     }
 
+# Phase 11.10R: keep browser identity, authenticated identity, and
+# Oracle conversation identity as separate authorities.
+def _canonical_identity_uuid(value) -> Optional[str]:
+    if value is None:
+        return None
+
+    try:
+        return str(uuid.UUID(str(value).strip()))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+def get_or_create_anonymous_user_id(
+    request: Request,
+    provided_id: Optional[str] = None,
+) -> str:
+    """
+    Resolve the persistent browser/device identity.
+
+    This identity owns anonymous continuity, quotas, upload provenance,
+    and claimability. It is not an Oracle conversation id.
+    """
+    header_id = _canonical_identity_uuid(
+        get_browser_token_from_request(request)
+    )
+    provided_id = _canonical_identity_uuid(provided_id)
+    stored_id = _canonical_identity_uuid(
+        request.session.get("anonymous_user_id")
+    )
+
+    anonymous_user_id = (
+        header_id
+        or provided_id
+        or stored_id
+        or str(uuid.uuid4())
+    )
+
+    current_session_id = _canonical_identity_uuid(
+        request.session.get("session_id")
+    )
+
+    # A changed browser/device identity cannot inherit another browser's
+    # Oracle conversation. Also retire legacy cookies where the browser id
+    # itself had been stored as the conversation id.
+    if (
+        (stored_id and stored_id != anonymous_user_id)
+        or current_session_id == anonymous_user_id
+    ):
+        request.session.pop("session_id", None)
+
+    request.session["anonymous_user_id"] = anonymous_user_id
+    ensure_anonymous_user(anonymous_user_id)
+
+    return anonymous_user_id
+
+
+def ensure_session_identity(
+    session_id: str,
+    anonymous_user_id: str,
+    user_id: Optional[str] = None,
+) -> bool:
+    """
+    Create or refresh one Oracle conversation binding.
+
+    Existing conversations may acquire a user when an anonymous seeker
+    authenticates, but they may never move between browser identities or
+    between already-authenticated users.
+    """
+    session_id = _canonical_identity_uuid(session_id)
+    anonymous_user_id = _canonical_identity_uuid(anonymous_user_id)
+
+    if not session_id:
+        raise ValueError("session_id must be a valid UUID")
+
+    if not anonymous_user_id:
+        raise ValueError("anonymous_user_id must be a valid UUID")
+
+    normalized_user_id = None
+    if user_id is not None:
+        normalized_user_id = _canonical_identity_uuid(user_id)
+        if not normalized_user_id:
+            raise ValueError("user_id must be a valid UUID")
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id, anonymous_user_id
+                FROM sessions
+                WHERE id = %s::uuid
+                FOR UPDATE
+                """,
+                (session_id,),
+            )
+            row = cur.fetchone()
+
+            if row:
+                existing_user_id = (
+                    str(row["user_id"])
+                    if row.get("user_id")
+                    else None
+                )
+                existing_anonymous_user_id = (
+                    str(row["anonymous_user_id"])
+                    if row.get("anonymous_user_id")
+                    else None
+                )
+
+                if (
+                    existing_anonymous_user_id
+                    and existing_anonymous_user_id != anonymous_user_id
+                ):
+                    conn.rollback()
+                    return False
+
+                if (
+                    existing_user_id
+                    and existing_user_id != normalized_user_id
+                ):
+                    conn.rollback()
+                    return False
+
+                cur.execute(
+                    """
+                    UPDATE sessions
+                    SET
+                        user_id = COALESCE(user_id, %s::uuid),
+                        anonymous_user_id = COALESCE(
+                            anonymous_user_id,
+                            %s
+                        ),
+                        last_seen_at = now()
+                    WHERE id = %s::uuid
+                    """,
+                    (
+                        normalized_user_id,
+                        anonymous_user_id,
+                        session_id,
+                    ),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO sessions (
+                        id,
+                        user_id,
+                        anonymous_user_id,
+                        last_seen_at
+                    )
+                    VALUES (%s::uuid, %s::uuid, %s, now())
+                    """,
+                    (
+                        session_id,
+                        normalized_user_id,
+                        anonymous_user_id,
+                    ),
+                )
+
+        conn.commit()
+        return True
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
+def get_or_create_bound_session_id(
+    request: Request,
+    anonymous_user_id: str,
+    user_id: Optional[str] = None,
+) -> str:
+    """
+    Resolve one Oracle conversation id and bind it to its authorities.
+
+    A binding conflict rotates the conversation rather than allowing
+    dialogue to cross a browser or authenticated-user boundary.
+    """
+    anonymous_user_id = _canonical_identity_uuid(anonymous_user_id)
+
+    if not anonymous_user_id:
+        raise ValueError("anonymous_user_id must be a valid UUID")
+
+    normalized_user_id = None
+    if user_id is not None:
+        normalized_user_id = _canonical_identity_uuid(user_id)
+        if not normalized_user_id:
+            raise ValueError("user_id must be a valid UUID")
+
+    session_id = _canonical_identity_uuid(
+        request.session.get("session_id")
+    )
+
+    # Retire the historical browser-id-as-session-id contract.
+    if session_id == anonymous_user_id:
+        session_id = None
+
+    if session_id:
+        bound = ensure_session_identity(
+            session_id,
+            anonymous_user_id,
+            normalized_user_id,
+        )
+        if not bound:
+            session_id = None
+
+    if not session_id:
+        session_id = str(uuid.uuid4())
+
+        if not ensure_session_identity(
+            session_id,
+            anonymous_user_id,
+            normalized_user_id,
+        ):
+            raise RuntimeError(
+                "Could not establish Oracle conversation identity"
+            )
+
+    request.session["session_id"] = session_id
+    return session_id
+
+
+def get_anonymous_oracle_usage_counts(
+    anonymous_user_id: str,
+) -> dict:
+    """
+    Count anonymous-browser Oracle usage across conversation rotations.
+
+    Conversation rotation must never reset browser-level anonymous usage.
+    """
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM oracle_interactions
+                WHERE anonymous_user_id = %s
+                """,
+                (anonymous_user_id,),
+            )
+            usage_row = cur.fetchone()
+
+            cur.execute(
+                """
+                SELECT mode, COUNT(*) AS total
+                FROM oracle_interactions
+                WHERE anonymous_user_id = %s
+                GROUP BY mode
+                """,
+                (anonymous_user_id,),
+            )
+            mode_rows = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    return {
+        "questions_used": usage_row["total"] if usage_row else 0,
+        "mode_counts": {
+            row["mode"]: row["total"]
+            for row in mode_rows
+        },
+    }
+
+
 def can_user_ask(session_id: str, user_id: Optional[str] = None) -> bool:
     if user_id:
         entitlement = get_user_entitlement_snapshot(user_id)
