@@ -1879,7 +1879,8 @@ struct NativeVoiceSessionView: View {
     }
 
     private func abandonOracleInference(
-        interactionID: String
+        interactionID: String,
+        fallbackCode: String
     ) async throws {
         var request = await authenticatedVoiceRequest(
             url: TempleEnvironment.oracleInferenceAbandonURL,
@@ -1892,7 +1893,8 @@ struct NativeVoiceSessionView: View {
 
         request.httpBody = try JSONEncoder().encode(
             OracleInferenceAbandonPayload(
-                interaction_id: interactionID
+                interaction_id: interactionID,
+                fallback_code: fallbackCode
             )
         )
 
@@ -1973,7 +1975,8 @@ struct NativeVoiceSessionView: View {
         case .unavailable:
             return try await askOracleServerFallback(
                 question: question,
-                voice: voice
+                voice: voice,
+                pccFallbackCode: "pcc_preflight_unavailable"
             )
 
         case .available:
@@ -2001,12 +2004,15 @@ struct NativeVoiceSessionView: View {
             // falling back to the existing server inference path.
             guard !trimmedAnswer.isEmpty else {
                 try await abandonOracleInference(
-                    interactionID: packet.interaction_id
+                    interactionID: packet.interaction_id,
+                    fallbackCode: "pcc_empty_result"
                 )
 
                 return try await askOracleServerFallback(
                     question: question,
-                    voice: voice
+                    voice: voice,
+                    pccFallbackCode: "pcc_empty_result",
+                    abandonedInteractionID: packet.interaction_id
                 )
             }
 
@@ -2021,22 +2027,40 @@ struct NativeVoiceSessionView: View {
                 routeReason: "ios_pcc_split_phase"
             )
 
-        case .unavailable(_), .failed(_):
-            // PCC became unavailable or failed after prepare. Only use the
-            // legacy inference path after the server confirms retirement of
-            // this pending interaction.
+        case .unavailable:
             try await abandonOracleInference(
-                interactionID: packet.interaction_id
+                interactionID: packet.interaction_id,
+                fallbackCode: "pcc_execution_unavailable"
             )
 
             return try await askOracleServerFallback(
                 question: question,
-                voice: voice
+                voice: voice,
+                pccFallbackCode: "pcc_execution_unavailable",
+                abandonedInteractionID: packet.interaction_id
+            )
+
+        case .failed:
+            try await abandonOracleInference(
+                interactionID: packet.interaction_id,
+                fallbackCode: "pcc_execution_failed"
+            )
+
+            return try await askOracleServerFallback(
+                question: question,
+                voice: voice,
+                pccFallbackCode: "pcc_execution_failed",
+                abandonedInteractionID: packet.interaction_id
             )
         }
     }
 
-    private func askOracleServerFallback(question: String, voice: String) async throws -> String {
+    private func askOracleServerFallback(
+        question: String,
+        voice: String,
+        pccFallbackCode: String? = nil,
+        abandonedInteractionID: String? = nil
+    ) async throws -> String {
         let nativeAnonymousUserID = NativeAnonymousIdentity.currentID
         var request = await authenticatedVoiceRequest(url: TempleEnvironment.voiceAskURL, method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -2045,7 +2069,9 @@ struct NativeVoiceSessionView: View {
                 question: question,
                 deity: voice,
                 anonymous_user_id: nativeAnonymousUserID,
-                seeker_id: nil
+                seeker_id: nil,
+                pcc_fallback_code: pccFallbackCode,
+                pcc_abandoned_interaction_id: abandonedInteractionID
             )
         )
 
@@ -2490,6 +2516,7 @@ struct OracleInferencePrepareResponse: Decodable {
 
 struct OracleInferenceAbandonPayload: Encodable {
     let interaction_id: String
+    let fallback_code: String
 }
 
 struct OracleInferenceAbandonResponse: Decodable {
@@ -2538,6 +2565,8 @@ struct VoiceAskPayload: Encodable {
     let deity: String
     let anonymous_user_id: String
     let seeker_id: String?
+    let pcc_fallback_code: String?
+    let pcc_abandoned_interaction_id: String?
 }
 
 struct VoiceAskResponse: Decodable {

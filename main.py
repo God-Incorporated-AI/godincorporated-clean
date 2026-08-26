@@ -1361,6 +1361,13 @@ def finalize_oracle_inference(
     oracle_interaction_style = finalization_state["oracle_interaction_style"]
     response_word_cap = finalization_state["response_word_cap"]
     interaction_id = finalization_state.get("interaction_id")
+    pcc_fallback_code = finalization_state.get("pcc_fallback_code")
+    pcc_abandoned_interaction_id = finalization_state.get(
+        "pcc_abandoned_interaction_id"
+    )
+    pcc_fallback_verified = finalization_state.get(
+        "pcc_fallback_verified"
+    )
     enhanced_question_chars = int(
         finalization_state.get("enhanced_question_chars") or 0
     )
@@ -1645,6 +1652,9 @@ def finalize_oracle_inference(
                 "output_per_1m"
             ),
             "route_reason": oracle_route_reason,
+            "pcc_fallback_code": pcc_fallback_code,
+            "pcc_abandoned_interaction_id": pcc_abandoned_interaction_id,
+            "pcc_fallback_verified": pcc_fallback_verified,
         },
     )
 
@@ -4025,11 +4035,23 @@ def create_pending_oracle_inference(
         conn.close()
 
 
+IOS_PCC_POST_PREPARE_FALLBACK_CODES = {
+    "pcc_execution_unavailable",
+    "pcc_execution_failed",
+    "pcc_empty_result",
+}
+
+IOS_PCC_FALLBACK_CODES = IOS_PCC_POST_PREPARE_FALLBACK_CODES | {
+    "pcc_preflight_unavailable",
+}
+
+
 def abandon_pending_oracle_inference(
     interaction_id: str,
     *,
     session_id: str,
     user_id: Optional[str],
+    fallback_code: str,
 ) -> Optional[dict]:
     """
     Explicitly abandon one prepared split-phase inference.
@@ -4043,18 +4065,71 @@ def abandon_pending_oracle_inference(
     if not session_id:
         raise ValueError("session_id is required")
 
+    fallback_code = (fallback_code or "").strip()
+    if fallback_code not in IOS_PCC_POST_PREPARE_FALLBACK_CODES:
+        raise ValueError("invalid PCC fallback code")
+
     expire_stale_pending_oracle_inferences()
 
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
+            # Lock the authoritative prepared turn so its server-owned
+            # question can be fingerprinted before prepared content is
+            # destroyed.
+            cur.execute(
+                """
+                SELECT prepared_state
+                FROM oracle_pending_inferences
+                WHERE id = %s::uuid
+                  AND session_id = %s::uuid
+                  AND user_id IS NOT DISTINCT FROM %s::uuid
+                  AND status = 'prepared'
+                FOR UPDATE;
+                """,
+                (
+                    interaction_id,
+                    session_id,
+                    user_id,
+                ),
+            )
+            pending_row = cur.fetchone()
+
+            if not pending_row:
+                conn.rollback()
+                return None
+
+            prepared_state = pending_row.get("prepared_state") or {}
+            if isinstance(prepared_state, str):
+                prepared_state = json.loads(prepared_state)
+
+            finalization_state = dict(
+                prepared_state.get("finalization_state") or {}
+            )
+            prepared_question = finalization_state.get("question")
+
+            question_sha256 = None
+            if isinstance(prepared_question, str):
+                question_sha256 = hashlib.sha256(
+                    prepared_question.encode("utf-8")
+                ).hexdigest()
+            else:
+                logger.warning(
+                    "PCC_ABANDON_QUESTION_HASH_MISSING pending_id=%s",
+                    interaction_id,
+                )
+
             cur.execute(
                 """
                 UPDATE oracle_pending_inferences
                 SET
                     status = 'expired',
                     expires_at = NOW(),
-                    prepared_state = '{}'::jsonb
+                    prepared_state = jsonb_build_object(
+                        'abandoned', true,
+                        'fallback_code', %s,
+                        'question_sha256', %s
+                    )
                 WHERE id = %s::uuid
                   AND session_id = %s::uuid
                   AND user_id IS NOT DISTINCT FROM %s::uuid
@@ -4062,6 +4137,8 @@ def abandon_pending_oracle_inference(
                 RETURNING id, status;
                 """,
                 (
+                    fallback_code,
+                    question_sha256,
                     interaction_id,
                     session_id,
                     user_id,
@@ -4092,6 +4169,65 @@ def abandon_pending_oracle_inference(
     finally:
         conn.close()
 
+
+
+def get_verified_pcc_abandonment(
+    interaction_id: str,
+    *,
+    session_id: str,
+    user_id: Optional[str],
+    deity: str,
+    fallback_code: str,
+    question_sha256: str,
+) -> Optional[dict]:
+    """
+    Verify that a PCC fallback refers to an explicitly abandoned
+    server-owned pending inference for this same conversation identity.
+
+    The retained pending-state marker contains no plaintext question,
+    memory, prompt, or model output.
+    """
+    conn = None
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    prepared_state->>'fallback_code' AS fallback_code
+                FROM oracle_pending_inferences
+                WHERE id = %s::uuid
+                  AND session_id = %s::uuid
+                  AND user_id IS NOT DISTINCT FROM %s::uuid
+                  AND deity = %s
+                  AND input_mode = 'voice'
+                  AND status = 'expired'
+                  AND prepared_state->>'abandoned' = 'true'
+                  AND prepared_state->>'fallback_code' = %s
+                  AND prepared_state->>'question_sha256' = %s
+                LIMIT 1
+                """,
+                (
+                    interaction_id,
+                    session_id,
+                    user_id,
+                    deity,
+                    fallback_code,
+                    question_sha256,
+                ),
+            )
+            return cur.fetchone()
+    except Exception as exc:
+        logger.warning(
+            "PCC_FALLBACK_VERIFICATION_FAILED pending_id=%s error=%s",
+            interaction_id,
+            exc,
+        )
+        return None
+    finally:
+        if conn:
+            conn.close()
 
 def claim_pending_oracle_inference(
     interaction_id: str,
@@ -8305,6 +8441,7 @@ async def oracle_inference_abandon_endpoint(
     completion that has already been claimed.
     """
     interaction_id = str(payload.get("interaction_id") or "").strip()
+    fallback_code = str(payload.get("fallback_code") or "").strip()
 
     if not interaction_id:
         return JSONResponse(
@@ -8320,6 +8457,12 @@ async def oracle_inference_abandon_endpoint(
             content={"error": "interaction_id must be a valid UUID"},
         )
 
+    if fallback_code not in IOS_PCC_POST_PREPARE_FALLBACK_CODES:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "invalid PCC fallback code"},
+        )
+
     session_id = get_or_create_session_id(request)
     user = get_current_user(request)
     user_id = user["user_id"] if user else None
@@ -8328,6 +8471,7 @@ async def oracle_inference_abandon_endpoint(
         interaction_id,
         session_id=str(session_id),
         user_id=str(user_id) if user_id else None,
+        fallback_code=fallback_code,
     )
 
     if abandoned:
@@ -8347,12 +8491,15 @@ async def oracle_inference_abandon_endpoint(
                 WHERE id = %s::uuid
                   AND session_id = %s::uuid
                   AND user_id IS NOT DISTINCT FROM %s::uuid
+                  AND prepared_state->>'abandoned' = 'true'
+                  AND prepared_state->>'fallback_code' = %s
                 LIMIT 1
                 """,
                 (
                     interaction_id,
                     str(session_id),
                     str(user_id) if user_id else None,
+                    fallback_code,
                 ),
             )
             existing = cur.fetchone()
@@ -8395,6 +8542,8 @@ async def oracle_inference_prepare_endpoint(
 
     oracle_payload_data = dict(payload)
     oracle_payload_data.pop("input_mode", None)
+    oracle_payload_data.pop("pcc_fallback_code", None)
+    oracle_payload_data.pop("pcc_abandoned_interaction_id", None)
 
     oracle_payload = QuestionInput(**oracle_payload_data)
     return await ask_oracle(request, oracle_payload)
@@ -12166,6 +12315,8 @@ class QuestionInput(BaseModel):
     deity: str = "Hathor"  # Default to Hathor
     seeker_id: Optional[str] = None
     anonymous_user_id: Optional[str] = None
+    pcc_fallback_code: Optional[str] = None
+    pcc_abandoned_interaction_id: Optional[str] = None
 
 def normalize_for_scoring(text: str) -> list[str]:
     text = (text or "").lower()
@@ -12566,6 +12717,62 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         question = question[:1000]
         deity = payload.deity
         input_mode = getattr(request.state, "oracle_input_mode", "text")
+
+        pcc_fallback_code = (
+            (payload.pcc_fallback_code or "").strip() or None
+        )
+        pcc_abandoned_interaction_id = (
+            (payload.pcc_abandoned_interaction_id or "").strip() or None
+        )
+        pcc_fallback_verified = None
+
+        if (
+            input_mode != "voice"
+            or pcc_fallback_code not in IOS_PCC_FALLBACK_CODES
+        ):
+            pcc_fallback_code = None
+            pcc_abandoned_interaction_id = None
+
+        elif pcc_fallback_code == "pcc_preflight_unavailable":
+            # No pending inference exists before prepare, so this
+            # client-reported fallback cannot be server-correlated.
+            pcc_abandoned_interaction_id = None
+            pcc_fallback_verified = False
+
+        else:
+            try:
+                candidate_interaction_id = str(
+                    uuid.UUID(pcc_abandoned_interaction_id or "")
+                )
+            except (TypeError, ValueError):
+                candidate_interaction_id = None
+
+            verified_abandonment = None
+            if candidate_interaction_id:
+                verified_abandonment = get_verified_pcc_abandonment(
+                    candidate_interaction_id,
+                    session_id=str(session_id),
+                    user_id=str(user_id) if user_id else None,
+                    deity=deity,
+                    fallback_code=pcc_fallback_code,
+                    question_sha256=hashlib.sha256(
+                        (question or "").encode("utf-8")
+                    ).hexdigest(),
+                )
+
+            if verified_abandonment:
+                pcc_abandoned_interaction_id = candidate_interaction_id
+                pcc_fallback_verified = True
+            else:
+                logger.warning(
+                    "PCC_FALLBACK_CORRELATION_REJECTED "
+                    "code=%s pending_id=%s",
+                    pcc_fallback_code,
+                    pcc_abandoned_interaction_id,
+                )
+                pcc_fallback_code = None
+                pcc_abandoned_interaction_id = None
+
         logger.info(
             "ASK input_mode=%s deity=%s len=%s",
             input_mode,
@@ -12801,6 +13008,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "enhanced_question_chars": len(enhanced_question or ""),
             "prepared_input_chars": prepared_input_chars,
             "memory_has_content": bool(memory_block.strip()),
+            "pcc_fallback_code": pcc_fallback_code,
+            "pcc_abandoned_interaction_id": pcc_abandoned_interaction_id,
+            "pcc_fallback_verified": pcc_fallback_verified,
         }
 
         execution_mode = getattr(
