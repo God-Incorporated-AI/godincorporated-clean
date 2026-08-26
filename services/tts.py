@@ -54,8 +54,7 @@ def get_openai_tts_model() -> str:
 def generate_tts_audio(answer: str, voice: str) -> str:
     voice_map = {
         "Hathor": "shimmer",
-        "Moses": "onyx",
-        "Llama": "alloy"
+        "Moses": "onyx"
     }
     selected_voice = voice_map.get(voice, "onyx")
 

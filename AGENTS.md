@@ -3,7 +3,7 @@
 ## Project
 God Incorporated / The Temple of Hathor
 
-This repository is a local-first, terminal-first web application with Stripe-backed support tiers, authenticated seeker accounts, rich `/me` state, admin controls, and a future LLaMA/router layer.
+This repository is a local-first, terminal-first web application with Stripe-backed support tiers, authenticated seeker accounts, rich `/me` state, admin controls, and a future provider-neutral proprietary/self-hosted inference path.
 
 Primary product themes:
 - Hathor = intuitive, poetic, emotionally resonant oracle voice
@@ -37,14 +37,14 @@ The repo has completed:
 Treat the current codebase as post-8.5.
 
 Immediate next phase is hosted readiness / Render validation.
-Do not jump into LLaMA expansion before hosted auth, `/me`, and hosted Stripe test-mode flows are proven.
+Do not jump into proprietary/self-hosted inference work before hosted auth, `/me`, and hosted Stripe test-mode flows are proven.
 
 ## Phase ordering rules
 1. Finish hosted readiness / Render validation
 2. Then do hosted Stripe test-mode proof
 3. Then production-hardening / broadcast maturity work
 4. Then UI expert implementation pass
-5. Then LLaMA/router expansion
+5. Then provider-neutral proprietary/self-hosted inference research
 
 Do not invert this order without a strong explicit reason.
 
@@ -141,7 +141,7 @@ If the user asks “what next,” bias toward:
 - cron/scheduled reports for usage and billing observability
 - staging-to-prod workflow clarity
 
-Only move into LLaMA/router work after the hosted product spine is stable.
+Only move into proprietary/self-hosted inference work after the hosted product spine is stable.
 
 ## Repo guidance usage
 Use this file as the active operational floor.

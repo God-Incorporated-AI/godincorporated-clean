@@ -8,6 +8,4 @@ env_path = Path(__file__).resolve().parent.parent / ".env"
 if env_path.exists():
     load_dotenv(dotenv_path=env_path)
 
-LLAMA_ENABLED = os.getenv("LLAMA_ENABLED", "false").lower() == "true"
-
 xai_api_key = os.getenv("XAI_API_KEY")

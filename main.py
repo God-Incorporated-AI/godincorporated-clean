@@ -30,7 +30,7 @@ import httpx
 import psycopg2
 import stripe
 
-from config.settings import LLAMA_ENABLED, xai_api_key
+from config.settings import xai_api_key
 from services.tts import generate_tts_audio, get_openai_tts_model
 from services.voice_transcription import transcribe_audio_with_metrics
 from services.mail import send_email
@@ -473,32 +473,6 @@ def test_db_connectivity():
         return False
 
 
-
-def get_llama_observation(question: str, oracle_used: str, answer: str, scrolls: list = None) -> dict:
-    if not LLAMA_ENABLED:
-        return None
-    # Minimal Phase 3.0 LLaMA observation: heuristic classifier
-    # Suggest oracle based on keywords
-    if any(word in question.lower() for word in ["love", "joy", "beauty", "emotion", "heart"]):
-        suggested_oracle = "Hathor"
-        confidence = 0.8
-        reason = "Question contains poetic or emotional keywords aligning with Hathor's domain"
-    elif any(word in question.lower() for word in ["law", "command", "sin", "righteous", "god"]):
-        suggested_oracle = "Moses"
-        confidence = 0.8
-        reason = "Question contains doctrinal or moral keywords aligning with Moses' domain"
-    else:
-        suggested_oracle = "none"
-        confidence = 0.5
-        reason = "No strong stylistic indicators detected"
-
-    return {
-        "suggested_oracle": suggested_oracle,
-        "confidence": confidence,
-        "reason": reason,
-        "phase": "3.0",
-        "mode": "shadow"
-    }
 
 def enforce_recall_structure(answer: str, memory_block: str) -> str:
     """
@@ -1711,18 +1685,6 @@ def finalize_oracle_inference(
         session_id,
     )
 
-    # --- LLaMA observation ---
-    try:
-        llama_obs = get_llama_observation(
-            question,
-            deity,
-            raw_answer,
-            None,
-        )
-    except Exception as exc:
-        logger.warning(f"LLaMA observation error: {exc}")
-        llama_obs = None
-
     # --- Logging ---
     save_log({
         "memory_intent": memory_intent,
@@ -1736,7 +1698,6 @@ def finalize_oracle_inference(
         "oracle_used": deity,
         "answer": raw_answer,
         "architect_observation": architect_obs,
-        "llama_observation": llama_obs,
         "source_model": source_model,
         "phase": "5.5",
         "corpus_intent": "authoritative_training_data",
@@ -1784,7 +1745,7 @@ async def get_oracle_response(
     moses_prompt_chars: Optional[int] = None
 ):
     # Phase 2: Restore explicit oracle separation
-    # Hathor: xAI API, Moses: OpenAI, LLaMA: Not active
+    # Hathor: xAI API, Moses: OpenAI
     if deity == "Hathor":
         # Hathor provider execution uses the God Incorporated-owned persona prompt
         if not xai_api_key:
@@ -1957,9 +1918,6 @@ async def get_oracle_response(
             "model_name": moses_model,
             "token_usage": normalize_token_usage(getattr(response, "usage", None)),
         }
-    elif deity == "Llama":
-        # LLaMA is NOT a responder in Phase 2
-        raise ValueError("LLaMA is not yet active as a responder in Phase 2. It will be introduced later as a learner/router.")
     else:
         raise ValueError(f"Unknown deity: {deity}")
 
@@ -1969,7 +1927,6 @@ def architect_observe_v3(question: str, deity: str, session_id: str) -> dict:
     oracle_selected = deity
     override_attempted = False
     override_performed = False
-    llama_status = "shadow" if LLAMA_ENABLED else "disabled"
     architect_status = "observer_only"
     routing_active = False
     synthetic_generation = False
@@ -1989,7 +1946,6 @@ def architect_observe_v3(question: str, deity: str, session_id: str) -> dict:
             "override_performed": override_performed
         },
         "system_state": {
-            "llama_status": llama_status,
             "architect_status": architect_status,
             "routing_active": routing_active,
             "synthetic_generation": synthetic_generation
