@@ -46,7 +46,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-def choose_moses_model(raw_question: str, memory_intent: str, plan_code: str, memory_block: str, context_block: str):
+def choose_moses_model(raw_question: str, memory_block: str, context_block: str):
     moses_model_mini = os.getenv("MOSES_MODEL_MINI", "gpt-5.4-mini").strip()
     moses_model_full = os.getenv("MOSES_MODEL_FULL", "gpt-5.4").strip()
     moses_model_force = os.getenv("MOSES_MODEL_FORCE", "").strip()
@@ -8727,7 +8727,7 @@ async def voice_tts_endpoint(request: Request):
                 answer_chars=0,
                 audio_url_present=False,
                 tts_provider=os.getenv("TTS_PROVIDER", "openai"),
-                tts_model=os.getenv("TTS_MODEL"),
+                tts_model=get_openai_tts_model(),
                 tts_voice=voice,
                 metadata_json={
                     "phase": "10.7",
@@ -8748,7 +8748,7 @@ async def voice_tts_endpoint(request: Request):
         total_ms = voice_stage_ms(started_at, datetime.datetime.now())
         answer_char_count = len(answer or "")
         active_tts_provider = os.getenv("TTS_PROVIDER", "openai")
-        active_tts_model = os.getenv("TTS_MODEL") or os.getenv("OPENAI_TTS_MODEL") or get_openai_tts_model()
+        active_tts_model = get_openai_tts_model()
         tts_pricing = get_tts_pricing_info(active_tts_provider, active_tts_model)
         estimated_tts_cost_usd = calculate_tts_estimated_cost_usd(
             provider=active_tts_provider,
@@ -8812,10 +8812,10 @@ async def voice_tts_endpoint(request: Request):
             answer_chars=len(answer or ""),
             audio_url_present=False,
             tts_provider=os.getenv("TTS_PROVIDER", "openai"),
-            tts_model=os.getenv("TTS_MODEL"),
+            tts_model=get_openai_tts_model(),
             tts_voice=voice,
             metadata_json={
-                "phase": "10.5",
+                "phase": "10.7",
                 "event_source": "voice_tts_endpoint",
             }
         )
@@ -12949,8 +12949,6 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         if deity == "Moses":
             selected_moses_model, moses_route_reason, moses_prompt_chars = choose_moses_model(
                 raw_question=question,
-                memory_intent=memory_intent,
-                plan_code=plan_code,
                 memory_block=memory_block,
                 context_block=context_block
             )
