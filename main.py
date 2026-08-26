@@ -2281,58 +2281,42 @@ def get_session_memory(session_id: str, depth: Optional[int]):
     return "\n\n".join(history)
 
 def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: Optional[int]):
+    """
+    Retrieve durable memory from an authenticated seeker's prior
+    conversations. Current-conversation memory is owned exclusively by
+    get_session_memory().
+    """
+    if not user_id:
+        return []
 
     conn = get_db_connection()
 
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
 
-            if user_id:
-                if depth is None:
-                    cur.execute(
-                        """
-                        SELECT question_text, response_text
-                        FROM oracle_interactions
-                        WHERE user_id = %s
-                          AND session_id IS DISTINCT FROM %s::uuid
-                        ORDER BY created_at DESC
-                        """,
-                        (user_id, session_id)
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT question_text, response_text
-                        FROM oracle_interactions
-                        WHERE user_id = %s
-                          AND session_id IS DISTINCT FROM %s::uuid
-                        ORDER BY created_at DESC
-                        LIMIT %s
-                        """,
-                        (user_id, session_id, depth)
-                    )
+            if depth is None:
+                cur.execute(
+                    """
+                    SELECT question_text, response_text
+                    FROM oracle_interactions
+                    WHERE user_id = %s
+                      AND session_id IS DISTINCT FROM %s::uuid
+                    ORDER BY created_at DESC
+                    """,
+                    (user_id, session_id)
+                )
             else:
-                if depth is None:
-                    cur.execute(
-                        """
-                        SELECT question_text, response_text
-                        FROM oracle_interactions
-                        WHERE session_id = %s
-                        ORDER BY created_at DESC
-                        """,
-                        (session_id,)
-                    )
-                else:
-                    cur.execute(
-                        """
-                        SELECT question_text, response_text
-                        FROM oracle_interactions
-                        WHERE session_id = %s
-                        ORDER BY created_at DESC
-                        LIMIT %s
-                        """,
-                        (session_id, depth)
-                    )
+                cur.execute(
+                    """
+                    SELECT question_text, response_text
+                    FROM oracle_interactions
+                    WHERE user_id = %s
+                      AND session_id IS DISTINCT FROM %s::uuid
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (user_id, session_id, depth)
+                )
 
             rows = cur.fetchall()
 
