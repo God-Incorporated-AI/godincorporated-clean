@@ -139,11 +139,15 @@ textarea#seekerInput {
   border-radius: 8px;
 }
 
-/* Phase 4.2: Hamburger menu */
+/* Shared header and hamburger-menu foundation. */
 .header-actions {
   position: absolute;
-  top: 1rem;
+  top: 0.75rem;
   right: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  z-index: 20;
 }
 
 .menu-toggle {
@@ -159,6 +163,7 @@ textarea#seekerInput {
   position: absolute;
   top: 2.5rem;
   right: 0;
+  flex-direction: column;
   background: #fff;
   border: 1px solid #ddd;
   border-radius: 8px;
@@ -169,7 +174,7 @@ textarea#seekerInput {
 }
 
 .main-menu.show {
-  display: block;
+  display: flex;
 }
 
 .menu-section {
@@ -736,16 +741,6 @@ main.admin-console {
   line-height: 1.15;
 }
 
-.branding .header-actions {
-  position: absolute;
-  top: 0.75rem;
-  right: 1rem;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  z-index: 20;
-}
-
 .branding .temple-title {
   display: inline-flex;
   align-items: center;
@@ -773,12 +768,14 @@ main.admin-console {
   }
 
   .branding .header-actions {
-    top: 0.65rem;
-    right: 0.65rem;
+    top: 0.55rem;
+    right: 0.55rem;
   }
 
-  .menu-toggle {
+  .branding .header-actions .menu-toggle {
     line-height: 1;
+    min-width: 44px;
+    min-height: 44px;
   }
 
   .branding .temple-title {
@@ -808,19 +805,6 @@ main.admin-console {
     width: 26px;
     height: 26px;
   }
-}
-
-
-/* Phase 10.9B hotfix: keep hamburger dropdown controlled by JS */
-.branding .main-menu {
-  display: none;
-}
-
-.branding .main-menu.open,
-.branding .main-menu.show,
-.branding .main-menu.active,
-.branding .header-actions.open .main-menu {
-  display: flex;
 }
 
 
@@ -917,35 +901,7 @@ main.admin-console {
   flex: 0 0 auto !important;
 }
 
-/* Keep the mobile header action from growing over the page when user name appears. */
-.branding .header-actions {
-  max-width: min(42vw, 12rem);
-}
-
-.branding .header-actions .menu-toggle {
-  max-width: min(38vw, 10.5rem);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* If the menu button becomes a username, keep it compact on phone. */
 @media (max-width: 520px) {
-  .branding .header-actions {
-    top: 0.55rem;
-    right: 0.55rem;
-    max-width: 34vw;
-  }
-
-  .branding .header-actions .menu-toggle {
-    font-size: 0.78rem;
-    line-height: 1;
-    padding: 0.35rem 0.45rem;
-    max-width: 32vw;
-    min-width: 2.15rem;
-    min-height: 2.15rem;
-  }
-
   .branding .temple-title.crossed-title,
   .about-hero h1.crossed-title {
     white-space: nowrap;
@@ -958,19 +914,6 @@ main.admin-console {
     font-size: 0.68em !important;
   }
 }
-
-@media (max-width: 390px) {
-  .branding .header-actions {
-    max-width: 30vw;
-  }
-
-  .branding .header-actions .menu-toggle {
-    max-width: 28vw;
-    font-size: 0.72rem;
-    padding: 0.32rem 0.38rem;
-  }
-}
-
 
 /* Phase 10.9E: final mobile cross and about overlap cleanup */
 
@@ -2531,14 +2474,6 @@ body.temple-backdrop-page .main-menu {
   box-shadow: 0 18px 36px rgba(42, 20, 12, 0.28) !important;
 }
 
-body.temple-backdrop-page .branding .main-menu.show,
-body.temple-backdrop-page .branding .main-menu.open,
-body.temple-backdrop-page .branding .main-menu.active,
-body.temple-backdrop-page .branding .header-actions.open .main-menu {
-  display: flex !important;
-  flex-direction: column !important;
-}
-
 /* Center the hero/support CTA rows and make the language feel intentional. */
 body.temple-backdrop-page .support-cta-row {
   justify-content: center !important;
@@ -3605,40 +3540,13 @@ body.temple-backdrop-page .brand-lockup .godinc-wordmark {
 }
 
 
-/* Phase 11.2C.4: Nunito Sans site typography harmonization */
+/* Base typography weights; v11.4D below owns font-family authority. */
 html,
 body {
-  font-family: var(--gi-body-font);
   font-weight: 400;
 }
 
-body,
-p,
-li,
-label,
-small,
-button,
-input,
-textarea,
-select,
-.modal,
-.modal-content,
-.support-note,
-.support-card,
-.account-card,
-.account-kv,
-.profile-summary,
-.scroll-footer-note,
-.temple-footer,
-.main-menu,
-.menu-section button,
-.button-link {
-  font-family: var(--gi-body-font);
-}
-
-/* Preserve the logo wordmark as the only Baloo-branded text treatment. */
 .godinc-wordmark {
-  font-family: var(--gi-brand-font) !important;
   font-weight: 400;
 }
 
