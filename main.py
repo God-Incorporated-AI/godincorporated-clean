@@ -474,36 +474,6 @@ def test_db_connectivity():
 
 
 
-def enforce_recall_structure(answer: str, memory_block: str) -> str:
-    """
-    Ensures first sentence is grounded in actual memory.
-    """
-
-    if not memory_block or not answer:
-        return answer
-
-    # Extract a simple recall line from memory_block
-    lines = [l.strip() for l in memory_block.split("\n") if l.strip()]
-
-    # Find a usable memory line
-    recall_line = None
-    for line in lines:
-        if "User:" in line or "Seeker:" in line:
-            recall_line = line.replace("User:", "").replace("Seeker:", "").strip()
-            break
-
-    if not recall_line:
-        return answer
-
-    # Build enforced first sentence
-    enforced = f"You asked: \"{recall_line}\"."
-
-    # Avoid duplication
-    if recall_line.lower() in answer.lower():
-        return answer
-
-    return enforced + "\n\n" + answer
-
 def normalize_token_usage(usage) -> dict:
     """
     Normalize provider token usage objects into plain dicts for silent logging.
@@ -1786,8 +1756,6 @@ async def get_oracle_response(
 
                 raw_answer = response.choices[0].message.content
 
-                if force_mode == "recall":
-                    raw_answer = enforce_recall_structure(raw_answer, memory_block)
 
                 return {
                     "answer": raw_answer,
@@ -1828,8 +1796,6 @@ async def get_oracle_response(
                 data = response.json()
                 raw_answer = data["choices"][0]["message"]["content"]
 
-                if force_mode == "recall":
-                    raw_answer = enforce_recall_structure(raw_answer, memory_block)
 
                 return {
                     "answer": raw_answer,
@@ -1908,8 +1874,6 @@ async def get_oracle_response(
         response = client.chat.completions.create(**moses_request)
         raw_answer = response.choices[0].message.content
 
-        if force_mode == "recall":
-            raw_answer = enforce_recall_structure(raw_answer, memory_block)
 
         return {
             "answer": raw_answer,
@@ -8556,12 +8520,6 @@ async def oracle_inference_complete_endpoint(
         )
 
     finalization_state["interaction_id"] = interaction_id
-
-    if finalization_state.get("memory_intent") == "recall":
-        answer = enforce_recall_structure(
-            answer,
-            completion_state.get("memory_block") or "",
-        )
 
     inference_result = normalize_oracle_inference_result(
         {
