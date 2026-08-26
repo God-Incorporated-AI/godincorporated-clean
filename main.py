@@ -4029,6 +4029,15 @@ IOS_PCC_FALLBACK_CODES = IOS_PCC_POST_PREPARE_FALLBACK_CODES | {
     "pcc_preflight_unavailable",
 }
 
+DEVICE_EXECUTION_PROFILES = {
+    "apple_pcc": {
+        "source_model": "PrivateCloudComputeLanguageModel",
+        "model_provider": "apple",
+        "model_name": "PrivateCloudComputeLanguageModel",
+        "route_reason": "ios_pcc_split_phase",
+    },
+}
+
 
 def abandon_pending_oracle_inference(
     interaction_id: str,
@@ -8521,11 +8530,24 @@ async def oracle_inference_prepare_endpoint(
             content={"error": "input_mode must be text or voice"},
         )
 
+    execution_target = (
+        str(payload.get("execution_target") or "")
+        .strip()
+        .lower()
+    )
+    if execution_target not in DEVICE_EXECUTION_PROFILES:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "unsupported execution_target"},
+        )
+
     request.state.oracle_input_mode = input_mode
     request.state.oracle_execution_mode = "device_prepare"
+    request.state.oracle_execution_target = execution_target
 
     oracle_payload_data = dict(payload)
     oracle_payload_data.pop("input_mode", None)
+    oracle_payload_data.pop("execution_target", None)
     oracle_payload_data.pop("pcc_fallback_code", None)
     oracle_payload_data.pop("pcc_abandoned_interaction_id", None)
 
@@ -8636,9 +8658,6 @@ async def oracle_inference_complete_endpoint(
     finalization_state = dict(
         prepared_state.get("finalization_state") or {}
     )
-    completion_state = dict(
-        prepared_state.get("completion_state") or {}
-    )
 
     if not finalization_state:
         raise RuntimeError(
@@ -8652,16 +8671,27 @@ async def oracle_inference_complete_endpoint(
             "Pending Oracle deity does not match finalization state"
         )
 
+    execution_target = str(
+        prepared_state.get("execution_target") or ""
+    ).strip().lower()
+    execution_profile = DEVICE_EXECUTION_PROFILES.get(
+        execution_target
+    )
+    if not execution_profile:
+        raise RuntimeError(
+            "Pending Oracle inference has no authorized execution target"
+        )
+
     finalization_state["interaction_id"] = interaction_id
 
     inference_result = normalize_oracle_inference_result(
         {
             "answer": answer,
-            "source_model": payload.get("source_model") or "Device",
-            "model_provider": payload.get("model_provider") or "device",
-            "model_name": payload.get("model_name") or "device",
-            "token_usage": payload.get("token_usage") or {},
-            "route_reason": payload.get("route_reason"),
+            "source_model": execution_profile["source_model"],
+            "model_provider": execution_profile["model_provider"],
+            "model_name": execution_profile["model_name"],
+            "token_usage": {},
+            "route_reason": execution_profile["route_reason"],
         },
         deity,
     )
@@ -13002,12 +13032,20 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         )
 
         if execution_mode == "device_prepare":
+            execution_target = getattr(
+                request.state,
+                "oracle_execution_target",
+                None,
+            )
+            if execution_target not in DEVICE_EXECUTION_PROFILES:
+                raise RuntimeError(
+                    "Device inference has no authorized execution target"
+                )
+
             pending_state = {
-                "schema": "oracle_pending_inference_state.v1",
+                "schema": "oracle_pending_inference_state.v2",
+                "execution_target": execution_target,
                 "finalization_state": finalization_state,
-                "completion_state": {
-                    "memory_block": memory_block or "",
-                },
             }
 
             pending_id = create_pending_oracle_inference(

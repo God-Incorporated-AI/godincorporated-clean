@@ -1838,7 +1838,8 @@ struct NativeVoiceSessionView: View {
                 deity: voice,
                 seeker_id: nil,
                 anonymous_user_id: nativeAnonymousUserID,
-                input_mode: "voice"
+                input_mode: "voice",
+                execution_target: "apple_pcc"
             )
         )
 
@@ -1919,11 +1920,7 @@ struct NativeVoiceSessionView: View {
 
     private func completeOracleInference(
         interactionID: String,
-        answer: String,
-        sourceModel: String,
-        modelProvider: String,
-        modelName: String,
-        routeReason: String?
+        answer: String
     ) async throws -> String {
         var request = await authenticatedVoiceRequest(
             url: TempleEnvironment.oracleInferenceCompleteURL,
@@ -1937,12 +1934,7 @@ struct NativeVoiceSessionView: View {
         request.httpBody = try JSONEncoder().encode(
             OracleInferenceCompletePayload(
                 interaction_id: interactionID,
-                answer: answer,
-                source_model: sourceModel,
-                model_provider: modelProvider,
-                model_name: modelName,
-                token_usage: [:],
-                route_reason: routeReason
+                answer: answer
             )
         )
 
@@ -2020,11 +2012,7 @@ struct NativeVoiceSessionView: View {
             // have durably finalized this UUID even if the response is lost.
             return try await completeOracleInference(
                 interactionID: packet.interaction_id,
-                answer: trimmedAnswer,
-                sourceModel: "PrivateCloudComputeLanguageModel",
-                modelProvider: "apple",
-                modelName: "PrivateCloudComputeLanguageModel",
-                routeReason: "ios_pcc_split_phase"
+                answer: trimmedAnswer
             )
 
         case .unavailable:
@@ -2501,6 +2489,7 @@ struct OracleInferencePreparePayload: Encodable {
     let seeker_id: String?
     let anonymous_user_id: String?
     let input_mode: String
+    let execution_target: String
 }
 
 struct OracleInferencePrepareResponse: Decodable {
@@ -2529,11 +2518,6 @@ struct OracleInferenceAbandonResponse: Decodable {
 struct OracleInferenceCompletePayload: Encodable {
     let interaction_id: String
     let answer: String
-    let source_model: String
-    let model_provider: String
-    let model_name: String
-    let token_usage: [String: Int]
-    let route_reason: String?
 }
 
 struct OracleInferenceCompleteResponse: Decodable {
