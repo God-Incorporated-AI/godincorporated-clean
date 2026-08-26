@@ -12175,10 +12175,15 @@ def normalize_for_scoring(text: str) -> list[str]:
 def detect_memory_intent(question: str) -> str:
     q = (question or "").lower().strip()
 
+    # Recall mode changes memory depth, retrieval, response budgeting, and
+    # prompt semantics. Enter it only for explicit references to prior
+    # seeker-Oracle dialogue, not for generic temporal words.
     recall_patterns = [
         "what did i ask",
         "what did i say",
         "what did you say",
+        "what did we discuss",
+        "what did we talk about",
         "what was my last question",
         "what was your last answer",
         "earlier you said",
@@ -12186,7 +12191,11 @@ def detect_memory_intent(question: str) -> str:
         "as i said before",
         "didn't i say",
         "have i asked",
+        "did i ask",
         "have we discussed",
+        "did we discuss",
+        "have we talked about",
+        "did we talk about",
         "what have we discussed",
         "what have we talked about",
         "what were we talking about",
@@ -12199,12 +12208,21 @@ def detect_memory_intent(question: str) -> str:
         "past conversation",
         "previous conversation",
         "last conversation",
-        "remind me what",
-        "recall",
-        "remember when",
-        "last time",
-        "previously",
-        "before"
+        "remind me what i asked",
+        "remind me what i said",
+        "remind me what you said",
+        "remind me what we discussed",
+        "remind me what we talked about",
+        "recall what i asked",
+        "recall what i said",
+        "recall what you said",
+        "recall our conversation",
+        "recall our dialogue",
+        "remember when i asked",
+        "remember when i said",
+        "remember when you said",
+        "remember when we discussed",
+        "remember when we talked"
     ]
 
     for pattern in recall_patterns:
