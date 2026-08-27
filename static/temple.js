@@ -1714,6 +1714,7 @@ if (seekerInput && oracleForm) {
     assistantTurnIndex: 0,
     assistantSpeaking: false,
     turnCommitPending: false,
+    responsePreparePending: false,
 
     preRollChunks: [],
     preRollSamples: 0,
@@ -2230,6 +2231,7 @@ if (seekerInput && oracleForm) {
     templeRealtimeState.assistantTurnIndex = 0;
     templeRealtimeState.assistantSpeaking = false;
     templeRealtimeState.turnCommitPending = false;
+    templeRealtimeState.responsePreparePending = false;
     templeRealtimeState.endAfterCurrentResponse = false;
     templeRealtimeState.preRollChunks = [];
     templeRealtimeState.preRollSamples = 0;
@@ -2439,7 +2441,9 @@ if (seekerInput && oracleForm) {
       !templeRealtimeState.active ||
       !templeRealtimeState.socket ||
       templeRealtimeState.socket.readyState !== WebSocket.OPEN ||
-      templeRealtimeState.assistantSpeaking
+      templeRealtimeState.assistantSpeaking ||
+      templeRealtimeState.turnCommitPending ||
+      templeRealtimeState.responsePreparePending
     ) {
       return;
     }
@@ -2479,6 +2483,7 @@ if (seekerInput && oracleForm) {
         templeRealtimeState.currentAssistantTranscript = "";
         templeRealtimeState.currentClientInteractionId = templeRealtimeGenerateInteractionId();
         templeRealtimeState.interactionReportPending = false;
+        templeRealtimeState.responsePreparePending = false;
         templeRealtimeClearIdleAutoEndTimer();
         templeRealtimeFlushPreRoll();
 
@@ -2507,11 +2512,7 @@ if (seekerInput && oracleForm) {
     if (templeRealtimeState.speechGateOpen && templeRealtimeState.trailingMsRemaining <= 0) {
       templeRealtimeState.speechGateOpen = false;
 
-      const turnInputSeconds = (
-        templeRealtimeState.inputSamplesSent - templeRealtimeState.turnInputStartSamples
-      ) / TEMPLE_REALTIME_INPUT_SAMPLE_RATE;
-
-      templeRealtimeCommitConversationTurn(turnInputSeconds);
+      templeRealtimeCommitConversationTurn();
     }
   }
 
@@ -2591,7 +2592,154 @@ if (seekerInput && oracleForm) {
     }
   }
 
-  async function templeRealtimeCommitConversationTurn(turnInputSeconds) {
+  async function templeRealtimePrepareAndCreateResponse(transcript, turnInputSeconds) {
+    if (templeRealtimeState.responsePreparePending) {
+      return;
+    }
+
+    templeRealtimeState.responsePreparePending = true;
+
+    try {
+      setVoiceStatus(
+        "Oracle gathering context",
+        "The Temple is preparing memory and scroll context for this turn.",
+        "working"
+      );
+
+      const prepareResponse = await identityFetch("/voice/realtime/prepare", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({
+          question: transcript,
+          deity: templeRealtimeState.selectedDeity
+        })
+      });
+
+      const prepared = await templeRealtimeReadJsonResponse(prepareResponse);
+
+      if (!prepareResponse.ok) {
+        throw new Error(
+          prepared.oracle_message ||
+          prepared.error ||
+          "The Temple could not prepare this live voice turn."
+        );
+      }
+
+      const systemInstructions = prepared && prepared.system_instructions
+        ? String(prepared.system_instructions).trim()
+        : "";
+
+      const userContext = prepared && prepared.user_context
+        ? String(prepared.user_context).trim()
+        : "";
+
+      if (!systemInstructions) {
+        throw new Error(
+          "The Temple prepared no system instructions for this live voice turn."
+        );
+      }
+
+      const turnAccess = await templeRealtimeReportTurn(turnInputSeconds);
+
+      if (!turnAccess.allowed) {
+        templeRealtimeState.responsePreparePending = false;
+        templeRealtimeState.turnCommitPending = false;
+
+        setVoiceStatus(
+          "Live voice limit reached",
+          "Continuing with regular Speak voice is available.",
+          "notice"
+        );
+
+        await templeRealtimeEndConversation(
+          "realtime_turn_denied",
+          true
+        );
+        return;
+      }
+
+      if (
+        !templeRealtimeState.active ||
+        !templeRealtimeState.socket ||
+        templeRealtimeState.socket.readyState !== WebSocket.OPEN
+      ) {
+        templeRealtimeState.responsePreparePending = false;
+        templeRealtimeState.turnCommitPending = false;
+        return;
+      }
+
+      if (userContext) {
+        templeRealtimeSendJson({
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: userContext
+              }
+            ]
+          }
+        });
+      }
+
+      templeRealtimeSendJson({
+        type: "response.create",
+        response: {
+          modalities: ["text", "audio"],
+          instructions: systemInstructions
+        }
+      });
+
+      setVoiceStatus(
+        "Oracle preparing voice",
+        "Your question and Temple context were prepared. The Oracle is preparing a spoken response.",
+        "working"
+      );
+
+      templeRealtimeTouchActivity(
+        "realtime_response_requested"
+      );
+
+    } catch (err) {
+      templeRealtimeState.responsePreparePending = false;
+      templeRealtimeState.turnCommitPending = false;
+
+      templeRealtimeLog(
+        "TEMPLE_REALTIME_PREPARE_FAILED",
+        {
+          error: err.message || String(err)
+        }
+      );
+
+      setVoiceStatus(
+        "Live voice error",
+        err.message ||
+          "The Temple could not prepare this live voice turn.",
+        "error"
+      );
+
+      try {
+        await templeRealtimeEndConversation(
+          "realtime_prepare_failed",
+          true
+        );
+      } catch (endErr) {
+        templeRealtimeLog(
+          "TEMPLE_REALTIME_PREPARE_END_FAILED",
+          {
+            error: endErr.message || String(endErr)
+          }
+        );
+      }
+    }
+  }
+
+  async function templeRealtimeCommitConversationTurn() {
     if (
       templeRealtimeState.turnCommitPending ||
       templeRealtimeState.assistantSpeaking ||
@@ -2601,23 +2749,9 @@ if (seekerInput && oracleForm) {
     }
 
     templeRealtimeState.turnCommitPending = true;
+    templeRealtimeState.responsePreparePending = false;
 
     try {
-      const turnAccess = await templeRealtimeReportTurn(turnInputSeconds);
-
-      if (!turnAccess.allowed) {
-        templeRealtimeState.turnCommitPending = false;
-
-        setVoiceStatus(
-          "Live voice limit reached",
-          "Continuing with regular Speak voice is available.",
-          "notice"
-        );
-
-        await templeRealtimeEndConversation("realtime_turn_denied", true);
-        return;
-      }
-
       if (
         !templeRealtimeState.active ||
         !templeRealtimeState.socket ||
@@ -2627,25 +2761,23 @@ if (seekerInput && oracleForm) {
         return;
       }
 
-      templeRealtimeSendJson({ type: "input_audio_buffer.commit" });
-
       templeRealtimeSendJson({
-        type: "response.create",
-        response: {
-          modalities: ["text", "audio"]
-        }
+        type: "input_audio_buffer.commit"
       });
 
       setVoiceStatus(
-        "Oracle preparing voice",
-        "Your live question was sent. The Oracle is preparing a spoken response.",
+        "Live voice transcribing",
+        "Your live question was sent. The Temple is preparing its transcript.",
         "working"
       );
 
-      templeRealtimeTouchActivity("client_turn_committed");
+      templeRealtimeTouchActivity(
+        "client_turn_committed"
+      );
 
     } catch (err) {
       templeRealtimeState.turnCommitPending = false;
+      templeRealtimeState.responsePreparePending = false;
 
       setVoiceStatus(
         "Live voice error",
@@ -2857,7 +2989,42 @@ if (seekerInput && oracleForm) {
 
       if (transcript) {
         templeRealtimeState.currentInputTranscript = transcript;
-        oracleAnswer.textContent = "You said: " + transcript + "\n\nOracle is answering live...";
+
+        oracleAnswer.textContent =
+          "You said: " +
+          transcript +
+          "\n\nThe Temple is gathering memory and scroll context...";
+
+        const turnInputSeconds = (
+          templeRealtimeState.inputSamplesSent -
+          templeRealtimeState.turnInputStartSamples
+        ) / TEMPLE_REALTIME_INPUT_SAMPLE_RATE;
+
+        templeRealtimePrepareAndCreateResponse(
+          transcript,
+          turnInputSeconds
+        );
+      } else {
+        templeRealtimeState.responsePreparePending = false;
+        templeRealtimeState.turnCommitPending = false;
+
+        setVoiceStatus(
+          "Live voice transcription failed",
+          "The Temple could not prepare this spoken question. Please try again.",
+          "error"
+        );
+
+        templeRealtimeEndConversation(
+          "realtime_transcription_failed",
+          true
+        ).catch(function (err) {
+          templeRealtimeLog(
+            "TEMPLE_REALTIME_TRANSCRIPTION_END_FAILED",
+            {
+              error: err.message || String(err)
+            }
+          );
+        });
       }
 
       return;
@@ -2897,6 +3064,7 @@ if (seekerInput && oracleForm) {
       templeRealtimeState.firstAudioDeltaAt = 0;
       templeRealtimeState.assistantSpeaking = true;
       templeRealtimeState.turnCommitPending = false;
+      templeRealtimeState.responsePreparePending = false;
       templeRealtimeState.speechGateOpen = false;
       templeRealtimeState.trailingMsRemaining = 0;
       templeRealtimeState.speechAboveThresholdFrames = 0;
@@ -2958,11 +3126,28 @@ if (seekerInput && oracleForm) {
         message: event.message || (event.error && event.error.message) || "xAI realtime error"
       });
 
+      templeRealtimeState.responsePreparePending = false;
+      templeRealtimeState.turnCommitPending = false;
+
       setVoiceStatus(
         "Live voice error",
         "The realtime voice reported an error. You can try again or use regular text.",
         "error"
       );
+
+      templeRealtimeEndConversation(
+        "realtime_provider_error",
+        true
+      ).catch(function (err) {
+        templeRealtimeLog(
+          "TEMPLE_REALTIME_PROVIDER_ERROR_END_FAILED",
+          {
+            error: err.message || String(err)
+          }
+        );
+      });
+
+      return;
     }
   }
 

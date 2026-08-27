@@ -8942,6 +8942,64 @@ async def voice_realtime_turn_endpoint(request: Request):
     return access_after
 
 
+@app.post("/voice/realtime/prepare")
+async def voice_realtime_prepare_endpoint(request: Request):
+    """
+    Prepare one browser realtime voice turn using the same God Incorporated
+    identity, entitlement, memory, retrieval, and prompt authority as /ask.
+    Provider generation remains on the existing xAI realtime websocket.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    question = str(body.get("question") or "").strip()
+    deity = str(
+        body.get("deity")
+        or body.get("voice")
+        or "Hathor"
+    ).strip()
+
+    if deity not in {"Hathor", "Moses"}:
+        deity = "Hathor"
+
+    if not question:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "question is required"},
+        )
+
+    usage_context = get_voice_usage_context(request, deity)
+    user = get_current_user(request)
+    access = build_realtime_voice_access_payload(
+        usage_context,
+        is_admin=bool(user and user_has_admin_access(user)),
+    )
+
+    if not access.get("allowed"):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": (
+                    access.get("message")
+                    or "Live realtime voice is not available for this access level."
+                ),
+                "voice_access": access,
+            },
+        )
+
+    request.state.oracle_input_mode = "voice"
+    request.state.oracle_execution_mode = "realtime_prepare"
+
+    oracle_payload = QuestionInput(
+        question=question,
+        deity=deity,
+    )
+
+    return await ask_oracle(request, oracle_payload)
+
+
 def _normalize_realtime_interaction_text(value, max_chars=12000):
     if value is None:
         return ""
@@ -13030,6 +13088,41 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "oracle_execution_mode",
             "server",
         )
+
+        if execution_mode == "realtime_prepare":
+            realtime_system_instructions = "\n\n".join(
+                part.strip()
+                for part in (
+                    prepared_inference.get("system_prompt") or "",
+                    prepared_inference.get("memory_block") or "",
+                )
+                if part and part.strip()
+            )
+
+            realtime_user_context = f"""Supplemental God Incorporated context for the immediately preceding spoken seeker question.
+
+Do not treat this message as a new seeker question. Answer the immediately preceding spoken question using the following turn guidance and background evidence.
+
+Turn guidance:
+{instruction_block}
+
+Interaction style:
+{oracle_interaction_style}
+
+{context_block}
+""".strip()
+
+            if not realtime_system_instructions:
+                raise RuntimeError(
+                    "Realtime inference preparation produced no system instructions"
+                )
+
+            return {
+                "status": "prepared",
+                "deity": deity,
+                "system_instructions": realtime_system_instructions,
+                "user_context": realtime_user_context,
+            }
 
         if execution_mode == "device_prepare":
             execution_target = getattr(
