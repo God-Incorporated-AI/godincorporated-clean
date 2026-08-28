@@ -8928,6 +8928,11 @@ async def voice_realtime_turn_endpoint(request: Request):
             "speech_turn": body.get("speech_turn"),
             "turn_input_audio_seconds": body.get("turn_input_audio_seconds"),
             "client_turn_commit_silence_ms": body.get("client_turn_commit_silence_ms"),
+            "client_diagnostics": (
+                body.get("client_diagnostics")
+                if isinstance(body.get("client_diagnostics"), dict)
+                else {}
+            ),
             "preview_mode": body.get("preview_mode"),
             "mode": body.get("mode"),
             "access_before": access_before,

@@ -1727,6 +1727,25 @@ if (seekerInput && oracleForm) {
     inputSamplesSent: 0,
     inputBytesSent: 0,
     inputChunksSent: 0,
+    turnInputStartChunks: 0,
+    turnGateOpenedAt: 0,
+    turnLastSpeechAt: 0,
+    turnCommitSentAt: 0,
+    turnCommitConfirmedAt: 0,
+    turnTranscriptionCompletedAt: 0,
+    turnInputSamplesAtCommit: 0,
+    turnInputChunksAtCommit: 0,
+    turnPreRollChunksSent: 0,
+    turnSpeechChunksSent: 0,
+    turnTrailingChunksAttempted: 0,
+    turnTrailingChunksSent: 0,
+    turnLastChunkMs: 0,
+    turnSourceRate: 0,
+    turnInputBufferFrames: 0,
+    turnTrailingMsRemainingAtCommit: 0,
+    turnCommittedItemId: "",
+    turnTranscriptionCompletedItemId: "",
+    turnTranscriptionUpdateCount: 0,
     outputSamplesReceived: 0,
     outputBytesReceived: 0,
     firstAudioDeltaAt: 0,
@@ -2243,6 +2262,25 @@ if (seekerInput && oracleForm) {
     templeRealtimeState.inputSamplesSent = 0;
     templeRealtimeState.inputBytesSent = 0;
     templeRealtimeState.inputChunksSent = 0;
+    templeRealtimeState.turnInputStartChunks = 0;
+    templeRealtimeState.turnGateOpenedAt = 0;
+    templeRealtimeState.turnLastSpeechAt = 0;
+    templeRealtimeState.turnCommitSentAt = 0;
+    templeRealtimeState.turnCommitConfirmedAt = 0;
+    templeRealtimeState.turnTranscriptionCompletedAt = 0;
+    templeRealtimeState.turnInputSamplesAtCommit = 0;
+    templeRealtimeState.turnInputChunksAtCommit = 0;
+    templeRealtimeState.turnPreRollChunksSent = 0;
+    templeRealtimeState.turnSpeechChunksSent = 0;
+    templeRealtimeState.turnTrailingChunksAttempted = 0;
+    templeRealtimeState.turnTrailingChunksSent = 0;
+    templeRealtimeState.turnLastChunkMs = 0;
+    templeRealtimeState.turnSourceRate = 0;
+    templeRealtimeState.turnInputBufferFrames = 0;
+    templeRealtimeState.turnTrailingMsRemainingAtCommit = 0;
+    templeRealtimeState.turnCommittedItemId = "";
+    templeRealtimeState.turnTranscriptionCompletedItemId = "";
+    templeRealtimeState.turnTranscriptionUpdateCount = 0;
     templeRealtimeState.outputSamplesReceived = 0;
     templeRealtimeState.outputBytesReceived = 0;
     templeRealtimeState.firstAudioDeltaAt = 0;
@@ -2479,6 +2517,25 @@ if (seekerInput && oracleForm) {
         templeRealtimeState.speechGateOpen = true;
         templeRealtimeState.speechTurnIndex += 1;
         templeRealtimeState.turnInputStartSamples = templeRealtimeState.inputSamplesSent;
+        templeRealtimeState.turnInputStartChunks = templeRealtimeState.inputChunksSent;
+        templeRealtimeState.turnGateOpenedAt = performance.now();
+        templeRealtimeState.turnLastSpeechAt = templeRealtimeState.turnGateOpenedAt;
+        templeRealtimeState.turnCommitSentAt = 0;
+        templeRealtimeState.turnCommitConfirmedAt = 0;
+        templeRealtimeState.turnTranscriptionCompletedAt = 0;
+        templeRealtimeState.turnInputSamplesAtCommit = 0;
+        templeRealtimeState.turnInputChunksAtCommit = 0;
+        templeRealtimeState.turnPreRollChunksSent = 0;
+        templeRealtimeState.turnSpeechChunksSent = 0;
+        templeRealtimeState.turnTrailingChunksAttempted = 0;
+        templeRealtimeState.turnTrailingChunksSent = 0;
+        templeRealtimeState.turnLastChunkMs = chunkMs;
+        templeRealtimeState.turnSourceRate = sourceRate;
+        templeRealtimeState.turnInputBufferFrames = input.length;
+        templeRealtimeState.turnTrailingMsRemainingAtCommit = 0;
+        templeRealtimeState.turnCommittedItemId = "";
+        templeRealtimeState.turnTranscriptionCompletedItemId = "";
+        templeRealtimeState.turnTranscriptionUpdateCount = 0;
         templeRealtimeState.currentInputTranscript = "";
         templeRealtimeState.currentAssistantTranscript = "";
         templeRealtimeState.currentClientInteractionId = templeRealtimeGenerateInteractionId();
@@ -2496,6 +2553,8 @@ if (seekerInput && oracleForm) {
         templeRealtimeTouchActivity("local_speech_started");
       }
 
+      templeRealtimeState.turnLastSpeechAt = performance.now();
+      templeRealtimeState.turnLastChunkMs = chunkMs;
       templeRealtimeState.trailingMsRemaining = TEMPLE_REALTIME_TRAILING_AUDIO_MS;
       templeRealtimeSendAudioChunk(resampled, "speech");
       return;
@@ -2504,6 +2563,8 @@ if (seekerInput && oracleForm) {
     templeRealtimeState.speechAboveThresholdFrames = 0;
 
     if (templeRealtimeState.speechGateOpen && templeRealtimeState.trailingMsRemaining > 0) {
+      templeRealtimeState.turnTrailingChunksAttempted += 1;
+      templeRealtimeState.turnLastChunkMs = chunkMs;
       templeRealtimeState.trailingMsRemaining -= chunkMs;
       templeRealtimeSendAudioChunk(resampled, "trailing_audio");
       return;
@@ -2533,7 +2594,54 @@ if (seekerInput && oracleForm) {
           realtime_voice: templeRealtimeState.selectedRealtimeVoice,
           speech_turn: templeRealtimeState.speechTurnIndex,
           turn_input_audio_seconds: Number(turnInputSeconds.toFixed(3)),
-          client_turn_commit_silence_ms: TEMPLE_REALTIME_CLIENT_TURN_COMMIT_SILENCE_MS
+          client_turn_commit_silence_ms: TEMPLE_REALTIME_CLIENT_TURN_COMMIT_SILENCE_MS,
+          client_diagnostics: {
+            input_context_rate: templeRealtimeState.turnSourceRate,
+            input_buffer_frames: templeRealtimeState.turnInputBufferFrames,
+            last_chunk_ms: Number(templeRealtimeState.turnLastChunkMs.toFixed(3)),
+            turn_input_samples_at_commit: templeRealtimeState.turnInputSamplesAtCommit,
+            turn_input_chunks_at_commit: templeRealtimeState.turnInputChunksAtCommit,
+            pre_roll_chunks_sent: templeRealtimeState.turnPreRollChunksSent,
+            speech_chunks_sent: templeRealtimeState.turnSpeechChunksSent,
+            trailing_chunks_attempted: templeRealtimeState.turnTrailingChunksAttempted,
+            trailing_chunks_sent: templeRealtimeState.turnTrailingChunksSent,
+            trailing_ms_remaining_at_commit: Number(
+              templeRealtimeState.turnTrailingMsRemainingAtCommit.toFixed(3)
+            ),
+            gate_to_commit_ms: (
+              templeRealtimeState.turnGateOpenedAt &&
+              templeRealtimeState.turnCommitSentAt
+            ) ? Math.round(
+              templeRealtimeState.turnCommitSentAt -
+              templeRealtimeState.turnGateOpenedAt
+            ) : null,
+            last_speech_to_commit_ms: (
+              templeRealtimeState.turnLastSpeechAt &&
+              templeRealtimeState.turnCommitSentAt
+            ) ? Math.round(
+              templeRealtimeState.turnCommitSentAt -
+              templeRealtimeState.turnLastSpeechAt
+            ) : null,
+            commit_to_confirm_ms: (
+              templeRealtimeState.turnCommitSentAt &&
+              templeRealtimeState.turnCommitConfirmedAt
+            ) ? Math.round(
+              templeRealtimeState.turnCommitConfirmedAt -
+              templeRealtimeState.turnCommitSentAt
+            ) : null,
+            commit_to_transcription_ms: (
+              templeRealtimeState.turnCommitSentAt &&
+              templeRealtimeState.turnTranscriptionCompletedAt
+            ) ? Math.round(
+              templeRealtimeState.turnTranscriptionCompletedAt -
+              templeRealtimeState.turnCommitSentAt
+            ) : null,
+            committed_item_id: templeRealtimeState.turnCommittedItemId,
+            transcription_completed_item_id:
+              templeRealtimeState.turnTranscriptionCompletedItemId,
+            transcription_update_count:
+              templeRealtimeState.turnTranscriptionUpdateCount
+          }
         })
       });
 
@@ -2761,6 +2869,18 @@ if (seekerInput && oracleForm) {
         return;
       }
 
+      templeRealtimeState.turnCommitSentAt = performance.now();
+      templeRealtimeState.turnInputSamplesAtCommit = (
+        templeRealtimeState.inputSamplesSent -
+        templeRealtimeState.turnInputStartSamples
+      );
+      templeRealtimeState.turnInputChunksAtCommit = (
+        templeRealtimeState.inputChunksSent -
+        templeRealtimeState.turnInputStartChunks
+      );
+      templeRealtimeState.turnTrailingMsRemainingAtCommit =
+        templeRealtimeState.trailingMsRemaining;
+
       templeRealtimeSendJson({
         type: "input_audio_buffer.commit"
       });
@@ -2820,6 +2940,14 @@ if (seekerInput && oracleForm) {
     templeRealtimeState.inputChunksSent += 1;
     templeRealtimeState.inputSamplesSent += resampled.length;
     templeRealtimeState.inputBytesSent += resampled.length * 2;
+
+    if (reason === "pre_roll") {
+      templeRealtimeState.turnPreRollChunksSent += 1;
+    } else if (reason === "speech") {
+      templeRealtimeState.turnSpeechChunksSent += 1;
+    } else if (reason === "trailing_audio") {
+      templeRealtimeState.turnTrailingChunksSent += 1;
+    }
 
     if (
       templeRealtimeState.inputChunksSent === 1 ||
@@ -2984,7 +3112,29 @@ if (seekerInput && oracleForm) {
   function templeRealtimeHandleServerEvent(event) {
     const type = event && event.type ? event.type : "";
 
+    if (type === "input_audio_buffer.committed") {
+      templeRealtimeState.turnCommitConfirmedAt = performance.now();
+      templeRealtimeState.turnCommittedItemId = String(
+        event.item_id ||
+        (event.item && event.item.id) ||
+        ""
+      );
+      return;
+    }
+
+    if (type === "conversation.item.input_audio_transcription.updated") {
+      templeRealtimeState.turnTranscriptionUpdateCount += 1;
+      return;
+    }
+
     if (type === "conversation.item.input_audio_transcription.completed") {
+      templeRealtimeState.turnTranscriptionCompletedAt = performance.now();
+      templeRealtimeState.turnTranscriptionCompletedItemId = String(
+        event.item_id ||
+        (event.item && event.item.id) ||
+        ""
+      );
+
       const transcript = templeRealtimeExtractTranscript(event);
 
       if (transcript) {
