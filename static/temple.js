@@ -1684,6 +1684,11 @@ if (seekerInput && oracleForm) {
   const templeRealtimeState = {
     socket: null,
     sessionData: null,
+    sessionUpdateResolve: null,
+    sessionUpdateReject: null,
+    sessionUpdateTimer: null,
+    sessionUpdatedAt: 0,
+    sessionTurnDetectionMode: "",
     active: false,
     starting: false,
     clickPending: false,
@@ -2215,7 +2220,9 @@ if (seekerInput && oracleForm) {
       session: {
         voice: templeRealtimeState.selectedRealtimeVoice,
         instructions: templeRealtimeInstructions(templeRealtimeState.selectedDeity),
-        turn_detection: null,
+        turn_detection: {
+          type: null
+        },
         audio: {
           input: {
             format: {
@@ -2240,6 +2247,101 @@ if (seekerInput && oracleForm) {
       mode: "temple_main_live_realtime",
       input_rate: TEMPLE_REALTIME_INPUT_SAMPLE_RATE,
       output_rate: TEMPLE_REALTIME_OUTPUT_SAMPLE_RATE
+    });
+  }
+
+  function templeRealtimeDescribeTurnDetection(session) {
+    const turnDetection = session
+      ? session.turn_detection
+      : undefined;
+
+    if (turnDetection === null) {
+      return "manual";
+    }
+
+    if (
+      turnDetection &&
+      typeof turnDetection === "object"
+    ) {
+      if (
+        Object.prototype.hasOwnProperty.call(
+          turnDetection,
+          "type"
+        ) &&
+        turnDetection.type === null
+      ) {
+        return "manual";
+      }
+
+      if (turnDetection.type) {
+        return String(turnDetection.type);
+      }
+    }
+
+    if (typeof turnDetection === "undefined") {
+      return "missing";
+    }
+
+    return String(turnDetection);
+  }
+
+  function templeRealtimeSettleSessionUpdate(error, session) {
+    if (templeRealtimeState.sessionUpdateTimer) {
+      window.clearTimeout(
+        templeRealtimeState.sessionUpdateTimer
+      );
+    }
+
+    const resolve =
+      templeRealtimeState.sessionUpdateResolve;
+    const reject =
+      templeRealtimeState.sessionUpdateReject;
+
+    templeRealtimeState.sessionUpdateResolve = null;
+    templeRealtimeState.sessionUpdateReject = null;
+    templeRealtimeState.sessionUpdateTimer = null;
+
+    if (error) {
+      if (reject) {
+        reject(error);
+      }
+      return;
+    }
+
+    if (resolve) {
+      resolve(session || {});
+    }
+  }
+
+  function templeRealtimeConfigureSession() {
+    if (
+      templeRealtimeState.sessionUpdateResolve ||
+      templeRealtimeState.sessionUpdateReject
+    ) {
+      return Promise.reject(
+        new Error(
+          "A realtime session update is already pending."
+        )
+      );
+    }
+
+    templeRealtimeState.sessionUpdatedAt = 0;
+    templeRealtimeState.sessionTurnDetectionMode = "";
+
+    return new Promise(function (resolve, reject) {
+      templeRealtimeState.sessionUpdateResolve = resolve;
+      templeRealtimeState.sessionUpdateReject = reject;
+
+      templeRealtimeState.sessionUpdateTimer =
+        window.setTimeout(function () {
+          templeRealtimeSettleSessionUpdate(
+            new Error(
+              "Live voice session configuration timed out."
+            )
+          );
+        }, 5000);
+
+      templeRealtimeSendSessionUpdate();
     });
   }
 
@@ -2355,8 +2457,11 @@ if (seekerInput && oracleForm) {
         String(sessionAccess.reason || "").includes("preview")
       );
 
-      await templeRealtimeOpenWebSocket(templeRealtimeState.sessionData);
-      templeRealtimeSendSessionUpdate();
+      await templeRealtimeOpenWebSocket(
+        templeRealtimeState.sessionData
+      );
+
+      await templeRealtimeConfigureSession();
 
       templeRealtimeState.active = true;
       await templeRealtimeStartInputCapture();
@@ -2596,6 +2701,15 @@ if (seekerInput && oracleForm) {
           turn_input_audio_seconds: Number(turnInputSeconds.toFixed(3)),
           client_turn_commit_silence_ms: TEMPLE_REALTIME_CLIENT_TURN_COMMIT_SILENCE_MS,
           client_diagnostics: {
+            session_turn_detection_mode:
+              templeRealtimeState.sessionTurnDetectionMode,
+            session_updated_before_mic:
+              Boolean(
+                templeRealtimeState.sessionUpdatedAt &&
+                templeRealtimeState.turnGateOpenedAt &&
+                templeRealtimeState.sessionUpdatedAt <=
+                  templeRealtimeState.turnGateOpenedAt
+              ),
             input_context_rate: templeRealtimeState.turnSourceRate,
             input_buffer_frames: templeRealtimeState.turnInputBufferFrames,
             last_chunk_ms: Number(templeRealtimeState.turnLastChunkMs.toFixed(3)),
@@ -3111,6 +3225,58 @@ if (seekerInput && oracleForm) {
 
   function templeRealtimeHandleServerEvent(event) {
     const type = event && event.type ? event.type : "";
+
+    if (type === "session.updated") {
+      const session = event.session || {};
+      const turnDetectionMode =
+        templeRealtimeDescribeTurnDetection(session);
+
+      templeRealtimeState.sessionUpdatedAt =
+        performance.now();
+      templeRealtimeState.sessionTurnDetectionMode =
+        turnDetectionMode;
+
+      templeRealtimeLog(
+        "TEMPLE_REALTIME_SESSION_UPDATED",
+        {
+          turn_detection_mode: turnDetectionMode,
+          turn_detection: session.turn_detection
+        }
+      );
+
+      if (turnDetectionMode !== "manual") {
+        templeRealtimeSettleSessionUpdate(
+          new Error(
+            "Live voice did not enter manual turn mode."
+          )
+        );
+        return;
+      }
+
+      templeRealtimeSettleSessionUpdate(
+        null,
+        session
+      );
+      return;
+    }
+
+    if (
+      type === "input_audio_buffer.speech_started" ||
+      type === "input_audio_buffer.speech_stopped"
+    ) {
+      templeRealtimeLog(
+        "TEMPLE_REALTIME_UNEXPECTED_SERVER_VAD",
+        {
+          type: type,
+          item_id: event.item_id || "",
+          audio_start_ms: event.audio_start_ms,
+          audio_end_ms: event.audio_end_ms,
+          configured_mode:
+            templeRealtimeState.sessionTurnDetectionMode
+        }
+      );
+      return;
+    }
 
     if (type === "input_audio_buffer.committed") {
       templeRealtimeState.turnCommitConfirmedAt = performance.now();
