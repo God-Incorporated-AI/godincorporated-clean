@@ -3147,7 +3147,6 @@ if (seekerInput && oracleForm) {
         return;
       }
 
-      templeRealtimeState.turnCommitSentAt = performance.now();
       templeRealtimeState.turnInputSamplesAtCommit = (
         templeRealtimeState.inputSamplesSent -
         templeRealtimeState.turnInputStartSamples
@@ -3162,6 +3161,8 @@ if (seekerInput && oracleForm) {
       templeRealtimeSendJson({
         type: "input_audio_buffer.commit"
       });
+
+      templeRealtimeState.turnCommitSentAt = performance.now();
 
       templeRealtimeAuditEvent("input_commit_sent", {
         turn_input_samples_at_commit: templeRealtimeState.turnInputSamplesAtCommit,
@@ -3499,21 +3500,70 @@ if (seekerInput && oracleForm) {
     }
 
     if (type === "conversation.item.input_audio_transcription.completed") {
-      templeRealtimeState.turnTranscriptionCompletedAt = performance.now();
-      templeRealtimeState.turnTranscriptionCompletedItemId = String(
+      const transcriptionCompletedAt = performance.now();
+      const transcriptionItemId = String(
         event.item_id ||
         (event.item && event.item.id) ||
         ""
       );
-
       const transcript = templeRealtimeExtractTranscript(event);
 
       templeRealtimeAuditEvent("transcription_completed", {
-        transcription_completed_item_id: templeRealtimeState.turnTranscriptionCompletedItemId,
+        transcription_completed_item_id: transcriptionItemId,
         committed_item_id: templeRealtimeState.turnCommittedItemId,
+        client_commit_sent: Boolean(templeRealtimeState.turnCommitSentAt),
         transcript_chars: transcript ? transcript.length : 0,
         transcript: transcript ? transcript.slice(0, 1000) : ""
       });
+
+      if (!templeRealtimeState.turnCommitSentAt) {
+        templeRealtimeAuditEvent(
+          "transcription_ignored_before_client_commit",
+          {
+            transcription_completed_item_id: transcriptionItemId,
+            transcript_chars: transcript ? transcript.length : 0
+          }
+        );
+
+        templeRealtimeLog(
+          "TEMPLE_REALTIME_TRANSCRIPTION_BEFORE_CLIENT_COMMIT",
+          {
+            transcription_completed_item_id: transcriptionItemId,
+            transcript_chars: transcript ? transcript.length : 0
+          }
+        );
+
+        return;
+      }
+
+      if (
+        templeRealtimeState.turnCommittedItemId &&
+        transcriptionItemId &&
+        templeRealtimeState.turnCommittedItemId !== transcriptionItemId
+      ) {
+        templeRealtimeAuditEvent(
+          "transcription_ignored_item_mismatch",
+          {
+            committed_item_id: templeRealtimeState.turnCommittedItemId,
+            transcription_completed_item_id: transcriptionItemId
+          }
+        );
+
+        templeRealtimeLog(
+          "TEMPLE_REALTIME_TRANSCRIPTION_ITEM_MISMATCH",
+          {
+            committed_item_id: templeRealtimeState.turnCommittedItemId,
+            transcription_completed_item_id: transcriptionItemId
+          }
+        );
+
+        return;
+      }
+
+      templeRealtimeState.turnTranscriptionCompletedAt =
+        transcriptionCompletedAt;
+      templeRealtimeState.turnTranscriptionCompletedItemId =
+        transcriptionItemId;
 
       if (transcript) {
         templeRealtimeState.currentInputTranscript = transcript;
