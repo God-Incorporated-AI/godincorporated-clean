@@ -2379,6 +2379,10 @@ if (seekerInput && oracleForm) {
       turnDetection &&
       typeof turnDetection === "object"
     ) {
+      if (Object.keys(turnDetection).length === 0) {
+        return "manual";
+      }
+
       if (
         Object.prototype.hasOwnProperty.call(
           turnDetection,
