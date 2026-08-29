@@ -998,6 +998,7 @@ def record_voice_usage_event(
     tts_voice=None,
     estimated_tts_cost_usd=None,
     metadata_json=None,
+    raise_on_error=False,
 ) -> None:
     """
     Phase 10.5 silent voice-stage persistence.
@@ -1068,6 +1069,8 @@ def record_voice_usage_event(
             except Exception:
                 pass
         logger.warning("Failed to persist voice_usage_event: %s", e)
+        if raise_on_error:
+            raise
     finally:
         if conn:
             conn.close()
@@ -8876,6 +8879,63 @@ async def voice_realtime_access_endpoint(request: Request):
         is_admin=bool(user and user_has_admin_access(user)),
     )
     return access
+
+
+@app.post("/voice/realtime/client-event")
+async def voice_realtime_client_event_endpoint(request: Request):
+    """Persist browser realtime lifecycle milestones without changing voice behavior."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    deity = str(body.get("deity") or body.get("voice") or "Hathor").strip() or "Hathor"
+    if deity not in {"Hathor", "Moses"}:
+        deity = "Hathor"
+
+    event_name = str(body.get("event_name") or "").strip()[:120]
+    if not event_name:
+        return JSONResponse(status_code=400, content={"recorded": False, "error": "event_name is required"})
+
+    usage_context = get_voice_usage_context(request, deity)
+    details = body.get("details") if isinstance(body.get("details"), dict) else {}
+
+    try:
+        record_voice_usage_event(
+            **usage_context,
+            input_mode="realtime_voice",
+            deity=deity,
+            stage="realtime_client_lifecycle",
+            status="ok",
+            total_ms=None,
+            transcript_chars=details.get("transcript_chars"),
+            answer_chars=details.get("assistant_transcript_chars"),
+            metadata_json={
+                "phase": "11.10R",
+                "event_source": "voice_realtime_client_lifecycle",
+                "event_name": event_name,
+                "sequence": body.get("sequence"),
+                "client_realtime_session_id": str(body.get("client_realtime_session_id") or "")[:160],
+                "client_interaction_id": str(body.get("client_interaction_id") or "")[:160],
+                "speech_turn": body.get("speech_turn"),
+                "assistant_turn": body.get("assistant_turn"),
+                "realtime_voice": str(body.get("realtime_voice") or "")[:80],
+                "details": details,
+            },
+            raise_on_error=True,
+        )
+    except Exception as exc:
+        logger.warning("Realtime client lifecycle audit failed: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "recorded": False,
+                "event_name": event_name,
+                "sequence": body.get("sequence"),
+            },
+        )
+
+    return {"recorded": True, "event_name": event_name, "sequence": body.get("sequence")}
 
 
 @app.post("/voice/realtime/turn")
