@@ -1658,7 +1658,11 @@ struct NativeVoiceSessionView: View {
                 return
             }
 
-            await MainActor.run {
+            let answerIsCurrent = await MainActor.run {
+                guard generation == voiceSessionGeneration else {
+                    return false
+                }
+
                 answer = oracleAnswer
                 lastSpokenOracleAnswer = oracleAnswer
                 isWorking = false
@@ -1666,12 +1670,18 @@ struct NativeVoiceSessionView: View {
                 recoveryMessage = ""
                 statusTitle = "Oracle speaking"
                 statusMessage = "The written answer is ready. Provider voice is being prepared."
+                return true
+            }
+
+            guard answerIsCurrent else {
+                return
             }
 
             await speakOracleAnswerProviderFirst(
                 oracleAnswer,
                 deity: oracleVoice,
-                origin: .liveTurn
+                origin: .liveTurn,
+                expectedGeneration: generation
             )
         } catch {
             await MainActor.run {
@@ -2444,7 +2454,8 @@ struct NativeVoiceSessionView: View {
     private func speakOracleAnswerProviderFirst(
         _ spokenText: String,
         deity: String,
-        origin: VoicePlaybackOrigin
+        origin: VoicePlaybackOrigin,
+        expectedGeneration: Int? = nil
     ) async {
         let textToSpeak = spokenText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !textToSpeak.isEmpty else {
@@ -2452,6 +2463,11 @@ struct NativeVoiceSessionView: View {
         }
 
         let generation: Int? = await MainActor.run {
+            if let expectedGeneration,
+               expectedGeneration != voiceSessionGeneration {
+                return nil
+            }
+
             if origin == .replay && isContinuousConversationActive {
                 return nil
             }
