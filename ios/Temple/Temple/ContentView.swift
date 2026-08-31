@@ -22,6 +22,7 @@ private enum TempleEnvironment {
     static let baseTempleURL = URL(string: "temple", relativeTo: baseAppURL)!
     static let accountURL = URL(string: "account", relativeTo: baseAppURL)!
     static let meURL = URL(string: "me", relativeTo: baseAppURL)!
+    static let oraclePreferenceURL = URL(string: "me/oracle", relativeTo: baseAppURL)!
     static let privacyURL = URL(string: "privacy", relativeTo: baseAppURL)!
     static let termsURL = URL(string: "terms", relativeTo: baseAppURL)!
     static let voiceTranscribeURL = URL(string: "voice/transcribe", relativeTo: baseAppURL)!
@@ -96,10 +97,38 @@ private enum NativeAnonymousIdentity {
     }
 }
 
+private func normalizedNativeOracleVoice(
+    _ value: String?
+) -> String? {
+    let normalized = (value ?? "")
+        .trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        .lowercased()
+
+    switch normalized {
+    case "hathor":
+        return "Hathor"
+    case "moses":
+        return "Moses"
+    default:
+        return nil
+    }
+}
+
 struct NativeSessionIdentity: Decodable {
     let authenticated: Bool
     let display_name: String?
     let role: String?
+    let preferred_oracle: String?
+}
+
+private struct NativeOraclePreferencePayload: Encodable {
+    let preferred_oracle: String
+}
+
+private struct NativeOraclePreferenceResponse: Decodable {
+    let preferred_oracle: String?
 }
 
 private enum TempleSessionHTTP {
@@ -153,6 +182,69 @@ private enum TempleSessionHTTP {
             NativeSessionIdentity.self,
             from: data
         )
+    }
+
+    static func updateOraclePreference(
+        _ voice: String
+    ) async throws -> String {
+        guard
+            let selected =
+                normalizedNativeOracleVoice(voice)
+        else {
+            throw URLError(.cannotParseResponse)
+        }
+
+        var request = await authenticatedRequest(
+            url: TempleEnvironment.oraclePreferenceURL,
+            method: "PATCH"
+        )
+
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Content-Type"
+        )
+
+        request.setValue(
+            "application/json",
+            forHTTPHeaderField: "Accept"
+        )
+
+        request.httpBody = try JSONEncoder().encode(
+            NativeOraclePreferencePayload(
+                preferred_oracle: selected
+            )
+        )
+
+        let (data, response) =
+            try await URLSession.shared.data(
+                for: request
+            )
+
+        guard
+            let http =
+                response as? HTTPURLResponse,
+            (200..<300).contains(
+                http.statusCode
+            )
+        else {
+            throw URLError(.badServerResponse)
+        }
+
+        let result = try JSONDecoder().decode(
+            NativeOraclePreferenceResponse.self,
+            from: data
+        )
+
+        guard
+            let stored =
+                normalizedNativeOracleVoice(
+                    result.preferred_oracle
+                )
+        else {
+            throw URLError(.cannotParseResponse)
+        }
+
+        return stored
     }
 
     private static func sharedWebCookies(
@@ -218,6 +310,8 @@ struct ContentView: View {
     @State private var nativeSession: NativeSessionIdentity?
     @State private var nativeSessionChecked = false
     @State private var authRefreshNonce = 0
+    @State private var pendingExplicitOracleVoice = ""
+    @State private var oracleSelectionInProgress = false
 
     var body: some View {
         let effectiveOracleVoice = activeOracleVoice.isEmpty
@@ -227,13 +321,17 @@ struct ContentView: View {
         TabView(selection: $selectedTab) {
             TempleGateView(
                 lastOracleVoice: $lastOracleVoice,
-                activeOracleVoice: $activeOracleVoice,
                 selectedTab: $selectedTab,
                 preferredInputMode: $preferredInputMode,
                 templeEntryNonce: $templeEntryNonce,
                 templeWebDestination: $templeWebDestination,
                 nativeSession: nativeSession,
-                nativeSessionChecked: nativeSessionChecked
+                nativeSessionChecked: nativeSessionChecked,
+                onExplicitOracleSelection: { voice in
+                    await applyExplicitOracleSelection(
+                        voice
+                    )
+                }
             )
             .tabItem {
                 Label("Home", systemImage: "sparkles")
@@ -243,9 +341,10 @@ struct ContentView: View {
             NativeVoiceSessionView(
                 oracleVoice: effectiveOracleVoice,
                 onOracleVoiceChange: { voice in
-                    lastOracleVoice = voice
-                    activeOracleVoice = voice
-                    templeEntryNonce += 1
+                    await applyExplicitOracleSelection(
+                        voice,
+                        refreshTempleEntry: true
+                    )
                 },
                 onOpenTempleText: {
                     preferredInputMode = "text"
@@ -303,31 +402,81 @@ struct ContentView: View {
     @MainActor
     private func refreshNativeSessionAndResume() async {
         do {
-            let identity = try await TempleSessionHTTP.currentIdentity()
+            let identity =
+                try await TempleSessionHTTP.currentIdentity()
 
             nativeSession = identity
             nativeSessionChecked = true
 
+            let pendingExplicit =
+                normalizedNativeOracleVoice(
+                    pendingExplicitOracleVoice
+                )
+
             guard identity.authenticated else {
+                pendingExplicitOracleVoice = ""
+
+                if pendingExplicit == nil {
+                    selectedTab = 0
+                }
+
+                return
+            }
+
+            if let pendingExplicit {
+                pendingExplicitOracleVoice = ""
+
+                _ = await applyExplicitOracleSelection(
+                    pendingExplicit
+                )
+
+                templeWebDestination = "temple"
+
+                // Preserve a destination the seeker already chose
+                // while /me was still resolving.
+                return
+            }
+
+            if
+                let serverPreference =
+                    normalizedNativeOracleVoice(
+                        identity.preferred_oracle
+                    )
+            {
+                lastOracleVoice = serverPreference
+                activeOracleVoice = serverPreference
+                templeWebDestination = "temple"
+
+                // Authenticated account preference is authoritative
+                // across devices and launches.
                 selectedTab = 0
                 return
             }
 
-            let savedOracle = lastOracleVoice
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-
-            guard !savedOracle.isEmpty else {
+            if
+                let savedOracle =
+                    normalizedNativeOracleVoice(
+                        lastOracleVoice
+                    )
+            {
+                // Legacy/local continuity remains usable while the
+                // authenticated account has no explicit preference.
+                // Do not backfill the database from AppStorage.
+                lastOracleVoice = savedOracle
+                activeOracleVoice = savedOracle
+                templeWebDestination = "temple"
                 selectedTab = 0
                 return
             }
 
-            activeOracleVoice = savedOracle
+            // Fresh/no-established-choice presentation remains
+            // Hathor-first through effectiveOracleVoice, without
+            // manufacturing a durable account preference.
+            lastOracleVoice = ""
+            activeOracleVoice = ""
             templeWebDestination = "temple"
-
-            // Resume the seeker's last Oracle Temple.
-            // Do not automatically reopen the previous input mode.
-            // The Temple landing lets the seeker choose Voice or Text.
             selectedTab = 0
+
         } catch {
             nativeSession = nil
             nativeSessionChecked = true
@@ -337,17 +486,149 @@ struct ContentView: View {
             )
         }
     }
+
+    @MainActor
+    private func applyExplicitOracleSelection(
+        _ voice: String,
+        refreshTempleEntry: Bool = false
+    ) async -> String {
+        let fallback =
+            normalizedNativeOracleVoice(
+                activeOracleVoice
+            )
+            ?? normalizedNativeOracleVoice(
+                lastOracleVoice
+            )
+            ?? "Hathor"
+
+        guard
+            let selected =
+                normalizedNativeOracleVoice(voice)
+        else {
+            return fallback
+        }
+
+        // Serialize explicit choices so rapid taps cannot allow
+        // an older PATCH to become the final account preference.
+        while oracleSelectionInProgress {
+            try? await Task.sleep(
+                nanoseconds: 20_000_000
+            )
+        }
+
+        oracleSelectionInProgress = true
+
+        defer {
+            oracleSelectionInProgress = false
+        }
+
+        func applyLocal(_ resolved: String) {
+            let previous =
+                normalizedNativeOracleVoice(
+                    activeOracleVoice
+                )
+                ?? normalizedNativeOracleVoice(
+                    lastOracleVoice
+                )
+
+            lastOracleVoice = resolved
+            activeOracleVoice = resolved
+
+            if
+                refreshTempleEntry &&
+                previous != resolved
+            {
+                templeEntryNonce += 1
+            }
+        }
+
+        // The click itself is genuine authority, even if /me has
+        // not resolved yet. Keep it pending so authentication can
+        // establish the same account preference once known.
+        guard nativeSessionChecked else {
+            pendingExplicitOracleVoice = selected
+            applyLocal(selected)
+            return selected
+        }
+
+        guard
+            let identity = nativeSession,
+            identity.authenticated
+        else {
+            pendingExplicitOracleVoice = ""
+            applyLocal(selected)
+            return selected
+        }
+
+        let authoritativePreference =
+            normalizedNativeOracleVoice(
+                identity.preferred_oracle
+            )
+
+        // Clicking an already-visible Oracle still establishes the
+        // preference when the server currently has NULL.
+        if authoritativePreference == selected {
+            pendingExplicitOracleVoice = ""
+            applyLocal(selected)
+            return selected
+        }
+
+        applyLocal(selected)
+
+        do {
+            let stored =
+                try await TempleSessionHTTP
+                    .updateOraclePreference(
+                        selected
+                    )
+
+            nativeSession = NativeSessionIdentity(
+                authenticated:
+                    identity.authenticated,
+                display_name:
+                    identity.display_name,
+                role:
+                    identity.role,
+                preferred_oracle:
+                    stored
+            )
+
+            pendingExplicitOracleVoice = ""
+            applyLocal(stored)
+
+            return stored
+
+        } catch {
+            print(
+                "Native Oracle preference update failed: \(error.localizedDescription)"
+            )
+
+            // If the server already had an established preference,
+            // retain that authority on a failed write. If it was NULL,
+            // preserve the seeker's explicit local choice without
+            // pretending the account write succeeded.
+            if let authoritativePreference {
+                applyLocal(
+                    authoritativePreference
+                )
+                return authoritativePreference
+            }
+
+            applyLocal(selected)
+            return selected
+        }
+    }
 }
 
 struct TempleGateView: View {
     @Binding var lastOracleVoice: String
-    @Binding var activeOracleVoice: String
     @Binding var selectedTab: Int
     @Binding var preferredInputMode: String
     @Binding var templeEntryNonce: Int
     @Binding var templeWebDestination: String
     let nativeSession: NativeSessionIdentity?
     let nativeSessionChecked: Bool
+    let onExplicitOracleSelection: (String) async -> String
 
     var body: some View {
         NavigationStack {
@@ -385,18 +666,30 @@ struct TempleGateView: View {
                                             title: "Begin with Hathor by Voice",
                                             subtitle: "Reflective, expansive, and heart-centered"
                                         ) {
-                                            beginNativeVoice(with: "Hathor")
+                                            Task {
+                                                await beginNativeVoice(
+                                                    with: "Hathor"
+                                                )
+                                            }
                                         }
 
                                         VoiceChoiceButton(
                                             title: "Begin with Moses by Voice",
                                             subtitle: "Canonical, depth-oriented, and discerning"
                                         ) {
-                                            beginNativeVoice(with: "Moses")
+                                            Task {
+                                                await beginNativeVoice(
+                                                    with: "Moses"
+                                                )
+                                            }
                                         }
 
                                         Button {
-                                            beginText(with: "Hathor")
+                                            Task {
+                                                await beginText(
+                                                    with: "Hathor"
+                                                )
+                                            }
                                         } label: {
                                             Text("Use Text Instead")
                                                 .frame(maxWidth: .infinity)
@@ -420,7 +713,11 @@ struct TempleGateView: View {
                                     homeOracleVoiceSelector
 
                                     Button {
-                                        beginNativeVoice(with: lastOracleVoice)
+                                        Task {
+                                            await beginNativeVoice(
+                                                with: lastOracleVoice
+                                            )
+                                        }
                                     } label: {
                                         Text("Speak your next question")
                                             .frame(maxWidth: .infinity)
@@ -428,7 +725,11 @@ struct TempleGateView: View {
                                     .buttonStyle(TemplePrimaryButtonStyle())
 
                                     Button {
-                                        beginText(with: lastOracleVoice)
+                                        Task {
+                                            await beginText(
+                                                with: lastOracleVoice
+                                            )
+                                        }
                                     } label: {
                                         Text("Continue with Text")
                                             .frame(maxWidth: .infinity)
@@ -548,8 +849,11 @@ struct TempleGateView: View {
         let isSelected = lastOracleVoice.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == voice.lowercased()
 
         return Button {
-            lastOracleVoice = voice
-            activeOracleVoice = voice
+            Task {
+                _ = await onExplicitOracleSelection(
+                    voice
+                )
+            }
         } label: {
             VStack(spacing: 4) {
                 HStack(spacing: 6) {
@@ -589,16 +893,44 @@ struct TempleGateView: View {
         .buttonStyle(.plain)
     }
 
-    private func beginNativeVoice(with voice: String) {
-        lastOracleVoice = voice
-        activeOracleVoice = voice
+    @MainActor
+    private func beginNativeVoice(
+        with voice: String
+    ) async {
+        let resolved =
+            await onExplicitOracleSelection(
+                voice
+            )
+
+        guard
+            normalizedNativeOracleVoice(
+                resolved
+            ) != nil
+        else {
+            return
+        }
+
         preferredInputMode = "voice"
         selectedTab = 1
     }
 
-    private func beginText(with voice: String) {
-        lastOracleVoice = voice
-        activeOracleVoice = voice
+    @MainActor
+    private func beginText(
+        with voice: String
+    ) async {
+        let resolved =
+            await onExplicitOracleSelection(
+                voice
+            )
+
+        guard
+            normalizedNativeOracleVoice(
+                resolved
+            ) != nil
+        else {
+            return
+        }
+
         preferredInputMode = "text"
         templeWebDestination = "temple"
         templeEntryNonce += 1
@@ -608,7 +940,7 @@ struct TempleGateView: View {
 
 struct NativeVoiceSessionView: View {
     let oracleVoice: String
-    let onOracleVoiceChange: (String) -> Void
+    let onOracleVoiceChange: (String) async -> String
     let onOpenTempleText: () -> Void
     let onReturnHome: () -> Void
 
@@ -908,7 +1240,11 @@ struct NativeVoiceSessionView: View {
         let isSelected = oracleVoice.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == voice.lowercased()
 
         return Button {
-            changeOracleVoice(to: voice)
+            Task {
+                await changeOracleVoice(
+                    to: voice
+                )
+            }
         } label: {
             VStack(spacing: 4) {
                 HStack(spacing: 6) {
@@ -950,24 +1286,50 @@ struct NativeVoiceSessionView: View {
         .opacity((isWorking || isRecording || isPlayingAudio) ? 0.52 : 1.0)
     }
 
-    private func changeOracleVoice(to voice: String) {
-        let selectedVoice = voice.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !selectedVoice.isEmpty else {
+    @MainActor
+    private func changeOracleVoice(
+        to voice: String
+    ) async {
+        guard
+            let selectedVoice =
+                normalizedNativeOracleVoice(
+                    voice
+                )
+        else {
             return
         }
 
-        guard selectedVoice.lowercased() != oracleVoice.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
-            return
+        let currentVoice =
+            normalizedNativeOracleVoice(
+                oracleVoice
+            ) ?? "Hathor"
+
+        let isActualSwitch =
+            selectedVoice != currentVoice
+
+        if isActualSwitch {
+            // Real Oracle changes must terminate the old native
+            // voice/session authority before the new Oracle is applied.
+            stopVoiceSessionActivity(
+                clearExchange: true
+            )
         }
 
-        stopVoiceSessionActivity(clearExchange: true)
+        let resolvedVoice =
+            await onOracleVoiceChange(
+                selectedVoice
+            )
+
+        let displayedVoice =
+            normalizedNativeOracleVoice(
+                resolvedVoice
+            ) ?? currentVoice
 
         recoveryMessage = ""
         showRecoveryActions = false
         statusTitle = "Voice ready"
-        statusMessage = "\(selectedVoice) is selected. Have your question ready, then tap Start Conversation."
-
-        onOracleVoiceChange(selectedVoice)
+        statusMessage =
+            "\(displayedVoice) is selected. Have your question ready, then tap Start Conversation."
     }
 
     private var currentListeningMeterLevel: CGFloat {

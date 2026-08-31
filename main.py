@@ -8003,6 +8003,7 @@ def build_authenticated_me_response(user: dict, anonymous_user_id: str) -> dict:
                     email,
                     display_name,
                     email_verified,
+                    preferred_oracle,
                     last_login,
                     COALESCE(plan_code, 'anon') AS stored_plan_code,
                     COALESCE(scroll_count, 0) AS legacy_scroll_count
@@ -8046,6 +8047,7 @@ def build_authenticated_me_response(user: dict, anonymous_user_id: str) -> dict:
         "email": user_row.get("email"),
         "email_verified": user_row.get("email_verified"),
         "role": normalize_user_role(user.get("role")),
+        "preferred_oracle": user_row.get("preferred_oracle"),
         "last_login": user_row.get("last_login").isoformat() if user_row.get("last_login") else None,
         "seeker_id": user.get("seeker_id"),
         "anonymous_user_id": anonymous_user_id,
@@ -8155,6 +8157,7 @@ def build_anonymous_me_response(
         "display_name": None,
         "email": None,
         "email_verified": False,
+        "preferred_oracle": None,
         "last_login": None,
         "seeker_id": None,
         "anonymous_user_id": anonymous_user_id,
@@ -10713,6 +10716,59 @@ def get_me(request: Request):
     return build_anonymous_me_response(
         anonymous_user_id
     )
+
+
+class OraclePreferenceInput(BaseModel):
+    preferred_oracle: Literal["Hathor", "Moses"]
+
+
+@app.patch("/me/oracle")
+def update_oracle_preference(
+    request: Request,
+    payload: OraclePreferenceInput,
+):
+    user = get_current_user(request)
+
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required."
+        )
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET preferred_oracle = %s
+                WHERE id = %s
+                RETURNING preferred_oracle
+                """,
+                (
+                    payload.preferred_oracle,
+                    user["user_id"],
+                )
+            )
+            row = cur.fetchone()
+
+        if not row:
+            conn.rollback()
+            raise HTTPException(
+                status_code=404,
+                detail="User not found."
+            )
+
+        conn.commit()
+
+        return {
+            "ok": True,
+            "preferred_oracle": row["preferred_oracle"],
+        }
+    finally:
+        conn.close()
+
 
 class AdminSetRoleInput(BaseModel):
     user_id: str
