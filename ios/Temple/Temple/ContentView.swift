@@ -286,9 +286,14 @@ private enum TemplePalette {
     static let paleGold = Color(hex: 0xF4D58D)
     static let crimson = Color(hex: 0x8E2430)
     static let ink = Color(hex: 0x20170F)
+
+    // Native Sanctuary of Hathor.
+    static let malachite = Color(hex: 0x6F8A74)
+    static let malachiteDeep = Color(hex: 0x42594A)
+    static let alabaster = Color(hex: 0xF1E5CC)
 }
 
-private enum NativeTempleIdentity {
+enum NativeTempleIdentity {
     case hathor
     case moses
 
@@ -342,6 +347,69 @@ private enum NativeTempleIdentity {
             return "Visit the Sanctuary of Hathor"
         }
     }
+
+    var screenGradientColors: [Color] {
+        switch self {
+        case .hathor:
+            return [
+                TemplePalette.midnight,
+                TemplePalette.malachiteDeep,
+                TemplePalette.malachite
+            ]
+        case .moses:
+            return [
+                TemplePalette.midnight,
+                TemplePalette.deepBlue,
+                TemplePalette.royalBlue
+            ]
+        }
+    }
+
+    var glowColor: Color {
+        switch self {
+        case .hathor:
+            return TemplePalette.paleGold
+        case .moses:
+            return TemplePalette.warmGold
+        }
+    }
+
+    var cardFillColor: Color {
+        switch self {
+        case .hathor:
+            return TemplePalette.alabaster
+        case .moses:
+            return TemplePalette.parchment
+        }
+    }
+
+    var accentColor: Color {
+        switch self {
+        case .hathor:
+            return TemplePalette.malachiteDeep
+        case .moses:
+            return TemplePalette.paleGold
+        }
+    }
+
+    var secondaryButtonTextColor: Color {
+        switch self {
+        case .hathor:
+            return TemplePalette.malachiteDeep
+        case .moses:
+            return TemplePalette.crimson
+        }
+    }
+
+    var cardCornerRadius: CGFloat {
+        switch self {
+        case .hathor:
+            return 18
+        case .moses:
+            return 28
+        }
+    }
+
 }
 
 extension Color {
@@ -1002,10 +1070,10 @@ struct NativeVoiceSessionView: View {
             )
 
         NavigationStack {
-            TempleScreen {
+            TempleScreen(identity: templeIdentity) {
                 ScrollView {
                     VStack(spacing: 22) {
-                        TempleBrandMark()
+                        TempleBrandMark(identity: templeIdentity)
                             .padding(.top, 28)
 
                         VStack(spacing: 8) {
@@ -1021,7 +1089,9 @@ struct NativeVoiceSessionView: View {
                             }
                         }
 
-                        TempleCard {
+                        oracleVoiceSwitcher
+
+                        TempleCard(identity: templeIdentity) {
                             VStack(spacing: 16) {
                                 Text(statusTitle)
                                     .font(.title3.weight(.bold))
@@ -1099,8 +1169,6 @@ struct NativeVoiceSessionView: View {
                                             || isContinuousConversationActive
                                     )
                                 }
-
-                                oracleVoiceSwitcher
 
                                 if isContinuousConversationActive {
                                     Button {
@@ -1237,7 +1305,11 @@ struct NativeVoiceSessionView: View {
             Text(templeIdentity.visitDestinationTitle)
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(TempleSecondaryButtonStyle())
+        .buttonStyle(
+            TempleSecondaryButtonStyle(
+                identity: templeIdentity
+            )
+        )
         .disabled(
             isWorking
                 || isRecording
@@ -3208,16 +3280,21 @@ struct NativeInfoView: View {
 }
 
 struct TempleScreen<Content: View>: View {
+    let identity: NativeTempleIdentity?
     let content: Content
 
-    init(@ViewBuilder content: () -> Content) {
+    init(
+        identity: NativeTempleIdentity? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.identity = identity
         self.content = content()
     }
 
     var body: some View {
         ZStack {
             LinearGradient(
-                colors: [
+                colors: identity?.screenGradientColors ?? [
                     TemplePalette.midnight,
                     TemplePalette.deepBlue,
                     TemplePalette.royalBlue
@@ -3229,7 +3306,8 @@ struct TempleScreen<Content: View>: View {
 
             RadialGradient(
                 colors: [
-                    TemplePalette.warmGold.opacity(0.26),
+                    (identity?.glowColor ?? TemplePalette.warmGold)
+                        .opacity(0.26),
                     .clear
                 ],
                 center: .top,
@@ -3238,46 +3316,205 @@ struct TempleScreen<Content: View>: View {
             )
             .ignoresSafeArea()
 
+            if let identity {
+                TempleArchitecturalFrame(
+                    identity: identity
+                )
+            }
+
             content
         }
     }
 }
 
+private struct TempleArchitecturalFrame: View {
+    let identity: NativeTempleIdentity
+
+    var body: some View {
+        Group {
+            switch identity {
+            case .hathor:
+                ZStack {
+                    HStack {
+                        sanctuaryRail
+                        Spacer()
+                        sanctuaryRail
+                    }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 66)
+
+                    VStack(spacing: 4) {
+                        Rectangle()
+                            .fill(
+                                TemplePalette.warmGold
+                                    .opacity(0.62)
+                            )
+                            .frame(height: 2)
+
+                        Rectangle()
+                            .fill(
+                                TemplePalette.malachite
+                                    .opacity(0.34)
+                            )
+                            .frame(height: 7)
+                            .overlay(
+                                Rectangle()
+                                    .stroke(
+                                        TemplePalette.paleGold
+                                            .opacity(0.42),
+                                        lineWidth: 0.75
+                                    )
+                            )
+
+                        Spacer()
+
+                        Rectangle()
+                            .fill(
+                                TemplePalette.malachiteDeep
+                                    .opacity(0.58)
+                            )
+                            .frame(height: 10)
+                            .overlay(
+                                Rectangle()
+                                    .stroke(
+                                        TemplePalette.warmGold
+                                            .opacity(0.46),
+                                        lineWidth: 0.75
+                                    )
+                            )
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 7)
+                }
+
+            case .moses:
+                EmptyView()
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private var sanctuaryRail: some View {
+        VStack(spacing: 0) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(
+                    TemplePalette.warmGold.opacity(0.72)
+                )
+                .frame(width: 18, height: 7)
+
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            TemplePalette.warmGold.opacity(0.66),
+                            TemplePalette.malachite.opacity(0.30),
+                            TemplePalette.warmGold.opacity(0.48)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: 8)
+                .overlay(
+                    Rectangle()
+                        .stroke(
+                            TemplePalette.paleGold.opacity(0.44),
+                            lineWidth: 0.75
+                        )
+                )
+
+            RoundedRectangle(cornerRadius: 2)
+                .fill(
+                    TemplePalette.warmGold.opacity(0.62)
+                )
+                .frame(width: 20, height: 8)
+        }
+    }
+}
+
 struct TempleCard<Content: View>: View {
+    let identity: NativeTempleIdentity?
     let content: Content
 
-    init(@ViewBuilder content: () -> Content) {
+    init(
+        identity: NativeTempleIdentity? = nil,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.identity = identity
         self.content = content()
     }
 
     var body: some View {
+        let cornerRadius =
+            identity?.cardCornerRadius ?? 28
+
         content
             .padding(20)
             .frame(maxWidth: .infinity)
             .background(
-                RoundedRectangle(cornerRadius: 28)
-                    .fill(TemplePalette.parchment.opacity(0.96))
-                    .shadow(color: .black.opacity(0.28), radius: 18, x: 0, y: 12)
+                RoundedRectangle(
+                    cornerRadius: cornerRadius
+                )
+                .fill(
+                    (identity?.cardFillColor ?? TemplePalette.parchment)
+                        .opacity(0.96)
+                )
+                .shadow(
+                    color: .black.opacity(0.28),
+                    radius: 18,
+                    x: 0,
+                    y: 12
+                )
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 28)
-                    .stroke(TemplePalette.warmGold.opacity(0.68), lineWidth: 1.4)
+                RoundedRectangle(
+                    cornerRadius: cornerRadius
+                )
+                .stroke(
+                    (identity?.glowColor ?? TemplePalette.warmGold)
+                        .opacity(0.68),
+                    lineWidth: 1.4
+                )
             )
     }
 }
 
 struct TempleBrandMark: View {
+    let identity: NativeTempleIdentity?
+
+    init(
+        identity: NativeTempleIdentity? = nil
+    ) {
+        self.identity = identity
+    }
+
     var body: some View {
         ZStack {
             Circle()
-                .fill(TemplePalette.parchment.opacity(0.98))
-                .shadow(color: .black.opacity(0.28), radius: 16, x: 0, y: 10)
+                .fill(
+                    (identity?.cardFillColor ?? TemplePalette.parchment)
+                        .opacity(0.98)
+                )
+                .shadow(
+                    color: .black.opacity(0.28),
+                    radius: 16,
+                    x: 0,
+                    y: 10
+                )
 
             Circle()
-                .stroke(TemplePalette.warmGold, lineWidth: 3)
+                .stroke(
+                    TemplePalette.warmGold,
+                    lineWidth: 3
+                )
 
             Circle()
-                .stroke(TemplePalette.paleGold.opacity(0.78), lineWidth: 1)
+                .stroke(
+                    (identity?.accentColor ?? TemplePalette.paleGold)
+                        .opacity(0.78),
+                    lineWidth: 1
+                )
                 .padding(8)
 
             Image("GodIncMark")
@@ -3331,21 +3568,47 @@ struct TemplePrimaryButtonStyle: ButtonStyle {
 }
 
 struct TempleSecondaryButtonStyle: ButtonStyle {
+    let identity: NativeTempleIdentity?
+
+    init(
+        identity: NativeTempleIdentity? = nil
+    ) {
+        self.identity = identity
+    }
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.headline)
-            .foregroundStyle(TemplePalette.crimson)
+            .foregroundStyle(
+                identity?.secondaryButtonTextColor
+                    ?? TemplePalette.crimson
+            )
             .padding(.vertical, 12)
             .padding(.horizontal, 16)
             .background(
                 RoundedRectangle(cornerRadius: 16)
-                    .fill(TemplePalette.parchment.opacity(configuration.isPressed ? 0.76 : 0.98))
+                    .fill(
+                        (identity?.cardFillColor ?? TemplePalette.parchment)
+                            .opacity(
+                                configuration.isPressed
+                                    ? 0.76
+                                    : 0.98
+                            )
+                    )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 16)
-                    .stroke(TemplePalette.warmGold.opacity(0.72), lineWidth: 1)
+                    .stroke(
+                        (identity?.glowColor ?? TemplePalette.warmGold)
+                            .opacity(0.72),
+                        lineWidth: 1
+                    )
             )
-            .scaleEffect(configuration.isPressed ? 0.98 : 1.0)
+            .scaleEffect(
+                configuration.isPressed
+                    ? 0.98
+                    : 1.0
+            )
     }
 }
 
