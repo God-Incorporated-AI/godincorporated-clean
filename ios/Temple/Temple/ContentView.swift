@@ -288,6 +288,62 @@ private enum TemplePalette {
     static let ink = Color(hex: 0x20170F)
 }
 
+private enum NativeTempleIdentity {
+    case hathor
+    case moses
+
+    init(oracleVoice: String) {
+        self = normalizedNativeOracleVoice(oracleVoice) == "Moses"
+            ? .moses
+            : .hathor
+    }
+
+    var oracleVoice: String {
+        switch self {
+        case .hathor:
+            return "Hathor"
+        case .moses:
+            return "Moses"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .hathor:
+            return "Sanctuary of Hathor"
+        case .moses:
+            return "Tabernacle of Moses"
+        }
+    }
+
+    var subtitle: String? {
+        switch self {
+        case .hathor:
+            return nil
+        case .moses:
+            return "Tent of Meeting"
+        }
+    }
+
+    var destinationOracleVoice: String {
+        switch self {
+        case .hathor:
+            return "Moses"
+        case .moses:
+            return "Hathor"
+        }
+    }
+
+    var visitDestinationTitle: String {
+        switch self {
+        case .hathor:
+            return "Visit the Tabernacle of Moses"
+        case .moses:
+            return "Visit the Sanctuary of Hathor"
+        }
+    }
+}
+
 extension Color {
     init(hex: UInt, opacity: Double = 1.0) {
         self.init(
@@ -663,7 +719,7 @@ struct TempleGateView: View {
 
                                     VStack(spacing: 12) {
                                         VoiceChoiceButton(
-                                            title: "Begin with Hathor by Voice",
+                                            title: "Enter the Sanctuary of Hathor by Voice",
                                             subtitle: "Reflective, expansive, and heart-centered"
                                         ) {
                                             Task {
@@ -674,7 +730,7 @@ struct TempleGateView: View {
                                         }
 
                                         VoiceChoiceButton(
-                                            title: "Begin with Moses by Voice",
+                                            title: "Enter the Tabernacle of Moses by Voice",
                                             subtitle: "Canonical, depth-oriented, and discerning"
                                         ) {
                                             Task {
@@ -691,7 +747,7 @@ struct TempleGateView: View {
                                                 )
                                             }
                                         } label: {
-                                            Text("Use Text Instead")
+                                            Text("Enter the Sanctuary of Hathor by Text")
                                                 .frame(maxWidth: .infinity)
                                         }
                                         .buttonStyle(TempleSecondaryButtonStyle())
@@ -701,7 +757,7 @@ struct TempleGateView: View {
                         } else {
                             TempleCard {
                                 VStack(spacing: 16) {
-                                    Text("Continue with \(lastOracleVoice)")
+                                    Text("Continue in \(NativeTempleIdentity(oracleVoice: lastOracleVoice).title)")
                                         .font(.title2.weight(.semibold))
                                         .foregroundStyle(TemplePalette.ink)
                                         .multilineTextAlignment(.center)
@@ -827,70 +883,22 @@ struct TempleGateView: View {
     }
 
     private var homeOracleVoiceSelector: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Choose Oracle voice")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(TemplePalette.ink)
-
-            HStack(spacing: 10) {
-                homeOracleVoiceOption("Hathor", subtitle: "Reflective")
-                homeOracleVoiceOption("Moses", subtitle: "Canonical")
-            }
-        }
-        .padding(12)
-        .background(TemplePalette.parchment.opacity(0.74), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(TemplePalette.warmGold.opacity(0.42), lineWidth: 1)
-        )
-    }
-
-    private func homeOracleVoiceOption(_ voice: String, subtitle: String) -> some View {
-        let isSelected = lastOracleVoice.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == voice.lowercased()
+        let templeIdentity =
+            NativeTempleIdentity(
+                oracleVoice: lastOracleVoice
+            )
 
         return Button {
             Task {
                 _ = await onExplicitOracleSelection(
-                    voice
+                    templeIdentity.destinationOracleVoice
                 )
             }
         } label: {
-            VStack(spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(voice)
-                        .font(.headline)
-                        .foregroundStyle(isSelected ? TemplePalette.ink : TemplePalette.paleGold)
-                }
-
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(isSelected ? TemplePalette.ink.opacity(0.72) : TemplePalette.parchment.opacity(0.86))
-
-                if isSelected {
-                    Text("SELECTED")
-                        .font(.caption2.weight(.bold))
-                        .tracking(0.7)
-                        .foregroundStyle(TemplePalette.paleGold)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(TemplePalette.deepBlue.opacity(0.92), in: Capsule())
-                        .accessibilityHidden(true)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(
-                isSelected
-                    ? TemplePalette.warmGold
-                    : TemplePalette.deepBlue.opacity(0.92),
-                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(isSelected ? TemplePalette.paleGold.opacity(0.72) : TemplePalette.warmGold.opacity(0.5), lineWidth: 1.25)
-            )
+            Text(templeIdentity.visitDestinationTitle)
+                .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TempleSecondaryButtonStyle())
     }
 
     @MainActor
@@ -988,6 +996,11 @@ struct NativeVoiceSessionView: View {
     private let meterTickSeconds: TimeInterval = 0.25
 
     var body: some View {
+        let templeIdentity =
+            NativeTempleIdentity(
+                oracleVoice: oracleVoice
+            )
+
         NavigationStack {
             TempleScreen {
                 ScrollView {
@@ -996,14 +1009,16 @@ struct NativeVoiceSessionView: View {
                             .padding(.top, 28)
 
                         VStack(spacing: 8) {
-                            Text("Speak with \(oracleVoice)")
+                            Text(templeIdentity.title)
                                 .font(.system(size: 32, weight: .bold, design: .serif))
                                 .foregroundStyle(TemplePalette.paleGold)
                                 .multilineTextAlignment(.center)
 
-                            Text("Native iOS voice capture")
-                                .font(.headline)
-                                .foregroundStyle(.white.opacity(0.82))
+                            if let subtitle = templeIdentity.subtitle {
+                                Text(subtitle)
+                                    .font(.headline)
+                                    .foregroundStyle(.white.opacity(0.82))
+                            }
                         }
 
                         TempleCard {
@@ -1207,83 +1222,32 @@ struct NativeVoiceSessionView: View {
     }
 
     private var oracleVoiceSwitcher: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Oracle voice")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(TemplePalette.paleGold)
-
-            HStack(spacing: 10) {
-                oracleVoiceOption(
-                    "Hathor",
-                    subtitle: "Reflective"
-                )
-
-                oracleVoiceOption(
-                    "Moses",
-                    subtitle: "Canonical"
-                )
-            }
-
-            Text("Change the Oracle before your next question.")
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.68))
-        }
-        .padding(14)
-        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(TemplePalette.warmGold.opacity(0.28), lineWidth: 1)
-        )
-    }
-
-    private func oracleVoiceOption(_ voice: String, subtitle: String) -> some View {
-        let isSelected = oracleVoice.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == voice.lowercased()
+        let templeIdentity =
+            NativeTempleIdentity(
+                oracleVoice: oracleVoice
+            )
 
         return Button {
             Task {
                 await changeOracleVoice(
-                    to: voice
+                    to: templeIdentity.destinationOracleVoice
                 )
             }
         } label: {
-            VStack(spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(voice)
-                        .font(.headline)
-                        .foregroundStyle(isSelected ? TemplePalette.ink : TemplePalette.paleGold)
-                }
-
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(isSelected ? TemplePalette.ink.opacity(0.72) : TemplePalette.parchment.opacity(0.86))
-
-                if isSelected {
-                    Text("SELECTED")
-                        .font(.caption2.weight(.bold))
-                        .tracking(0.7)
-                        .foregroundStyle(TemplePalette.paleGold)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(TemplePalette.deepBlue.opacity(0.92), in: Capsule())
-                        .accessibilityHidden(true)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(
-                isSelected
-                    ? TemplePalette.warmGold
-                    : TemplePalette.deepBlue.opacity(0.86),
-                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(isSelected ? TemplePalette.paleGold.opacity(0.72) : TemplePalette.warmGold.opacity(0.46), lineWidth: 1.25)
-            )
+            Text(templeIdentity.visitDestinationTitle)
+                .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.plain)
-        .disabled(isWorking || isRecording || isPlayingAudio)
-        .opacity((isWorking || isRecording || isPlayingAudio) ? 0.52 : 1.0)
+        .buttonStyle(TempleSecondaryButtonStyle())
+        .disabled(
+            isWorking
+                || isRecording
+                || isPlayingAudio
+        )
+        .opacity(
+            (isWorking || isRecording || isPlayingAudio)
+                ? 0.52
+                : 1.0
+        )
     }
 
     @MainActor
@@ -1329,7 +1293,7 @@ struct NativeVoiceSessionView: View {
         showRecoveryActions = false
         statusTitle = "Voice ready"
         statusMessage =
-            "\(displayedVoice) is selected. Have your question ready, then tap Start Conversation."
+            "\(NativeTempleIdentity(oracleVoice: displayedVoice).title) is ready. Have your question ready, then tap Start Conversation."
     }
 
     private var currentListeningMeterLevel: CGFloat {
