@@ -7127,12 +7127,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     }
   }
 
-  // Update identity display on load
-  updateIdentityDisplay();
-});
-
-/* Phase 11.10R: one explicit Oracle choice authority */
-(function () {
+  /* Phase 11.10R: one explicit Oracle choice authority */
   function initOracleChoiceCards() {
     renderOracleSelectionUi(currentIdentity);
 
@@ -7157,12 +7152,8 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       });
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener(
-      "DOMContentLoaded",
-      initOracleChoiceCards
-    );
-  } else {
-    initOracleChoiceCards();
-  }
-})();
+  initOracleChoiceCards();
+
+  // Update identity display on load
+  updateIdentityDisplay();
+});
