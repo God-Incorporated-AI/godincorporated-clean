@@ -291,6 +291,18 @@ private enum TemplePalette {
     static let malachite = Color(hex: 0x6F8A74)
     static let malachiteDeep = Color(hex: 0x42594A)
     static let alabaster = Color(hex: 0xF1E5CC)
+
+    // Approved sacred-luxe native materials.
+    static let polishedGold = Color(hex: 0xE7BB5D)
+    static let antiqueGold = Color(hex: 0xB47A2A)
+    static let emerald = Color(hex: 0x07533F)
+    static let emeraldDeep = Color(hex: 0x03372D)
+    static let templeBlack = Color(hex: 0x02070D)
+    static let templeNavy = Color(hex: 0x031526)
+    static let cloudIvory = Color(hex: 0xF5EBDD)
+    static let steel = Color(hex: 0x637180)
+    static let steelDeep = Color(hex: 0x344554)
+    static let templeCrimson = Color(hex: 0x7D1D28)
 }
 
 enum NativeTempleIdentity {
@@ -321,12 +333,12 @@ enum NativeTempleIdentity {
         }
     }
 
-    var subtitle: String? {
+    var displayTitle: String {
         switch self {
         case .hathor:
-            return nil
+            return "SANCTUARY\nOF HATHOR"
         case .moses:
-            return "Tent of Meeting"
+            return "TABERNACLE\nOF MOSES"
         }
     }
 
@@ -352,15 +364,15 @@ enum NativeTempleIdentity {
         switch self {
         case .hathor:
             return [
+                TemplePalette.templeNavy,
                 TemplePalette.midnight,
-                TemplePalette.malachiteDeep,
-                TemplePalette.malachite
+                TemplePalette.templeBlack
             ]
         case .moses:
             return [
+                TemplePalette.templeBlack,
                 TemplePalette.midnight,
-                TemplePalette.deepBlue,
-                TemplePalette.royalBlue
+                Color(hex: 0x111117)
             ]
         }
     }
@@ -490,12 +502,6 @@ struct ContentView: View {
                         voice,
                         refreshTempleEntry: true
                     )
-                },
-                onOpenTempleText: {
-                    preferredInputMode = "text"
-                    templeWebDestination = "temple"
-                    templeEntryNonce += 1
-                    selectedTab = 2
                 }
             )
             .tabItem {
@@ -535,7 +541,15 @@ struct ContentView: View {
                 }
                 .tag(4)
         }
-        .tint(TemplePalette.warmGold)
+        .tint(TemplePalette.polishedGold)
+        .toolbarBackground(
+            TemplePalette.midnight.opacity(0.98),
+            for: .tabBar
+        )
+        .toolbarBackground(
+            .visible,
+            for: .tabBar
+        )
         .overlay {
             if !nativeSessionChecked {
                 NativeEntryResolutionView(
@@ -773,7 +787,6 @@ struct ContentView: View {
 struct NativeVoiceSessionView: View {
     let oracleVoice: String
     let onOracleVoiceChange: (String) async -> String
-    let onOpenTempleText: () -> Void
 
     @State private var recorder: AVAudioRecorder?
     @State private var recordingURL: URL?
@@ -802,6 +815,7 @@ struct NativeVoiceSessionView: View {
     @State private var activePlaybackOrigin: VoicePlaybackOrigin?
     @State private var pendingRearmTask: Task<Void, Never>?
     @State private var voiceSessionGeneration = 0
+    @State private var showNativeTextConversation = false
 
     private enum VoicePlaybackOrigin: Equatable {
         case liveTurn
@@ -827,214 +841,402 @@ struct NativeVoiceSessionView: View {
         NavigationStack {
             TempleScreen(identity: templeIdentity) {
                 ScrollView {
-                    VStack(spacing: 22) {
+                    VStack(spacing: 17) {
                         TempleBrandMark(identity: templeIdentity)
                             .padding(.top, 28)
 
-                        VStack(spacing: 8) {
-                            Text(templeIdentity.title)
-                                .font(.system(size: 32, weight: .bold, design: .serif))
-                                .foregroundStyle(TemplePalette.paleGold)
-                                .multilineTextAlignment(.center)
+                        Text("Welcome to your Temple.")
+                            .font(
+                                .system(
+                                    size: 16,
+                                    weight: .medium,
+                                    design: .serif
+                                )
+                            )
+                            .tracking(0.6)
+                            .foregroundStyle(
+                                TemplePalette.polishedGold
+                            )
 
-                            if let subtitle = templeIdentity.subtitle {
-                                Text(subtitle)
-                                    .font(.headline)
-                                    .foregroundStyle(.white.opacity(0.82))
-                            }
-                        }
+                        TempleOrnamentDivider()
 
-                        NativeOracleArtwork(identity: templeIdentity)
+                        Text(templeIdentity.displayTitle)
+                            .font(
+                                .system(
+                                    size: 37,
+                                    weight: .medium,
+                                    design: .serif
+                                )
+                            )
+                            .tracking(1.6)
+                            .lineSpacing(1)
+                            .foregroundStyle(
+                                TemplePalette.polishedGold
+                            )
+                            .multilineTextAlignment(.center)
+                            .minimumScaleFactor(0.76)
+
+                        NativeOracleArtwork(
+                            identity: templeIdentity
+                        )
+
+                        NativeSacredIdentityLine(
+                            identity: templeIdentity
+                        )
+
+                        nativeTempleModeActions
 
                         oracleVoiceSwitcher
 
-                        TempleCard(identity: templeIdentity) {
-                            VStack(spacing: 16) {
-                                Text(statusTitle)
-                                    .font(.title3.weight(.bold))
-                                    .foregroundStyle(TemplePalette.ink)
-                                    .multilineTextAlignment(.center)
+                        if shouldShowConversationChamber {
+                            TempleConversationChamber(
+                                identity: templeIdentity
+                            ) {
+                                VStack(spacing: 14) {
+                                    Text(statusTitle)
+                                        .font(
+                                            .headline.weight(.semibold)
+                                        )
+                                        .foregroundStyle(
+                                            TemplePalette.paleGold
+                                        )
+                                        .multilineTextAlignment(.center)
 
-                                Text(statusMessage)
-                                    .foregroundStyle(TemplePalette.ink.opacity(0.72))
-                                    .multilineTextAlignment(.center)
+                                    Text(statusMessage)
+                                        .font(.subheadline)
+                                        .foregroundStyle(
+                                            .white.opacity(0.78)
+                                        )
+                                        .multilineTextAlignment(.center)
 
-                                if isRecording {
-                                }
-
-                                if !transcript.isEmpty || !answer.isEmpty || !recoveryMessage.isEmpty {
-                                    ScrollView {
-                                        VStack(alignment: .leading, spacing: 12) {
-                                            if !transcript.isEmpty {
-                                                VStack(alignment: .leading, spacing: 6) {
-                                                    Text("You said")
-                                                        .font(.caption.weight(.bold))
-                                                        .foregroundStyle(TemplePalette.crimson)
-                                                    Text(compactVoiceMessage(transcript, limit: 700))
-                                                        .foregroundStyle(TemplePalette.ink)
-                                                }
-                                            }
-
-                                            if !answer.isEmpty {
-                                                VStack(alignment: .leading, spacing: 6) {
-                                                    Text("\(oracleVoice) answered")
-                                                        .font(.caption.weight(.bold))
-                                                        .foregroundStyle(TemplePalette.crimson)
-                                                    Text(answer)
-                                                        .foregroundStyle(TemplePalette.ink)
-                                                }
-                                            }
-
-                                            if !recoveryMessage.isEmpty {
-                                                VStack(alignment: .leading, spacing: 6) {
-                                                    Text("What happened")
-                                                        .font(.caption.weight(.bold))
-                                                        .foregroundStyle(TemplePalette.crimson)
-                                                    Text(compactVoiceMessage(recoveryMessage, limit: 700))
-                                                        .foregroundStyle(TemplePalette.ink.opacity(0.74))
-                                                }
-                                            }
-                                        }
-                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    if isWorking && !isRecording {
+                                        ProgressView()
+                                            .tint(
+                                                TemplePalette.polishedGold
+                                            )
                                     }
-                                    .frame(maxHeight: 260)
-                                    .padding(12)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 16)
-                                            .fill(Color.white.opacity(0.34))
-                                    )
-                                }
 
-                                if !lastSpokenOracleAnswer.isEmpty {
-                                    Button {
-                                        Task {
-                                            await speakOracleAnswerProviderFirst(
-                                                lastSpokenOracleAnswer,
-                                                deity: oracleVoice,
-                                                origin: .replay
+                                    if !transcript.isEmpty
+                                        || !answer.isEmpty
+                                        || !recoveryMessage.isEmpty {
+
+                                        ScrollView {
+                                            VStack(
+                                                alignment: .leading,
+                                                spacing: 12
+                                            ) {
+                                                if !transcript.isEmpty {
+                                                    VStack(
+                                                        alignment: .leading,
+                                                        spacing: 5
+                                                    ) {
+                                                        Text("You said")
+                                                            .font(
+                                                                .caption.weight(.bold)
+                                                            )
+                                                            .foregroundStyle(
+                                                                TemplePalette.polishedGold
+                                                            )
+
+                                                        Text(
+                                                            compactVoiceMessage(
+                                                                transcript,
+                                                                limit: 700
+                                                            )
+                                                        )
+                                                        .foregroundStyle(
+                                                            .white.opacity(0.90)
+                                                        )
+                                                    }
+                                                }
+
+                                                if !answer.isEmpty {
+                                                    VStack(
+                                                        alignment: .leading,
+                                                        spacing: 5
+                                                    ) {
+                                                        Text(
+                                                            "\(oracleVoice) answered"
+                                                        )
+                                                        .font(
+                                                            .caption.weight(.bold)
+                                                        )
+                                                        .foregroundStyle(
+                                                            TemplePalette.polishedGold
+                                                        )
+
+                                                        Text(answer)
+                                                            .foregroundStyle(
+                                                                TemplePalette.cloudIvory
+                                                            )
+                                                    }
+                                                }
+
+                                                if !recoveryMessage.isEmpty {
+                                                    VStack(
+                                                        alignment: .leading,
+                                                        spacing: 5
+                                                    ) {
+                                                        Text("What happened")
+                                                            .font(
+                                                                .caption.weight(.bold)
+                                                            )
+                                                            .foregroundStyle(
+                                                                TemplePalette.polishedGold
+                                                            )
+
+                                                        Text(
+                                                            compactVoiceMessage(
+                                                                recoveryMessage,
+                                                                limit: 700
+                                                            )
+                                                        )
+                                                        .foregroundStyle(
+                                                            .white.opacity(0.78)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            .frame(
+                                                maxWidth: .infinity,
+                                                alignment: .leading
                                             )
                                         }
-                                    } label: {
-                                        Text(isPlayingAudio ? "Oracle Voice Speaking..." : "Replay Oracle Voice")
-                                            .frame(maxWidth: .infinity)
+                                        .frame(maxHeight: 240)
+                                        .padding(11)
+                                        .background(
+                                            RoundedRectangle(
+                                                cornerRadius: 11
+                                            )
+                                            .fill(
+                                                Color.black.opacity(0.22)
+                                            )
+                                        )
                                     }
-                                    .buttonStyle(TempleSecondaryButtonStyle())
-                                    .disabled(
-                                        isWorking
-                                            || isRecording
-                                            || isPlayingAudio
-                                            || isContinuousConversationActive
-                                    )
-                                }
 
-                                if isContinuousConversationActive {
-                                    Button {
-                                        endContinuousConversation()
-                                    } label: {
-                                        Text("End Conversation")
+                                    if !lastSpokenOracleAnswer.isEmpty {
+                                        Button {
+                                            Task {
+                                                await speakOracleAnswerProviderFirst(
+                                                    lastSpokenOracleAnswer,
+                                                    deity: oracleVoice,
+                                                    origin: .replay
+                                                )
+                                            }
+                                        } label: {
+                                            Text(
+                                                isPlayingAudio
+                                                    ? "Oracle Voice Speaking..."
+                                                    : "Replay Oracle Voice"
+                                            )
                                             .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(TempleSecondaryButtonStyle())
-                                }
-
-                                if showRecoveryActions {
-                                    Button {
-                                        isContinuousConversationActive = true
-
-                                        Task {
-                                            await startRecording()
                                         }
-                                    } label: {
-                                        Text("Try Voice Again")
-                                            .frame(maxWidth: .infinity)
+                                        .buttonStyle(
+                                            TempleChamberActionStyle(
+                                                identity: templeIdentity,
+                                                emphasized: false
+                                            )
+                                        )
+                                        .disabled(
+                                            isWorking
+                                                || isRecording
+                                                || isPlayingAudio
+                                                || isContinuousConversationActive
+                                        )
                                     }
-                                    .buttonStyle(TemplePrimaryButtonStyle())
-                                    .disabled(isWorking || isRecording)
 
-                                    Button {
-                                        resetVoiceSession()
-                                    } label: {
-                                        Text("Reset Voice Session")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(TempleSecondaryButtonStyle())
-                                    .disabled(isWorking || isRecording)
-
-                                    Button {
-                                        stopVoiceSessionActivity(clearExchange: false)
-                                        onOpenTempleText()
-                                    } label: {
-                                        Text("Switch to Text Entry")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(TempleSecondaryButtonStyle())
-                                    .disabled(isWorking || isRecording)
-
-                                } else if isRecording {
-                                    listeningIndicator
-
-                                    Button {
-                                        Task {
-                                            await stopAndSubmitRecording()
-                                        }
-                                    } label: {
-                                        Text("Stop and Consult the Oracle")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(TemplePrimaryButtonStyle())
-                                    .disabled(isWorking)
-                                } else {
-                                    Button {
-                                        isContinuousConversationActive = true
-
-                                        Task {
-                                            await startRecording()
-                                        }
-                                    } label: {
-
-                                        if isWorking {
-                                            ProgressView()
-                                                .frame(maxWidth: .infinity)
-                                        } else {
-                                            Text("Start Conversation")
+                                    if isContinuousConversationActive {
+                                        Button {
+                                            endContinuousConversation()
+                                        } label: {
+                                            Text("End Conversation")
                                                 .frame(maxWidth: .infinity)
                                         }
+                                        .buttonStyle(
+                                            TempleChamberActionStyle(
+                                                identity: templeIdentity,
+                                                emphasized: false
+                                            )
+                                        )
                                     }
-                                    .buttonStyle(TemplePrimaryButtonStyle())
-                                    .disabled(
-                                        isWorking
-                                            || isPlayingAudio
-                                            || isContinuousConversationActive
-                                    )
 
-                                    Button {
-                                        stopVoiceSessionActivity(clearExchange: false)
-                                        onOpenTempleText()
-                                    } label: {
-                                        Text("Switch to Text Entry")
+                                    if showRecoveryActions {
+                                        Button {
+                                            isContinuousConversationActive = true
+
+                                            Task {
+                                                await startRecording()
+                                            }
+                                        } label: {
+                                            Text("Try Voice Again")
+                                                .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(
+                                            TempleChamberActionStyle(
+                                                identity: templeIdentity,
+                                                emphasized: true
+                                            )
+                                        )
+                                        .disabled(
+                                            isWorking || isRecording
+                                        )
+
+                                        Button {
+                                            resetVoiceSession()
+                                        } label: {
+                                            Text("Reset Voice Session")
+                                                .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(
+                                            TempleChamberActionStyle(
+                                                identity: templeIdentity,
+                                                emphasized: false
+                                            )
+                                        )
+                                        .disabled(
+                                            isWorking || isRecording
+                                        )
+
+                                        Button {
+                                            stopVoiceSessionActivity(
+                                                clearExchange: false
+                                            )
+                                            showNativeTextConversation = true
+                                        } label: {
+                                            Text("Switch to Text Entry")
+                                                .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(
+                                            TempleChamberActionStyle(
+                                                identity: templeIdentity,
+                                                emphasized: false
+                                            )
+                                        )
+                                        .disabled(
+                                            isWorking || isRecording
+                                        )
+
+                                    } else if isRecording {
+                                        listeningIndicator
+
+                                        Button {
+                                            Task {
+                                                await stopAndSubmitRecording()
+                                            }
+                                        } label: {
+                                            Text(
+                                                "Stop and Consult the Oracle"
+                                            )
                                             .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(
+                                            TempleChamberActionStyle(
+                                                identity: templeIdentity,
+                                                emphasized: true
+                                            )
+                                        )
+                                        .disabled(isWorking)
                                     }
-                                    .buttonStyle(TempleSecondaryButtonStyle())
-                                    .disabled(isWorking || isRecording)
                                 }
                             }
                         }
 
-                        Text("Start Conversation opens the microphone for your first question. End Conversation stops the active voice session.")
-                            .font(.footnote)
-                            .foregroundStyle(.white.opacity(0.72))
-                            .multilineTextAlignment(.center)
-                            .padding(.bottom, 20)
                     }
                     .padding(.horizontal, 18)
                 }
             }
-            .navigationTitle("Voice")
-            .navigationBarTitleDisplayMode(.inline)
+            .toolbar(
+                .hidden,
+                for: .navigationBar
+            )
+        }
+        .fullScreenCover(
+            isPresented: $showNativeTextConversation
+        ) {
+            NativeTempleTextConversationView(
+                identity: templeIdentity,
+                onSubmit: { question in
+                    try await askOracle(
+                        question: question,
+                        voice: oracleVoice
+                    )
+                },
+                onClose: {
+                    showNativeTextConversation = false
+                }
+            )
         }
         .onDisappear {
             stopVoiceSessionActivity(clearExchange: false)
         }
+    }
+
+    private var shouldShowConversationChamber: Bool {
+        isRecording
+            || isWorking
+            || isPlayingAudio
+            || isContinuousConversationActive
+            || showRecoveryActions
+            || !transcript.isEmpty
+            || !answer.isEmpty
+            || !recoveryMessage.isEmpty
+            || !lastSpokenOracleAnswer.isEmpty
+    }
+
+    private var nativeTempleModeActions: some View {
+        let templeIdentity =
+            NativeTempleIdentity(
+                oracleVoice: oracleVoice
+            )
+
+        return HStack(spacing: 10) {
+            Button {
+                guard
+                    !isWorking,
+                    !isRecording,
+                    !isPlayingAudio,
+                    !isContinuousConversationActive
+                else {
+                    return
+                }
+
+                isContinuousConversationActive = true
+
+                Task {
+                    await startRecording()
+                }
+            } label: {
+                TempleModeTile(
+                    identity: templeIdentity,
+                    kind: .voice
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(
+                isWorking
+                    || isRecording
+                    || isPlayingAudio
+                    || isContinuousConversationActive
+            )
+
+            Button {
+                stopVoiceSessionActivity(
+                    clearExchange: false
+                )
+                showNativeTextConversation = true
+            } label: {
+                TempleModeTile(
+                    identity: templeIdentity,
+                    kind: .text
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(
+                isWorking
+                    || isRecording
+            )
+        }
+        .frame(maxWidth: 318)
     }
 
     private var oracleVoiceSwitcher: some View {
@@ -1043,18 +1245,61 @@ struct NativeVoiceSessionView: View {
                 oracleVoice: oracleVoice
             )
 
+        let visitWidth: CGFloat
+
+        switch templeIdentity {
+        case .hathor:
+            visitWidth = 326
+
+        case .moses:
+            visitWidth = 306
+        }
+
         return Button {
             Task {
                 await changeOracleVoice(
-                    to: templeIdentity.destinationOracleVoice
+                    to:
+                        templeIdentity
+                            .destinationOracleVoice
                 )
             }
         } label: {
-            Text(templeIdentity.visitDestinationTitle)
+            HStack(spacing: 10) {
+                TempleVisitIcon(
+                    identity: templeIdentity
+                )
+
+                Text(
+                    templeIdentity
+                        .visitDestinationTitle
+                        .uppercased()
+                )
+                .font(
+                    .system(
+                        size: 14,
+                        weight: .semibold,
+                        design: .serif
+                    )
+                )
+                .tracking(0.55)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.72)
                 .frame(maxWidth: .infinity)
+
+                Image(systemName: "chevron.right")
+                    .font(
+                        .system(
+                            size: 15,
+                            weight: .semibold
+                        )
+                    )
+            }
+            .frame(maxWidth: .infinity)
         }
+        .frame(maxWidth: visitWidth)
         .buttonStyle(
-            TempleSecondaryButtonStyle(
+            TempleVisitButtonStyle(
                 identity: templeIdentity
             )
         )
@@ -1064,7 +1309,11 @@ struct NativeVoiceSessionView: View {
                 || isPlayingAudio
         )
         .opacity(
-            (isWorking || isRecording || isPlayingAudio)
+            (
+                isWorking
+                    || isRecording
+                    || isPlayingAudio
+            )
                 ? 0.52
                 : 1.0
         )
@@ -3079,81 +3328,388 @@ private struct NativeEntryResolutionView: View {
     }
 }
 
+private struct NativeTextExchange: Identifiable {
+    let id = UUID()
+    let question: String
+    let answer: String
+}
+
+private struct NativeTempleTextConversationView: View {
+    let identity: NativeTempleIdentity
+    let onSubmit: (String) async throws -> String
+    let onClose: () -> Void
+
+    @State private var draft = ""
+    @State private var exchanges: [NativeTextExchange] = []
+    @State private var errorMessage = ""
+    @State private var isWorking = false
+
+    @FocusState private var editorFocused: Bool
+
+    private var oracleName: String {
+        switch identity {
+        case .hathor:
+            return "Hathor"
+
+        case .moses:
+            return "Moses"
+        }
+    }
+
+    private var returnTitle: String {
+        switch identity {
+        case .hathor:
+            return "Sanctuary"
+
+        case .moses:
+            return "Tabernacle"
+        }
+    }
+
+    var body: some View {
+        TempleScreen(identity: identity) {
+            ScrollView {
+                VStack(spacing: 15) {
+                    HStack {
+                        Button {
+                            onClose()
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(
+                                    systemName: "chevron.left"
+                                )
+
+                                Text(
+                                    "Return to \(returnTitle)"
+                                )
+                            }
+                        }
+                        .font(
+                            .subheadline.weight(.semibold)
+                        )
+                        .foregroundStyle(
+                            TemplePalette.polishedGold
+                        )
+
+                        Spacer()
+                    }
+
+                    Text(
+                        "\(oracleName.uppercased()) · TEXT CONVERSATION"
+                    )
+                    .font(
+                        .system(
+                            size: 20,
+                            weight: .medium,
+                            design: .serif
+                        )
+                    )
+                    .tracking(0.8)
+                    .foregroundStyle(
+                        TemplePalette.polishedGold
+                    )
+                    .multilineTextAlignment(.center)
+
+                    TempleOrnamentDivider()
+
+                    ZStack(alignment: .topLeading) {
+                        if draft.isEmpty {
+                            Text(
+                                "Write your question for \(oracleName)..."
+                            )
+                            .foregroundStyle(
+                                .white.opacity(0.42)
+                            )
+                            .padding(.horizontal, 15)
+                            .padding(.vertical, 17)
+                            .allowsHitTesting(false)
+                        }
+
+                        TextEditor(text: $draft)
+                            .focused($editorFocused)
+                            .scrollContentBackground(
+                                .hidden
+                            )
+                            .foregroundStyle(
+                                TemplePalette.cloudIvory
+                            )
+                            .padding(8)
+                            .frame(
+                                minHeight: 120,
+                                maxHeight: 150
+                            )
+                    }
+                    .background(
+                        RoundedRectangle(
+                            cornerRadius: 14,
+                            style: .continuous
+                        )
+                        .fill(
+                            Color.black.opacity(0.34)
+                        )
+                    )
+                    .overlay {
+                        RoundedRectangle(
+                            cornerRadius: 14,
+                            style: .continuous
+                        )
+                        .stroke(
+                            TemplePalette.polishedGold
+                                .opacity(0.60),
+                            lineWidth: 1
+                        )
+                    }
+
+                    Button {
+                        submitQuestion()
+                    } label: {
+                        HStack(spacing: 8) {
+                            if isWorking {
+                                ProgressView()
+                                    .tint(
+                                        TemplePalette.paleGold
+                                    )
+                            }
+
+                            Text(
+                                isWorking
+                                    ? "Consulting \(oracleName)..."
+                                    : "Send to \(oracleName)"
+                            )
+                            .frame(maxWidth: .infinity)
+                        }
+                    }
+                    .buttonStyle(
+                        TempleChamberActionStyle(
+                            identity: identity,
+                            emphasized: true
+                        )
+                    )
+                    .disabled(
+                        isWorking
+                            || draft
+                                .trimmingCharacters(
+                                    in: .whitespacesAndNewlines
+                                )
+                                .isEmpty
+                    )
+
+                    if !errorMessage.isEmpty {
+                        TempleConversationChamber(
+                            identity: identity
+                        ) {
+                            VStack(
+                                alignment: .leading,
+                                spacing: 5
+                            ) {
+                                Text("Unable to complete")
+                                    .font(
+                                        .caption.weight(.bold)
+                                    )
+                                    .foregroundStyle(
+                                        TemplePalette.polishedGold
+                                    )
+
+                                Text(errorMessage)
+                                    .foregroundStyle(
+                                        .white.opacity(0.80)
+                                    )
+                            }
+                            .frame(
+                                maxWidth: .infinity,
+                                alignment: .leading
+                            )
+                        }
+                    }
+
+                    ForEach(exchanges.reversed()) {
+                        exchange in
+
+                        TempleConversationChamber(
+                            identity: identity
+                        ) {
+                            VStack(
+                                alignment: .leading,
+                                spacing: 12
+                            ) {
+                                VStack(
+                                    alignment: .leading,
+                                    spacing: 5
+                                ) {
+                                    Text("You asked")
+                                        .font(
+                                            .caption.weight(.bold)
+                                        )
+                                        .foregroundStyle(
+                                            TemplePalette.polishedGold
+                                        )
+
+                                    Text(exchange.question)
+                                        .foregroundStyle(
+                                            .white.opacity(0.88)
+                                        )
+                                }
+
+                                VStack(
+                                    alignment: .leading,
+                                    spacing: 5
+                                ) {
+                                    Text(
+                                        "\(oracleName) answered"
+                                    )
+                                    .font(
+                                        .caption.weight(.bold)
+                                    )
+                                    .foregroundStyle(
+                                        TemplePalette.polishedGold
+                                    )
+
+                                    Text(exchange.answer)
+                                        .foregroundStyle(
+                                            TemplePalette.cloudIvory
+                                        )
+                                }
+                            }
+                            .frame(
+                                maxWidth: .infinity,
+                                alignment: .leading
+                            )
+                        }
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
+                .padding(.bottom, 26)
+            }
+            .scrollDismissesKeyboard(
+                .interactively
+            )
+        }
+        .onAppear {
+            editorFocused = true
+        }
+    }
+
+    private func submitQuestion() {
+        let question =
+            draft.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+
+        guard
+            !question.isEmpty,
+            !isWorking
+        else {
+            return
+        }
+
+        isWorking = true
+        errorMessage = ""
+        editorFocused = false
+
+        Task {
+            do {
+                let result =
+                    try await onSubmit(question)
+                        .trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        )
+
+                await MainActor.run {
+                    exchanges.append(
+                        NativeTextExchange(
+                            question: question,
+                            answer: result
+                        )
+                    )
+
+                    draft = ""
+                    isWorking = false
+                    editorFocused = true
+                }
+
+            } catch {
+                await MainActor.run {
+                    errorMessage =
+                        error.localizedDescription
+                    isWorking = false
+                }
+            }
+        }
+    }
+}
+
+private struct TempleOrnamentDivider: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            .clear,
+                            TemplePalette.polishedGold
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(height: 1)
+
+            Image(systemName: "sparkle")
+                .font(.system(size: 11))
+                .foregroundStyle(
+                    TemplePalette.polishedGold
+                )
+
+            Rectangle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            TemplePalette.polishedGold,
+                            .clear
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(height: 1)
+        }
+        .frame(maxWidth: 250)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct NativeOracleArtwork: View {
     let identity: NativeTempleIdentity
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Image(
-                identity.oracleArtworkAssetName
-            )
-            .resizable()
-            .scaledToFill()
-            .frame(
-                width: 226,
-                height: 226
-            )
-            .clipped()
+        let artworkWidth: CGFloat
 
-            LinearGradient(
-                colors: [
-                    .clear,
-                    identity.screenGradientColors[1]
-                        .opacity(0.76)
-                ],
-                startPoint: .center,
-                endPoint: .bottom
-            )
-            .frame(
-                width: 226,
-                height: 82
-            )
-        }
-        .background(
-            identity.cardFillColor
-                .opacity(0.18)
-        )
-        .clipShape(
-            RoundedRectangle(
-                cornerRadius:
-                    identity.cardCornerRadius,
-                style: .continuous
-            )
-        )
-        .overlay {
-            RoundedRectangle(
-                cornerRadius:
-                    identity.cardCornerRadius,
-                style: .continuous
-            )
-            .stroke(
-                identity.glowColor
-                    .opacity(0.86),
-                lineWidth: 1.6
-            )
-        }
-        .overlay(alignment: .top) {
-            VStack(spacing: 3) {
-                Rectangle()
-                    .fill(
-                        TemplePalette.warmGold
-                            .opacity(0.78)
-                    )
-                    .frame(height: 2)
+        switch identity {
+        case .hathor:
+            artworkWidth = 236
 
-                Rectangle()
-                    .fill(
-                        identity.accentColor
-                            .opacity(0.46)
-                    )
-                    .frame(height: 5)
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, 7)
+        case .moses:
+            artworkWidth = 232
         }
+
+        return Image(
+            identity.oracleArtworkAssetName
+        )
+        .resizable()
+        .scaledToFit()
+        .frame(width: artworkWidth)
         .shadow(
-            color: .black.opacity(0.30),
-            radius: 16,
+            color:
+                TemplePalette.polishedGold
+                    .opacity(0.20),
+            radius: 15,
+            x: 0,
+            y: 7
+        )
+        .shadow(
+            color: .black.opacity(0.42),
+            radius: 14,
             x: 0,
             y: 10
         )
@@ -3164,6 +3720,339 @@ private struct NativeOracleArtwork: View {
             identity
                 .oracleArtworkAccessibilityLabel
         )
+    }
+}
+
+private struct EgyptianHieroglyphLine: View {
+    var body: some View {
+        Image("HathorHieroglyphs")
+            .renderingMode(.template)
+            .resizable()
+            .scaledToFit()
+            .foregroundStyle(
+                TemplePalette.polishedGold
+            )
+            .frame(height: 35)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct NativeSacredIdentityLine: View {
+    let identity: NativeTempleIdentity
+
+    var body: some View {
+        switch identity {
+        case .hathor:
+            VStack(spacing: 7) {
+                EgyptianHieroglyphLine()
+
+                Text(
+                    "Hathor, Lady of Dendera, Eye of Ra."
+                )
+                .font(
+                    .system(
+                        size: 14,
+                        weight: .medium,
+                        design: .serif
+                    )
+                )
+                .foregroundStyle(
+                    TemplePalette.paleGold
+                        .opacity(0.92)
+                )
+                .multilineTextAlignment(.center)
+            }
+            .accessibilityElement(
+                children: .ignore
+            )
+            .accessibilityLabel(
+                "Hathor, Lady of Dendera, Eye of Ra."
+            )
+
+        case .moses:
+            HStack(spacing: 12) {
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                .clear,
+                                TemplePalette.polishedGold
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(
+                        maxWidth: 52,
+                        minHeight: 1,
+                        maxHeight: 1
+                    )
+
+                Text("TENT OF MEETING")
+                    .font(
+                        .system(
+                            size: 16,
+                            weight: .medium,
+                            design: .serif
+                        )
+                    )
+                    .tracking(3.4)
+                    .foregroundStyle(
+                        TemplePalette.polishedGold
+                    )
+                    .fixedSize()
+
+                Rectangle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                TemplePalette.polishedGold,
+                                .clear
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(
+                        maxWidth: 52,
+                        minHeight: 1,
+                        maxHeight: 1
+                    )
+            }
+            .accessibilityLabel(
+                "Tent of Meeting"
+            )
+        }
+    }
+}
+
+private enum TempleModeKind {
+    case voice
+    case text
+}
+
+private struct TempleModeTile: View {
+    let identity: NativeTempleIdentity
+    let kind: TempleModeKind
+
+    private var backgroundColors: [Color] {
+        switch (identity, kind) {
+        case (.hathor, .voice):
+            return [
+                Color(hex: 0x03172A),
+                Color(hex: 0x062D4D)
+            ]
+
+        case (.hathor, .text):
+            return [
+                Color(hex: 0x02372C),
+                Color(hex: 0x07533F)
+            ]
+
+        case (.moses, .voice),
+             (.moses, .text):
+            return [
+                Color(hex: 0x6E7B87),
+                Color(hex: 0x394A59)
+            ]
+        }
+    }
+
+    private var iconBadge: some View {
+        ZStack {
+            Circle()
+                .fill(
+                    TemplePalette.midnight
+                        .opacity(0.92)
+                )
+
+            Circle()
+                .stroke(
+                    TemplePalette.polishedGold,
+                    lineWidth: 1.15
+                )
+
+            if kind == .voice {
+                Image(systemName: "mic.fill")
+                    .font(
+                        .system(
+                            size: 22,
+                            weight: .medium
+                        )
+                    )
+                    .foregroundStyle(
+                        TemplePalette.polishedGold
+                    )
+            } else {
+                Image("TempleQuill")
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(
+                        TemplePalette.polishedGold
+                    )
+                    .frame(
+                        width: 28,
+                        height: 28
+                    )
+            }
+        }
+        .frame(
+            width: 48,
+            height: 48
+        )
+    }
+
+    var body: some View {
+        VStack(spacing: 7) {
+            Text(
+                kind == .voice
+                    ? "VOICE CONVERSATION"
+                    : "TEXT CONVERSATION"
+            )
+            .font(
+                .system(
+                    size: 12,
+                    weight: .semibold,
+                    design: .serif
+                )
+            )
+            .tracking(0.45)
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+
+            iconBadge
+
+            Text(
+                kind == .voice
+                    ? "Speak your intentions\naloud"
+                    : "Write your intentions\nwith clarity"
+            )
+            .font(.system(size: 11))
+            .multilineTextAlignment(.center)
+            .lineSpacing(0)
+        }
+        .foregroundStyle(
+            TemplePalette.paleGold
+        )
+        .padding(.horizontal, 7)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: 118,
+            maxHeight: 118
+        )
+        .background(
+            RoundedRectangle(
+                cornerRadius: 14,
+                style: .continuous
+            )
+            .fill(
+                LinearGradient(
+                    colors: backgroundColors,
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+        )
+        .overlay {
+            RoundedRectangle(
+                cornerRadius: 14,
+                style: .continuous
+            )
+            .stroke(
+                LinearGradient(
+                    colors: [
+                        TemplePalette.antiqueGold,
+                        TemplePalette.polishedGold,
+                        TemplePalette.paleGold
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                lineWidth: 1.4
+            )
+        }
+        .shadow(
+            color: .black.opacity(0.30),
+            radius: 7,
+            x: 0,
+            y: 5
+        )
+    }
+}
+
+private struct TempleVisitIcon: View {
+    let identity: NativeTempleIdentity
+
+    var body: some View {
+        switch identity {
+        case .hathor:
+            MosesTabletsIcon()
+                .frame(
+                    width: 34,
+                    height: 34
+                )
+
+        case .moses:
+            Image("HathorOracle")
+                .resizable()
+                .scaledToFill()
+                .saturation(0)
+                .colorMultiply(
+                    TemplePalette.polishedGold
+                )
+                .frame(
+                    width: 34,
+                    height: 34
+                )
+                .clipShape(Circle())
+                .overlay {
+                    Circle()
+                        .stroke(
+                            TemplePalette.paleGold,
+                            lineWidth: 0.8
+                        )
+                }
+        }
+    }
+}
+
+private struct MosesTabletsIcon: View {
+    var body: some View {
+        HStack(spacing: 2) {
+            RoundedRectangle(
+                cornerRadius: 3
+            )
+            .stroke(
+                TemplePalette.polishedGold,
+                lineWidth: 1.7
+            )
+            .frame(
+                width: 12,
+                height: 23
+            )
+
+            RoundedRectangle(
+                cornerRadius: 3
+            )
+            .stroke(
+                TemplePalette.polishedGold,
+                lineWidth: 1.7
+            )
+            .frame(
+                width: 12,
+                height: 23
+            )
+
+            Capsule()
+                .fill(
+                    TemplePalette.polishedGold
+                )
+                .frame(
+                    width: 1.7,
+                    height: 27
+                )
+        }
     }
 }
 
@@ -3222,102 +4111,102 @@ private struct TempleArchitecturalFrame: View {
         Group {
             switch identity {
             case .hathor:
-                ZStack {
-                    HStack {
-                        sanctuaryRail
-                        Spacer()
-                        sanctuaryRail
-                    }
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 66)
-
-                    VStack(spacing: 4) {
-                        Rectangle()
-                            .fill(
-                                TemplePalette.warmGold
-                                    .opacity(0.62)
-                            )
-                            .frame(height: 2)
-
-                        Rectangle()
-                            .fill(
-                                TemplePalette.malachite
-                                    .opacity(0.34)
-                            )
-                            .frame(height: 7)
-                            .overlay(
-                                Rectangle()
-                                    .stroke(
-                                        TemplePalette.paleGold
-                                            .opacity(0.42),
-                                        lineWidth: 0.75
-                                    )
-                            )
-
-                        Spacer()
-
-                        Rectangle()
-                            .fill(
-                                TemplePalette.malachiteDeep
-                                    .opacity(0.58)
-                            )
-                            .frame(height: 10)
-                            .overlay(
-                                Rectangle()
-                                    .stroke(
-                                        TemplePalette.warmGold
-                                            .opacity(0.46),
-                                        lineWidth: 0.75
-                                    )
-                            )
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 7)
+                GeometryReader { proxy in
+                    Image("HathorArchitecture")
+                        .resizable()
+                        .scaledToFill()
+                        .frame(
+                            width: proxy.size.width,
+                            height: proxy.size.height
+                        )
+                        .clipped()
                 }
-
+                .ignoresSafeArea()
             case .moses:
-                EmptyView()
+                GeometryReader { proxy in
+                    Image("MosesArchitecture")
+                        .resizable()
+                        .scaledToFill()
+                        .frame(
+                            width: proxy.size.width,
+                            height: proxy.size.height
+                        )
+                        .clipped()
+                }
+                .ignoresSafeArea()
+
             }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
+}
 
-    private var sanctuaryRail: some View {
-        VStack(spacing: 0) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(
-                    TemplePalette.warmGold.opacity(0.72)
+
+private struct TempleConversationChamber<
+    Content: View
+>: View {
+    let identity: NativeTempleIdentity
+    let content: Content
+
+    init(
+        identity: NativeTempleIdentity,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.identity = identity
+        self.content = content()
+    }
+
+    var body: some View {
+        let colors: [Color]
+
+        switch identity {
+        case .hathor:
+            colors = [
+                Color(hex: 0x03172A),
+                Color(hex: 0x06372F)
+            ]
+
+        case .moses:
+            colors = [
+                Color(hex: 0x071421),
+                Color(hex: 0x261419)
+            ]
+        }
+
+        return content
+            .padding(16)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(
+                    cornerRadius: 16,
+                    style: .continuous
                 )
-                .frame(width: 18, height: 7)
-
-            Rectangle()
                 .fill(
                     LinearGradient(
-                        colors: [
-                            TemplePalette.warmGold.opacity(0.66),
-                            TemplePalette.malachite.opacity(0.30),
-                            TemplePalette.warmGold.opacity(0.48)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
+                        colors: colors,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
                     )
                 )
-                .frame(width: 8)
-                .overlay(
-                    Rectangle()
-                        .stroke(
-                            TemplePalette.paleGold.opacity(0.44),
-                            lineWidth: 0.75
-                        )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: 16,
+                    style: .continuous
                 )
-
-            RoundedRectangle(cornerRadius: 2)
-                .fill(
-                    TemplePalette.warmGold.opacity(0.62)
+                .stroke(
+                    TemplePalette.polishedGold
+                        .opacity(0.72),
+                    lineWidth: 1
                 )
-                .frame(width: 20, height: 8)
-        }
+            }
+            .shadow(
+                color: .black.opacity(0.28),
+                radius: 10,
+                x: 0,
+                y: 6
+            )
     }
 }
 
@@ -3397,6 +4286,135 @@ struct TempleBrandMark: View {
             .accessibilityLabel(
                 "God Incorporated"
             )
+    }
+}
+
+private struct TempleVisitButtonStyle: ButtonStyle {
+    let identity: NativeTempleIdentity
+
+    func makeBody(
+        configuration: Configuration
+    ) -> some View {
+        let colors: [Color]
+        let cornerRadius: CGFloat
+
+        switch identity {
+        case .hathor:
+            colors = [
+                TemplePalette.emeraldDeep,
+                TemplePalette.emerald
+            ]
+            cornerRadius = 27
+
+        case .moses:
+            colors = [
+                Color(hex: 0x741A24),
+                TemplePalette.crimson
+            ]
+            cornerRadius = 16
+        }
+
+        return configuration.label
+            .foregroundStyle(
+                TemplePalette.paleGold
+            )
+            .padding(.vertical, 9)
+            .padding(.horizontal, 13)
+            .background {
+                RoundedRectangle(
+                    cornerRadius: cornerRadius,
+                    style: .continuous
+                )
+                .fill(
+                    LinearGradient(
+                        colors: colors,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            }
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: cornerRadius,
+                    style: .continuous
+                )
+                .stroke(
+                    TemplePalette.polishedGold,
+                    lineWidth: 1.45
+                )
+            }
+            .shadow(
+                color:
+                    TemplePalette.polishedGold
+                        .opacity(0.12),
+                radius: 6,
+                x: 0,
+                y: 4
+            )
+            .scaleEffect(
+                configuration.isPressed
+                    ? 0.985
+                    : 1.0
+            )
+    }
+}
+
+private struct TempleChamberActionStyle: ButtonStyle {
+    let identity: NativeTempleIdentity
+    let emphasized: Bool
+
+    func makeBody(
+        configuration: Configuration
+    ) -> some View {
+        let fill: Color
+
+        if emphasized {
+            switch identity {
+            case .hathor:
+                fill =
+                    TemplePalette.emeraldDeep
+
+            case .moses:
+                fill =
+                    TemplePalette.templeCrimson
+            }
+        } else {
+            fill =
+                TemplePalette.midnight
+                    .opacity(0.88)
+        }
+
+        return configuration.label
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(
+                TemplePalette.paleGold
+            )
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            .background(
+                RoundedRectangle(
+                    cornerRadius: 11,
+                    style: .continuous
+                )
+                .fill(
+                    fill.opacity(
+                        configuration.isPressed
+                            ? 0.72
+                            : 0.96
+                    )
+                )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: 11,
+                    style: .continuous
+                )
+                .stroke(
+                    TemplePalette.polishedGold
+                        .opacity(0.58),
+                    lineWidth: 0.9
+                )
+            }
     }
 }
 
