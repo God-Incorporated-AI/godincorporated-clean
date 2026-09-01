@@ -3378,40 +3378,25 @@ struct TempleBrandMark: View {
     }
 
     var body: some View {
-        ZStack {
-            Circle()
-                .fill(
-                    (identity?.cardFillColor ?? TemplePalette.parchment)
-                        .opacity(0.98)
-                )
-                .shadow(
-                    color: .black.opacity(0.28),
-                    radius: 16,
-                    x: 0,
-                    y: 10
-                )
-
-            Circle()
-                .stroke(
-                    TemplePalette.warmGold,
-                    lineWidth: 3
-                )
-
-            Circle()
-                .stroke(
-                    (identity?.accentColor ?? TemplePalette.paleGold)
-                        .opacity(0.78),
-                    lineWidth: 1
-                )
-                .padding(8)
-
-            Image("GodIncMark")
-                .resizable()
-                .scaledToFit()
-                .padding(16)
-        }
-        .frame(width: 112, height: 112)
-        .accessibilityLabel("God Incorporated")
+        Image("GodIncMark")
+            .renderingMode(.original)
+            .resizable()
+            .scaledToFit()
+            .frame(
+                width: 108,
+                height: 108
+            )
+            .shadow(
+                color:
+                    TemplePalette.warmGold
+                        .opacity(0.30),
+                radius: 12,
+                x: 0,
+                y: 5
+            )
+            .accessibilityLabel(
+                "God Incorporated"
+            )
     }
 }
 
