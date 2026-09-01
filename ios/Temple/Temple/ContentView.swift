@@ -410,6 +410,25 @@ enum NativeTempleIdentity {
         }
     }
 
+
+    var oracleArtworkAssetName: String {
+        switch self {
+        case .hathor:
+            return "HathorOracle"
+        case .moses:
+            return "MosesOracle"
+        }
+    }
+
+    var oracleArtworkAccessibilityLabel: String {
+        switch self {
+        case .hathor:
+            return "Hathor in the Sanctuary of Hathor"
+        case .moses:
+            return "Moses in the Tabernacle of Moses"
+        }
+    }
+
 }
 
 extension Color {
@@ -427,7 +446,7 @@ extension Color {
 struct ContentView: View {
     @AppStorage("lastOracleVoice") private var lastOracleVoice: String = ""
     @AppStorage("preferredInputMode") private var preferredInputMode: String = "voice"
-    @State private var selectedTab = 0
+    @State private var selectedTab: Int
     @State private var templeEntryNonce = 0
     @State private var activeOracleVoice = ""
     @State private var templeWebDestination = "temple"
@@ -437,31 +456,33 @@ struct ContentView: View {
     @State private var pendingExplicitOracleVoice = ""
     @State private var oracleSelectionInProgress = false
 
+    init() {
+        _selectedTab = State(
+            initialValue: 1
+        )
+    }
+
     var body: some View {
         let effectiveOracleVoice = activeOracleVoice.isEmpty
             ? (lastOracleVoice.isEmpty ? "Hathor" : lastOracleVoice)
             : activeOracleVoice
 
-        TabView(selection: $selectedTab) {
-            TempleGateView(
-                lastOracleVoice: $lastOracleVoice,
-                selectedTab: $selectedTab,
-                preferredInputMode: $preferredInputMode,
-                templeEntryNonce: $templeEntryNonce,
-                templeWebDestination: $templeWebDestination,
-                nativeSession: nativeSession,
-                nativeSessionChecked: nativeSessionChecked,
-                onExplicitOracleSelection: { voice in
-                    await applyExplicitOracleSelection(
-                        voice
-                    )
-                }
+        let establishedOracleVoice =
+            normalizedNativeOracleVoice(
+                activeOracleVoice
             )
-            .tabItem {
-                Label("Home", systemImage: "sparkles")
-            }
-            .tag(0)
+            ?? normalizedNativeOracleVoice(
+                lastOracleVoice
+            )
 
+        let entryIdentity =
+            NativeTempleIdentity(
+                oracleVoice:
+                    establishedOracleVoice
+                    ?? "Hathor"
+            )
+
+        TabView(selection: $selectedTab) {
             NativeVoiceSessionView(
                 oracleVoice: effectiveOracleVoice,
                 onOracleVoiceChange: { voice in
@@ -475,9 +496,6 @@ struct ContentView: View {
                     templeWebDestination = "temple"
                     templeEntryNonce += 1
                     selectedTab = 2
-                },
-                onReturnHome: {
-                    selectedTab = 0
                 }
             )
             .tabItem {
@@ -518,6 +536,13 @@ struct ContentView: View {
                 .tag(4)
         }
         .tint(TemplePalette.warmGold)
+        .overlay {
+            if !nativeSessionChecked {
+                NativeEntryResolutionView(
+                    identity: entryIdentity
+                )
+            }
+        }
         .task(id: authRefreshNonce) {
             await refreshNativeSessionAndResume()
         }
@@ -541,7 +566,7 @@ struct ContentView: View {
                 pendingExplicitOracleVoice = ""
 
                 if pendingExplicit == nil {
-                    selectedTab = 0
+                    selectedTab = 1
                 }
 
                 return
@@ -555,6 +580,7 @@ struct ContentView: View {
                 )
 
                 templeWebDestination = "temple"
+                selectedTab = 1
 
                 // Preserve a destination the seeker already chose
                 // while /me was still resolving.
@@ -573,7 +599,7 @@ struct ContentView: View {
 
                 // Authenticated account preference is authoritative
                 // across devices and launches.
-                selectedTab = 0
+                selectedTab = 1
                 return
             }
 
@@ -589,7 +615,7 @@ struct ContentView: View {
                 lastOracleVoice = savedOracle
                 activeOracleVoice = savedOracle
                 templeWebDestination = "temple"
-                selectedTab = 0
+                selectedTab = 1
                 return
             }
 
@@ -599,7 +625,7 @@ struct ContentView: View {
             lastOracleVoice = ""
             activeOracleVoice = ""
             templeWebDestination = "temple"
-            selectedTab = 0
+            selectedTab = 1
 
         } catch {
             nativeSession = nil
@@ -744,281 +770,10 @@ struct ContentView: View {
     }
 }
 
-struct TempleGateView: View {
-    @Binding var lastOracleVoice: String
-    @Binding var selectedTab: Int
-    @Binding var preferredInputMode: String
-    @Binding var templeEntryNonce: Int
-    @Binding var templeWebDestination: String
-    let nativeSession: NativeSessionIdentity?
-    let nativeSessionChecked: Bool
-    let onExplicitOracleSelection: (String) async -> String
-
-    var body: some View {
-        NavigationStack {
-            TempleScreen {
-                ScrollView {
-                    VStack(spacing: 24) {
-                        TempleBrandMark()
-                            .padding(.top, 28)
-
-                        VStack(spacing: 8) {
-                            Text("God Incorporated")
-                                .font(.system(size: 36, weight: .bold, design: .serif))
-                                .foregroundStyle(TemplePalette.paleGold)
-                                .multilineTextAlignment(.center)
-
-                            Text("A reflective AI conversation space for seekers.")
-                                .font(.headline)
-                                .foregroundStyle(.white.opacity(0.82))
-                                .multilineTextAlignment(.center)
-                        }
-
-                        if lastOracleVoice.isEmpty {
-                            TempleCard {
-                                VStack(spacing: 16) {
-                                    Text("Enter the Temple")
-                                        .font(.title2.weight(.semibold))
-                                        .foregroundStyle(TemplePalette.ink)
-
-                                    Text("Voice is the default path. Text entry remains available at any time.")
-                                        .foregroundStyle(TemplePalette.ink.opacity(0.72))
-                                        .multilineTextAlignment(.center)
-
-                                    VStack(spacing: 12) {
-                                        VoiceChoiceButton(
-                                            title: "Enter the Sanctuary of Hathor by Voice",
-                                            subtitle: "Reflective, expansive, and heart-centered"
-                                        ) {
-                                            Task {
-                                                await beginNativeVoice(
-                                                    with: "Hathor"
-                                                )
-                                            }
-                                        }
-
-                                        VoiceChoiceButton(
-                                            title: "Enter the Tabernacle of Moses by Voice",
-                                            subtitle: "Canonical, depth-oriented, and discerning"
-                                        ) {
-                                            Task {
-                                                await beginNativeVoice(
-                                                    with: "Moses"
-                                                )
-                                            }
-                                        }
-
-                                        Button {
-                                            Task {
-                                                await beginText(
-                                                    with: "Hathor"
-                                                )
-                                            }
-                                        } label: {
-                                            Text("Enter the Sanctuary of Hathor by Text")
-                                                .frame(maxWidth: .infinity)
-                                        }
-                                        .buttonStyle(TempleSecondaryButtonStyle())
-                                    }
-                                }
-                            }
-                        } else {
-                            TempleCard {
-                                VStack(spacing: 16) {
-                                    Text("Continue in \(NativeTempleIdentity(oracleVoice: lastOracleVoice).title)")
-                                        .font(.title2.weight(.semibold))
-                                        .foregroundStyle(TemplePalette.ink)
-                                        .multilineTextAlignment(.center)
-
-                                    Text("\(lastOracleVoice) is ready to continue from your last path of inquiry.")
-                                        .foregroundStyle(TemplePalette.ink.opacity(0.72))
-                                        .multilineTextAlignment(.center)
-
-                                    homeOracleVoiceSelector
-
-                                    Button {
-                                        Task {
-                                            await beginNativeVoice(
-                                                with: lastOracleVoice
-                                            )
-                                        }
-                                    } label: {
-                                        Text("Speak your next question")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(TemplePrimaryButtonStyle())
-
-                                    Button {
-                                        Task {
-                                            await beginText(
-                                                with: lastOracleVoice
-                                            )
-                                        }
-                                    } label: {
-                                        Text("Continue with Text")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(TempleSecondaryButtonStyle())
-
-                                }
-                            }
-                        }
-
-                        TempleCard {
-                            VStack(spacing: 12) {
-                                if !nativeSessionChecked {
-                                    ProgressView("Checking session...")
-                                        .frame(maxWidth: .infinity)
-                                } else if nativeSession?.authenticated == true {
-                                    VStack(spacing: 4) {
-                                        if let displayName = nativeSession?.display_name,
-                                           !displayName.isEmpty {
-                                            Text("Signed in as \(displayName)")
-                                                .font(.subheadline.weight(.semibold))
-                                                .foregroundStyle(TemplePalette.ink)
-                                        } else {
-                                            Text("Signed in")
-                                                .font(.subheadline.weight(.semibold))
-                                                .foregroundStyle(TemplePalette.ink)
-                                        }
-
-                                        if nativeSession?.role?.lowercased() == "admin" {
-                                            Text("Administrator")
-                                                .font(.caption)
-                                                .foregroundStyle(
-                                                    TemplePalette.ink.opacity(0.65)
-                                                )
-                                        }
-                                    }
-
-                                    Button {
-                                        templeWebDestination = "account"
-                                        templeEntryNonce += 1
-                                        selectedTab = 2
-                                    } label: {
-                                        Label(
-                                            "Account",
-                                            systemImage: "person.text.rectangle"
-                                        )
-                                        .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(TempleSecondaryButtonStyle())
-                                } else {
-                                    Button {
-                                        templeWebDestination = "login"
-                                        templeEntryNonce += 1
-                                        selectedTab = 2
-                                    } label: {
-                                        Label(
-                                            "Sign In",
-                                            systemImage: "person.crop.circle"
-                                        )
-                                        .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(TemplePrimaryButtonStyle())
-                                }
-
-                                Button {
-                                    selectedTab = 3
-                                } label: {
-                                    Label("Support with Apple", systemImage: "heart.fill")
-                                        .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(TempleSecondaryButtonStyle())
-
-                                Button {
-                                    selectedTab = 4
-                                } label: {
-                                    Label("Privacy and Terms", systemImage: "doc.text.fill")
-                                        .frame(maxWidth: .infinity)
-                                }
-                                .buttonStyle(TempleSecondaryButtonStyle())
-                            }
-                        }
-
-                        Text("Private seeker conversations are treated as confidential.")
-                            .font(.footnote)
-                            .foregroundStyle(.white.opacity(0.7))
-                            .multilineTextAlignment(.center)
-                            .padding(.bottom, 20)
-                    }
-                    .padding(.horizontal, 18)
-                }
-            }
-            .navigationTitle("Temple Gate")
-            .navigationBarTitleDisplayMode(.inline)
-        }
-    }
-
-    private var homeOracleVoiceSelector: some View {
-        let templeIdentity =
-            NativeTempleIdentity(
-                oracleVoice: lastOracleVoice
-            )
-
-        return Button {
-            Task {
-                _ = await onExplicitOracleSelection(
-                    templeIdentity.destinationOracleVoice
-                )
-            }
-        } label: {
-            Text(templeIdentity.visitDestinationTitle)
-                .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(TempleSecondaryButtonStyle())
-    }
-
-    @MainActor
-    private func beginNativeVoice(
-        with voice: String
-    ) async {
-        let resolved =
-            await onExplicitOracleSelection(
-                voice
-            )
-
-        guard
-            normalizedNativeOracleVoice(
-                resolved
-            ) != nil
-        else {
-            return
-        }
-
-        preferredInputMode = "voice"
-        selectedTab = 1
-    }
-
-    @MainActor
-    private func beginText(
-        with voice: String
-    ) async {
-        let resolved =
-            await onExplicitOracleSelection(
-                voice
-            )
-
-        guard
-            normalizedNativeOracleVoice(
-                resolved
-            ) != nil
-        else {
-            return
-        }
-
-        preferredInputMode = "text"
-        templeWebDestination = "temple"
-        templeEntryNonce += 1
-        selectedTab = 2
-    }
-}
-
 struct NativeVoiceSessionView: View {
     let oracleVoice: String
     let onOracleVoiceChange: (String) async -> String
     let onOpenTempleText: () -> Void
-    let onReturnHome: () -> Void
 
     @State private var recorder: AVAudioRecorder?
     @State private var recordingURL: URL?
@@ -1088,6 +843,8 @@ struct NativeVoiceSessionView: View {
                                     .foregroundStyle(.white.opacity(0.82))
                             }
                         }
+
+                        NativeOracleArtwork(identity: templeIdentity)
 
                         oracleVoiceSwitcher
 
@@ -1213,15 +970,6 @@ struct NativeVoiceSessionView: View {
                                     .buttonStyle(TempleSecondaryButtonStyle())
                                     .disabled(isWorking || isRecording)
 
-                                    Button {
-                                        stopVoiceSessionActivity(clearExchange: false)
-                                        onReturnHome()
-                                    } label: {
-                                        Text("Return to Temple Gate")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(TempleSecondaryButtonStyle())
-                                    .disabled(isWorking || isRecording)
                                 } else if isRecording {
                                     listeningIndicator
 
@@ -3279,6 +3027,146 @@ struct NativeInfoView: View {
     }
 }
 
+private struct NativeEntryResolutionView: View {
+    let identity: NativeTempleIdentity?
+
+    var body: some View {
+        TempleScreen(
+            identity: identity
+        ) {
+            VStack(spacing: 18) {
+                TempleBrandMark(
+                    identity: identity
+                )
+
+                Text(
+                    identity?.title
+                        ?? "Opening your Temple"
+                )
+                .font(
+                    .system(
+                        size: 28,
+                        weight: .bold,
+                        design: .serif
+                    )
+                )
+                .foregroundStyle(
+                    TemplePalette.paleGold
+                )
+                .multilineTextAlignment(.center)
+
+                ProgressView()
+                    .tint(
+                        identity?.glowColor
+                            ?? TemplePalette.warmGold
+                    )
+
+                Text(
+                    "Restoring your path of inquiry."
+                )
+                .font(.footnote)
+                .foregroundStyle(
+                    .white.opacity(0.72)
+                )
+            }
+            .padding(.horizontal, 28)
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: .infinity
+            )
+        }
+        .ignoresSafeArea()
+    }
+}
+
+private struct NativeOracleArtwork: View {
+    let identity: NativeTempleIdentity
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Image(
+                identity.oracleArtworkAssetName
+            )
+            .resizable()
+            .scaledToFill()
+            .frame(
+                width: 226,
+                height: 226
+            )
+            .clipped()
+
+            LinearGradient(
+                colors: [
+                    .clear,
+                    identity.screenGradientColors[1]
+                        .opacity(0.76)
+                ],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+            .frame(
+                width: 226,
+                height: 82
+            )
+        }
+        .background(
+            identity.cardFillColor
+                .opacity(0.18)
+        )
+        .clipShape(
+            RoundedRectangle(
+                cornerRadius:
+                    identity.cardCornerRadius,
+                style: .continuous
+            )
+        )
+        .overlay {
+            RoundedRectangle(
+                cornerRadius:
+                    identity.cardCornerRadius,
+                style: .continuous
+            )
+            .stroke(
+                identity.glowColor
+                    .opacity(0.86),
+                lineWidth: 1.6
+            )
+        }
+        .overlay(alignment: .top) {
+            VStack(spacing: 3) {
+                Rectangle()
+                    .fill(
+                        TemplePalette.warmGold
+                            .opacity(0.78)
+                    )
+                    .frame(height: 2)
+
+                Rectangle()
+                    .fill(
+                        identity.accentColor
+                            .opacity(0.46)
+                    )
+                    .frame(height: 5)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 7)
+        }
+        .shadow(
+            color: .black.opacity(0.30),
+            radius: 16,
+            x: 0,
+            y: 10
+        )
+        .accessibilityElement(
+            children: .ignore
+        )
+        .accessibilityLabel(
+            identity
+                .oracleArtworkAccessibilityLabel
+        )
+    }
+}
+
 struct TempleScreen<Content: View>: View {
     let identity: NativeTempleIdentity?
     let content: Content
@@ -3524,27 +3412,6 @@ struct TempleBrandMark: View {
         }
         .frame(width: 112, height: 112)
         .accessibilityLabel("God Incorporated")
-    }
-}
-
-struct VoiceChoiceButton: View {
-    let title: String
-    let subtitle: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 6) {
-                Text(title)
-                    .font(.headline)
-                Text(subtitle)
-                    .font(.caption)
-                    .multilineTextAlignment(.center)
-                    .opacity(0.86)
-            }
-            .frame(maxWidth: .infinity, minHeight: 76)
-        }
-        .buttonStyle(TemplePrimaryButtonStyle())
     }
 }
 
@@ -3795,7 +3662,7 @@ struct TempleWebView: UIViewRepresentable {
                 }
 
                 DispatchQueue.main.async {
-                    self.selectedTab = 0
+                    self.selectedTab = 1
                 }
                 return
             }
