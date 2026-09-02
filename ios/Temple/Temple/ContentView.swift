@@ -834,7 +834,7 @@ struct NativeVoiceSessionView: View {
         let remainingSpeechText: String
     }
 
-    private let noSpeechTimeoutSeconds: TimeInterval = 8.0
+    private let noSpeechTimeoutSeconds: TimeInterval = 5.0
     private let silenceSubmitSeconds: TimeInterval = 4.0
     private let backupSubmitAfterSpeechSeconds: TimeInterval = 18.0
     private let hardMaxRecordingSeconds: TimeInterval = 24.0
