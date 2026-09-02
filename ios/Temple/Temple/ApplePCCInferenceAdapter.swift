@@ -124,6 +124,132 @@ enum ApplePCCInferenceAdapter {
         )
     }
 
+    static func executeStreaming(
+        packet: PreparedOracleInferencePacket,
+        onSnapshot: @escaping @Sendable (String) async -> Void
+    ) async -> ApplePCCExecutionResult {
+        var promptParts: [String] = []
+
+        let memoryBlock = packet.memory_block
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !memoryBlock.isEmpty {
+            promptParts.append(
+                "Background memory supplied by God Incorporated:\n"
+                + memoryBlock
+            )
+        }
+
+        promptParts.append(packet.question)
+
+        return await streamRespond(
+            instructions: packet.system_prompt,
+            prompt: promptParts.joined(separator: "\n\n"),
+            onSnapshot: onSnapshot
+        )
+    }
+
+    private static func streamRespond(
+        instructions: String,
+        prompt: String,
+        onSnapshot: @escaping @Sendable (String) async -> Void
+    ) async -> ApplePCCExecutionResult {
+
+        #if compiler(>=6.4)
+
+        if #available(iOS 27.0, *) {
+            let model = PrivateCloudComputeLanguageModel()
+
+            switch model.availability {
+            case .available:
+                break
+
+            case .unavailable(let reason):
+                switch reason {
+                case .deviceNotEligible:
+                    return .unavailable(
+                        reason: "PCC unavailable: device not eligible."
+                    )
+
+                case .systemNotReady:
+                    return .unavailable(
+                        reason: "PCC unavailable: system not ready."
+                    )
+
+                @unknown default:
+                    return .unavailable(
+                        reason: "PCC unavailable: unknown reason."
+                    )
+                }
+            }
+
+            let quotaUsage = model.quotaUsage
+
+            if quotaUsage.isLimitReached {
+                return .unavailable(
+                    reason: "PCC unavailable: daily user quota reached."
+                )
+            }
+
+            do {
+                let trimmedInstructions = instructions
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                let session: LanguageModelSession
+
+                if trimmedInstructions.isEmpty {
+                    session = LanguageModelSession(model: model)
+                } else {
+                    session = LanguageModelSession(
+                        model: model,
+                        instructions: trimmedInstructions
+                    )
+                }
+
+                let stream = session.streamResponse(
+                    to: prompt
+                )
+
+                var latestContent = ""
+
+                for try await snapshot in stream {
+                    let currentContent = snapshot.content
+                    latestContent = currentContent
+
+                    await onSnapshot(currentContent)
+                }
+
+                guard !latestContent
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .isEmpty else {
+                    return .failed(
+                        message: "PCC streaming request returned an empty answer."
+                    )
+                }
+
+                return .completed(
+                    answer: latestContent
+                )
+            } catch {
+                return .failed(
+                    message: "PCC streaming request failed: \(error.localizedDescription)"
+                )
+            }
+        } else {
+            return .unavailable(
+                reason: "PCC unavailable: requires iOS 27 or later."
+            )
+        }
+
+        #else
+
+        return .unavailable(
+            reason: "PCC unavailable: requires Xcode 27 / Swift 6.4."
+        )
+
+        #endif
+    }
+
     private static func respond(
         instructions: String,
         prompt: String
