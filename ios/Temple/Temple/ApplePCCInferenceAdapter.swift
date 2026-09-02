@@ -126,7 +126,7 @@ enum ApplePCCInferenceAdapter {
 
     static func executeStreaming(
         packet: PreparedOracleInferencePacket,
-        onSnapshot: @escaping @Sendable (String) async -> Void
+        onSnapshot: @escaping (String) async -> Bool
     ) async -> ApplePCCExecutionResult {
         var promptParts: [String] = []
 
@@ -152,7 +152,7 @@ enum ApplePCCInferenceAdapter {
     private static func streamRespond(
         instructions: String,
         prompt: String,
-        onSnapshot: @escaping @Sendable (String) async -> Void
+        onSnapshot: @escaping (String) async -> Bool
     ) async -> ApplePCCExecutionResult {
 
         #if compiler(>=6.4)
@@ -216,7 +216,15 @@ enum ApplePCCInferenceAdapter {
                     let currentContent = snapshot.content
                     latestContent = currentContent
 
-                    await onSnapshot(currentContent)
+                    let shouldContinue = await onSnapshot(
+                        currentContent
+                    )
+
+                    guard shouldContinue else {
+                        return .failed(
+                            message: "PCC streaming request cancelled."
+                        )
+                    }
                 }
 
                 guard !latestContent

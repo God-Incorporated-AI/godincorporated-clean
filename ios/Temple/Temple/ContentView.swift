@@ -822,6 +822,12 @@ struct NativeVoiceSessionView: View {
         case replay
     }
 
+    private struct LiveVoiceOracleResult {
+        let answer: String
+        let usedPCCStreamingSpeech: Bool
+        let remainingSpeechText: String
+    }
+
     private let noSpeechTimeoutSeconds: TimeInterval = 8.0
     private let silenceSubmitSeconds: TimeInterval = 4.0
     private let backupSubmitAfterSpeechSeconds: TimeInterval = 18.0
@@ -1678,10 +1684,13 @@ struct NativeVoiceSessionView: View {
                 statusMessage = "Your spoken question has been heard. \(oracleVoice) is answering."
             }
 
-            let oracleAnswer = try await askOracle(
+            let voiceResult = try await askOracleForLiveVoice(
                 question: spokenQuestion,
-                voice: oracleVoice
+                voice: oracleVoice,
+                generation: generation
             )
+
+            let oracleAnswer = voiceResult.answer
 
             let inferenceIsCurrent = await MainActor.run {
                 generation == voiceSessionGeneration
@@ -1702,7 +1711,13 @@ struct NativeVoiceSessionView: View {
                 showRecoveryActions = false
                 recoveryMessage = ""
                 statusTitle = "Oracle speaking"
-                statusMessage = "The written answer is ready. Provider voice is being prepared."
+
+                if voiceResult.usedPCCStreamingSpeech {
+                    statusMessage = "The full written answer is ready. Apple voice is continuing the response."
+                } else {
+                    statusMessage = "The written answer is ready. Provider voice is being prepared."
+                }
+
                 return true
             }
 
@@ -1710,12 +1725,20 @@ struct NativeVoiceSessionView: View {
                 return
             }
 
-            await speakOracleAnswerProviderFirst(
-                oracleAnswer,
-                deity: oracleVoice,
-                origin: .liveTurn,
-                expectedGeneration: generation
-            )
+            if voiceResult.usedPCCStreamingSpeech {
+                await finishPCCStreamingVoice(
+                    remainingText: voiceResult.remainingSpeechText,
+                    deity: oracleVoice,
+                    generation: generation
+                )
+            } else {
+                await speakOracleAnswerProviderFirst(
+                    oracleAnswer,
+                    deity: oracleVoice,
+                    origin: .liveTurn,
+                    expectedGeneration: generation
+                )
+            }
         } catch {
             await MainActor.run {
                 guard generation == voiceSessionGeneration else {
@@ -2367,6 +2390,255 @@ struct NativeVoiceSessionView: View {
         return result
     }
 
+    @MainActor
+    private func askOracleForLiveVoice(
+        question: String,
+        voice: String,
+        generation: Int
+    ) async throws -> LiveVoiceOracleResult {
+        switch ApplePCCInferenceAdapter.availability() {
+        case .unavailable:
+            let fallbackAnswer = try await askOracleServerFallback(
+                question: question,
+                voice: voice,
+                pccFallbackCode: "pcc_preflight_unavailable"
+            )
+
+            return LiveVoiceOracleResult(
+                answer: fallbackAnswer,
+                usedPCCStreamingSpeech: false,
+                remainingSpeechText: ""
+            )
+
+        case .available:
+            break
+        }
+
+        // Preserve the same server-owned prepare/finalize contract as
+        // askOracle(). Once prepare succeeds, this UUID must be completed
+        // or abandoned exactly once.
+        let packet = try await prepareOracleInference(
+            question: question,
+            voice: voice
+        )
+
+        guard generation == voiceSessionGeneration else {
+            try? await abandonOracleInference(
+                interactionID: packet.interaction_id,
+                fallbackCode: "pcc_execution_failed"
+            )
+
+            throw CancellationError()
+        }
+
+        var firstSentenceSpoken: String?
+        var firstSentenceSpeechAttempted = false
+
+        let executionResult = await ApplePCCInferenceAdapter.executeStreaming(
+            packet: packet
+        ) { snapshot in
+            guard generation == voiceSessionGeneration else {
+                return false
+            }
+
+            guard !firstSentenceSpeechAttempted,
+                  firstSentenceSpoken == nil,
+                  let firstSentence = firstCompletePCCStreamingSentence(
+                      in: snapshot
+                  ) else {
+                return true
+            }
+
+            firstSentenceSpeechAttempted = true
+
+            if beginPCCStreamingFirstSentence(
+                firstSentence,
+                deity: voice,
+                generation: generation
+            ) {
+                firstSentenceSpoken = firstSentence
+            }
+
+            return true
+        }
+
+        // End Conversation, Temple/navigation changes, and other voice
+        // invalidations advance voiceSessionGeneration. If that happened
+        // while PCC was preparing or streaming, retire the pending turn
+        // without introducing a second provider answer.
+        guard generation == voiceSessionGeneration else {
+            try? await abandonOracleInference(
+                interactionID: packet.interaction_id,
+                fallbackCode: "pcc_execution_failed"
+            )
+
+            throw CancellationError()
+        }
+
+        switch executionResult {
+        case .completed(let answer):
+            let trimmedAnswer = answer
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard !trimmedAnswer.isEmpty else {
+                if firstSentenceSpoken != nil {
+                    cancelPCCStreamingSpeechIfCurrent(
+                        generation: generation
+                    )
+                }
+
+                try await abandonOracleInference(
+                    interactionID: packet.interaction_id,
+                    fallbackCode: "pcc_empty_result"
+                )
+
+                if firstSentenceSpoken != nil {
+                    throw TempleVoiceError.server(
+                        "PCC streaming response ended after voice playback began."
+                    )
+                }
+
+                let fallbackAnswer = try await askOracleServerFallback(
+                    question: question,
+                    voice: voice,
+                    pccFallbackCode: "pcc_empty_result",
+                    abandonedInteractionID: packet.interaction_id
+                )
+
+                return LiveVoiceOracleResult(
+                    answer: fallbackAnswer,
+                    usedPCCStreamingSpeech: false,
+                    remainingSpeechText: ""
+                )
+            }
+
+            var remainingSpeechText = ""
+
+            if let firstSentence = firstSentenceSpoken {
+                // Snapshot speech is allowed only if the final cumulative
+                // PCC response still has that exact sentence as its prefix.
+                // Never speak a second answer over an already-spoken answer.
+                guard trimmedAnswer.hasPrefix(firstSentence) else {
+                    cancelPCCStreamingSpeechIfCurrent(
+                        generation: generation
+                    )
+
+                    try await abandonOracleInference(
+                        interactionID: packet.interaction_id,
+                        fallbackCode: "pcc_execution_failed"
+                    )
+
+                    throw TempleVoiceError.server(
+                        "PCC streaming response changed after voice playback began."
+                    )
+                }
+
+                remainingSpeechText = String(
+                    trimmedAnswer.dropFirst(firstSentence.count)
+                )
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+
+            let completedAnswer: String
+
+            do {
+                // Preserve the existing invariant: if completion throws,
+                // do not invoke a fresh fallback answer because the server
+                // may already have durably finalized the UUID.
+                completedAnswer = try await completeOracleInference(
+                    interactionID: packet.interaction_id,
+                    answer: trimmedAnswer
+                )
+            } catch {
+                if firstSentenceSpoken != nil {
+                    cancelPCCStreamingSpeechIfCurrent(
+                        generation: generation
+                    )
+                }
+
+                throw error
+            }
+
+            return LiveVoiceOracleResult(
+                answer: completedAnswer,
+                usedPCCStreamingSpeech: firstSentenceSpoken != nil,
+                remainingSpeechText: remainingSpeechText
+            )
+
+        case .unavailable:
+            if firstSentenceSpoken != nil {
+                cancelPCCStreamingSpeechIfCurrent(
+                    generation: generation
+                )
+
+                try await abandonOracleInference(
+                    interactionID: packet.interaction_id,
+                    fallbackCode: "pcc_execution_unavailable"
+                )
+
+                // Once any PCC answer has been spoken, never introduce a
+                // second provider's answer into the same live turn.
+                throw TempleVoiceError.server(
+                    "PCC streaming became unavailable after voice playback began."
+                )
+            }
+
+            try await abandonOracleInference(
+                interactionID: packet.interaction_id,
+                fallbackCode: "pcc_execution_unavailable"
+            )
+
+            let fallbackAnswer = try await askOracleServerFallback(
+                question: question,
+                voice: voice,
+                pccFallbackCode: "pcc_execution_unavailable",
+                abandonedInteractionID: packet.interaction_id
+            )
+
+            return LiveVoiceOracleResult(
+                answer: fallbackAnswer,
+                usedPCCStreamingSpeech: false,
+                remainingSpeechText: ""
+            )
+
+        case .failed:
+            if firstSentenceSpoken != nil {
+                cancelPCCStreamingSpeechIfCurrent(
+                    generation: generation
+                )
+
+                try await abandonOracleInference(
+                    interactionID: packet.interaction_id,
+                    fallbackCode: "pcc_execution_failed"
+                )
+
+                // A fresh fallback here could contradict or repeat speech
+                // the seeker has already heard.
+                throw TempleVoiceError.server(
+                    "PCC streaming was interrupted after voice playback began."
+                )
+            }
+
+            try await abandonOracleInference(
+                interactionID: packet.interaction_id,
+                fallbackCode: "pcc_execution_failed"
+            )
+
+            let fallbackAnswer = try await askOracleServerFallback(
+                question: question,
+                voice: voice,
+                pccFallbackCode: "pcc_execution_failed",
+                abandonedInteractionID: packet.interaction_id
+            )
+
+            return LiveVoiceOracleResult(
+                answer: fallbackAnswer,
+                usedPCCStreamingSpeech: false,
+                remainingSpeechText: ""
+            )
+        }
+    }
+
     private func askOracle(question: String, voice: String) async throws -> String {
         switch ApplePCCInferenceAdapter.availability() {
         case .unavailable:
@@ -2482,6 +2754,242 @@ struct NativeVoiceSessionView: View {
         }
 
         return result
+    }
+
+    private func firstCompletePCCStreamingSentence(
+        in snapshot: String
+    ) -> String? {
+        let text = snapshot
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard text.count >= 10 else {
+            return nil
+        }
+
+        let closingCharacters: Set<Character> = [
+            "\"",
+            "'",
+            "”",
+            "’",
+            ")",
+            "]",
+            "}"
+        ]
+
+        let commonAbbreviations = [
+            "mr.",
+            "mrs.",
+            "ms.",
+            "dr.",
+            "prof.",
+            "sr.",
+            "jr.",
+            "st.",
+            "vs.",
+            "etc.",
+            "e.g.",
+            "i.e."
+        ]
+
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            let terminal = text[index]
+
+            guard terminal == "."
+                    || terminal == "!"
+                    || terminal == "?" else {
+                index = text.index(after: index)
+                continue
+            }
+
+            var boundary = text.index(after: index)
+
+            while boundary < text.endIndex,
+                  closingCharacters.contains(text[boundary]) {
+                boundary = text.index(after: boundary)
+            }
+
+            // Do not speak merely because punctuation is currently the
+            // last token in a snapshot. Wait until generation has advanced
+            // into the next sentence so the first sentence is stable.
+            let trailingText = String(text[boundary...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard trailingText.count >= 2 else {
+                index = text.index(after: index)
+                continue
+            }
+
+            let candidate = String(text[..<boundary])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            guard candidate.count >= 8 else {
+                index = text.index(after: index)
+                continue
+            }
+
+            if terminal == "." {
+                let lowerCandidate = candidate.lowercased()
+
+                if commonAbbreviations.contains(
+                    where: { lowerCandidate.hasSuffix($0) }
+                ) {
+                    index = text.index(after: index)
+                    continue
+                }
+
+                let withoutClosingCharacters = candidate
+                    .trimmingCharacters(
+                        in: CharacterSet(
+                            charactersIn: "\"'”’)]}"
+                        )
+                    )
+
+                let beforePeriod = withoutClosingCharacters.dropLast()
+                let finalToken = beforePeriod
+                    .split(whereSeparator: { $0.isWhitespace })
+                    .last
+                    .map(String.init)
+                    ?? ""
+
+                // Avoid initials and compact dotted abbreviations such as
+                // "J." or "U.S." becoming premature sentence boundaries.
+                if finalToken.count == 1
+                    || finalToken.contains(".") {
+                    index = text.index(after: index)
+                    continue
+                }
+            }
+
+            return candidate
+        }
+
+        return nil
+    }
+
+    @MainActor
+    private func beginPCCStreamingFirstSentence(
+        _ spokenText: String,
+        deity: String,
+        generation: Int
+    ) -> Bool {
+        let textToSpeak = spokenText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !textToSpeak.isEmpty,
+              generation == voiceSessionGeneration,
+              !isRecording,
+              activePlaybackOrigin == nil else {
+            return false
+        }
+
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .spokenAudio)
+            try session.setActive(true)
+        } catch {
+            // Do not turn a usable PCC answer into a failed turn merely
+            // because early native speech could not begin. The completed
+            // answer will continue through the established playback rail.
+            return false
+        }
+
+        if speechSynthesizer.isSpeaking {
+            speechSynthesizer.stopSpeaking(at: .immediate)
+        }
+
+        audioPlayer?.stop()
+        audioPlayer = nil
+
+        activePlaybackOrigin = .liveTurn
+        isPlayingAudio = true
+        statusTitle = "Oracle speaking"
+        statusMessage = "The Oracle has begun answering while the full response continues."
+
+        let utterance = AVSpeechUtterance(string: textToSpeak)
+        utterance.voice = preferredSpeechVoice(for: deity)
+
+        if deity
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() == "moses" {
+            utterance.rate = 0.47
+            utterance.pitchMultiplier = 0.92
+        } else {
+            utterance.rate = 0.46
+            utterance.pitchMultiplier = 1.02
+        }
+
+        utterance.volume = 1.0
+        speechSynthesizer.speak(utterance)
+
+        return true
+    }
+
+    @MainActor
+    private func cancelPCCStreamingSpeechIfCurrent(
+        generation: Int
+    ) {
+        guard generation == voiceSessionGeneration,
+              activePlaybackOrigin == .liveTurn else {
+            return
+        }
+
+        speechSynthesizer.stopSpeaking(at: .immediate)
+        audioPlayer?.stop()
+        audioPlayer = nil
+        isPlayingAudio = false
+        activePlaybackOrigin = nil
+    }
+
+    @MainActor
+    private func finishPCCStreamingVoice(
+        remainingText: String,
+        deity: String,
+        generation: Int
+    ) async {
+        // The first utterance deliberately has no completion monitor.
+        // Keep playback ownership until it finishes, then hand the
+        // remainder into the existing native speech completion rail.
+        while generation == voiceSessionGeneration,
+              activePlaybackOrigin == .liveTurn,
+              speechSynthesizer.isSpeaking {
+            do {
+                try await Task.sleep(
+                    nanoseconds: 100_000_000
+                )
+            } catch {
+                return
+            }
+        }
+
+        guard generation == voiceSessionGeneration,
+              activePlaybackOrigin == .liveTurn else {
+            return
+        }
+
+        let remaining = remainingText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !remaining.isEmpty else {
+            finishVoicePlayback(
+                origin: .liveTurn,
+                generation: generation
+            )
+            return
+        }
+
+        statusTitle = "Oracle speaking"
+        statusMessage = "Apple voice is continuing the response."
+
+        // This existing helper owns native speech completion and ultimately
+        // rejoins finishVoicePlayback() -> continuous-conversation rearm.
+        speakOracleAnswer(
+            remaining,
+            deity: deity,
+            origin: .liveTurn,
+            generation: generation
+        )
     }
 
     private func speakOracleAnswerProviderFirst(
