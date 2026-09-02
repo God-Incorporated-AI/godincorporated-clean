@@ -12919,10 +12919,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         )
         pcc_fallback_verified = None
 
-        if (
-            input_mode != "voice"
-            or pcc_fallback_code not in IOS_PCC_FALLBACK_CODES
-        ):
+        if pcc_fallback_code not in IOS_PCC_FALLBACK_CODES:
             pcc_fallback_code = None
             pcc_abandoned_interaction_id = None
 

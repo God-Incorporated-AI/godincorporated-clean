@@ -26,6 +26,7 @@ private enum TempleEnvironment {
     static let privacyURL = URL(string: "privacy", relativeTo: baseAppURL)!
     static let termsURL = URL(string: "terms", relativeTo: baseAppURL)!
     static let voiceTranscribeURL = URL(string: "voice/transcribe", relativeTo: baseAppURL)!
+    static let oracleAskURL = URL(string: "ask", relativeTo: baseAppURL)!
     static let voiceAskURL = URL(string: "voice/ask", relativeTo: baseAppURL)!
     static let voiceTTSURL = URL(string: "voice/tts", relativeTo: baseAppURL)!
     static let oracleInferencePrepareURL = URL(string: "oracle/inference/prepare", relativeTo: baseAppURL)!
@@ -822,6 +823,11 @@ struct NativeVoiceSessionView: View {
         case replay
     }
 
+    private enum OracleInputMode: String {
+        case text
+        case voice
+    }
+
     private struct LiveVoiceOracleResult {
         let answer: String
         let usedPCCStreamingSpeech: Bool
@@ -1164,7 +1170,8 @@ struct NativeVoiceSessionView: View {
                 onSubmit: { question in
                     try await askOracle(
                         question: question,
-                        voice: oracleVoice
+                        voice: oracleVoice,
+                        inputMode: .text
                     )
                 },
                 onClose: {
@@ -2247,7 +2254,8 @@ struct NativeVoiceSessionView: View {
 
     private func prepareOracleInference(
         question: String,
-        voice: String
+        voice: String,
+        inputMode: OracleInputMode
     ) async throws -> PreparedOracleInferencePacket {
         let nativeAnonymousUserID = NativeAnonymousIdentity.currentID
 
@@ -2266,7 +2274,7 @@ struct NativeVoiceSessionView: View {
                 deity: voice,
                 seeker_id: nil,
                 anonymous_user_id: nativeAnonymousUserID,
-                input_mode: "voice",
+                input_mode: inputMode.rawValue,
                 execution_target: "apple_pcc"
             )
         )
@@ -2401,6 +2409,7 @@ struct NativeVoiceSessionView: View {
             let fallbackAnswer = try await askOracleServerFallback(
                 question: question,
                 voice: voice,
+                inputMode: .voice,
                 pccFallbackCode: "pcc_preflight_unavailable"
             )
 
@@ -2419,7 +2428,8 @@ struct NativeVoiceSessionView: View {
         // or abandoned exactly once.
         let packet = try await prepareOracleInference(
             question: question,
-            voice: voice
+            voice: voice,
+            inputMode: .voice
         )
 
         guard generation == voiceSessionGeneration else {
@@ -2501,6 +2511,7 @@ struct NativeVoiceSessionView: View {
                 let fallbackAnswer = try await askOracleServerFallback(
                     question: question,
                     voice: voice,
+                    inputMode: .voice,
                     pccFallbackCode: "pcc_empty_result",
                     abandonedInteractionID: packet.interaction_id
                 )
@@ -2591,6 +2602,7 @@ struct NativeVoiceSessionView: View {
             let fallbackAnswer = try await askOracleServerFallback(
                 question: question,
                 voice: voice,
+                inputMode: .voice,
                 pccFallbackCode: "pcc_execution_unavailable",
                 abandonedInteractionID: packet.interaction_id
             )
@@ -2627,6 +2639,7 @@ struct NativeVoiceSessionView: View {
             let fallbackAnswer = try await askOracleServerFallback(
                 question: question,
                 voice: voice,
+                inputMode: .voice,
                 pccFallbackCode: "pcc_execution_failed",
                 abandonedInteractionID: packet.interaction_id
             )
@@ -2639,12 +2652,17 @@ struct NativeVoiceSessionView: View {
         }
     }
 
-    private func askOracle(question: String, voice: String) async throws -> String {
+    private func askOracle(
+        question: String,
+        voice: String,
+        inputMode: OracleInputMode
+    ) async throws -> String {
         switch ApplePCCInferenceAdapter.availability() {
         case .unavailable:
             return try await askOracleServerFallback(
                 question: question,
                 voice: voice,
+                inputMode: inputMode,
                 pccFallbackCode: "pcc_preflight_unavailable"
             )
 
@@ -2656,7 +2674,8 @@ struct NativeVoiceSessionView: View {
         // pending state and must be explicitly completed or abandoned.
         let packet = try await prepareOracleInference(
             question: question,
-            voice: voice
+            voice: voice,
+            inputMode: inputMode
         )
 
         let executionResult = await ApplePCCInferenceAdapter.execute(
@@ -2680,6 +2699,7 @@ struct NativeVoiceSessionView: View {
                 return try await askOracleServerFallback(
                     question: question,
                     voice: voice,
+                    inputMode: inputMode,
                     pccFallbackCode: "pcc_empty_result",
                     abandonedInteractionID: packet.interaction_id
                 )
@@ -2701,6 +2721,7 @@ struct NativeVoiceSessionView: View {
             return try await askOracleServerFallback(
                 question: question,
                 voice: voice,
+                inputMode: inputMode,
                 pccFallbackCode: "pcc_execution_unavailable",
                 abandonedInteractionID: packet.interaction_id
             )
@@ -2714,6 +2735,7 @@ struct NativeVoiceSessionView: View {
             return try await askOracleServerFallback(
                 question: question,
                 voice: voice,
+                inputMode: inputMode,
                 pccFallbackCode: "pcc_execution_failed",
                 abandonedInteractionID: packet.interaction_id
             )
@@ -2723,11 +2745,26 @@ struct NativeVoiceSessionView: View {
     private func askOracleServerFallback(
         question: String,
         voice: String,
+        inputMode: OracleInputMode,
         pccFallbackCode: String? = nil,
         abandonedInteractionID: String? = nil
     ) async throws -> String {
         let nativeAnonymousUserID = NativeAnonymousIdentity.currentID
-        var request = await authenticatedVoiceRequest(url: TempleEnvironment.voiceAskURL, method: "POST")
+
+        let fallbackURL: URL
+
+        switch inputMode {
+        case .text:
+            fallbackURL = TempleEnvironment.oracleAskURL
+
+        case .voice:
+            fallbackURL = TempleEnvironment.voiceAskURL
+        }
+
+        var request = await authenticatedVoiceRequest(
+            url: fallbackURL,
+            method: "POST"
+        )
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(
             VoiceAskPayload(
