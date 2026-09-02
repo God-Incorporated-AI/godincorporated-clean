@@ -844,6 +844,11 @@ struct NativeVoiceSessionView: View {
     private let quietDropFromSpeechDB: Float = 10.0
     private let meterTickSeconds: TimeInterval = 0.25
 
+    // Keep the PCC first-sentence speech machinery available for
+    // future latency experiments. Production iOS live turns currently
+    // use one provider-TTS render of the completed answer for voice quality.
+    private let useProviderTTSForLiveTurns = true
+
     var body: some View {
         let templeIdentity =
             NativeTempleIdentity(
@@ -2447,6 +2452,10 @@ struct NativeVoiceSessionView: View {
         ) { snapshot in
             guard generation == voiceSessionGeneration else {
                 return false
+            }
+
+            guard !useProviderTTSForLiveTurns else {
+                return true
             }
 
             guard !firstSentenceSpeechAttempted,
