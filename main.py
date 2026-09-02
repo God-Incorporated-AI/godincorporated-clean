@@ -2230,7 +2230,37 @@ def retrieve_context_embeddings_ranked(
 
     return [passage for score, passage in scored[:top_k] if score > 0]
 
-def get_session_memory(session_id: str, depth: Optional[int]):
+def _oracle_memory_answer_visible(
+    source_oracle: str,
+    current_deity: Optional[str],
+    memory_intent: str = "reflection",
+) -> bool:
+    """
+    Shared seeker-memory boundary.
+
+    Recall may use fully attributed dialogue from either Oracle.
+    Ordinary reflection keeps the current Oracle's full dialogue,
+    while another Oracle contributes seeker topic/context only.
+    """
+    normalized_intent = (memory_intent or "reflection").strip().lower()
+    normalized_current = (current_deity or "").strip()
+
+    if normalized_intent == "recall":
+        return True
+
+    # Compatibility guard for any unresolved/legacy caller.
+    if normalized_current not in {"Hathor", "Moses"}:
+        return True
+
+    return source_oracle == normalized_current
+
+
+def get_session_memory(
+    session_id: str,
+    depth: Optional[int],
+    current_deity: Optional[str] = None,
+    memory_intent: str = "reflection",
+):
 
     conn = get_db_connection()
 
@@ -2281,13 +2311,28 @@ def get_session_memory(session_id: str, depth: Optional[int]):
         if oracle not in {"Hathor", "Moses"}:
             oracle = "Oracle"
 
-        history.append(
-            f"Seeker (speaking with {oracle}): {q}\n{oracle}: {a}"
-        )
+        if _oracle_memory_answer_visible(
+            oracle,
+            current_deity,
+            memory_intent,
+        ):
+            history.append(
+                f"Seeker (speaking with {oracle}): {q}\n{oracle}: {a}"
+            )
+        else:
+            history.append(
+                f"Seeker previously asked {oracle}:\n{q}"
+            )
 
     return "\n\n".join(history)
 
-def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: Optional[int]):
+def retrieve_seeker_memory(
+    user_id: Optional[str],
+    session_id: str,
+    depth: Optional[int],
+    current_deity: Optional[str] = None,
+    memory_intent: str = "reflection",
+):
     """
     Retrieve durable memory from an authenticated seeker's prior
     conversations. Current-conversation memory is owned exclusively by
@@ -2337,12 +2382,22 @@ def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: Optio
         if oracle not in {"Hathor", "Moses"}:
             oracle = "Oracle"
 
-        memories.append(
-            f"Seeker previously asked {oracle}:\n"
-            f"{row['question_text']}\n"
-            f"{oracle} answered:\n"
-            f"{row['response_text'][:400]}"
-        )
+        if _oracle_memory_answer_visible(
+            oracle,
+            current_deity,
+            memory_intent,
+        ):
+            memories.append(
+                f"Seeker previously asked {oracle}:\n"
+                f"{row['question_text']}\n"
+                f"{oracle} answered:\n"
+                f"{row['response_text'][:400]}"
+            )
+        else:
+            memories.append(
+                f"Seeker previously asked {oracle}:\n"
+                f"{row['question_text']}"
+            )
 
     return memories
 
@@ -9491,7 +9546,12 @@ async def voice_realtime_session_endpoint(request: Request):
 
         recent_memory = ""
         try:
-            recent_memory = get_session_memory(session_id, 3)
+            recent_memory = get_session_memory(
+                session_id,
+                3,
+                current_deity=deity,
+                memory_intent="reflection",
+            )
         except Exception as e:
             logger.warning("REALTIME_SESSION_STAGE memory lookup failed: %s", e)
 
@@ -12997,10 +13057,21 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             memory_depth = 0
 
         # --- Retrieve seeker long-term memory ---
-        memories = retrieve_seeker_memory(user_id, session_id, memory_depth)
+        memories = retrieve_seeker_memory(
+            user_id,
+            session_id,
+            memory_depth,
+            current_deity=deity,
+            memory_intent=memory_intent,
+        )
 
         # --- Retrieve conversation memory ---
-        memory = get_session_memory(session_id, memory_depth)
+        memory = get_session_memory(
+            session_id,
+            memory_depth,
+            current_deity=deity,
+            memory_intent=memory_intent,
+        )
 
         # --— normalize memory inputs for prompt ---
         recent_memory = memory
