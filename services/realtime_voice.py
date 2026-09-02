@@ -110,7 +110,10 @@ def build_realtime_instructions(
         if len(compact_memory) > 2500:
             compact_memory = compact_memory[:2500].rsplit(" ", 1)[0] + "..."
         memory_block = (
-            "\n\nRecent seeker memory follows. Treat it as grounding context, not as something to recite unless relevant:\n"
+            "\n\nRecent seeker memory follows. Treat it as grounding context, not as something to recite unless relevant. "
+            "Remembered dialogue may come from Hathor or Moses. Treat another Oracle's dialogue as shared seeker context, "
+            "not as your own prior speech. Preserve the current Oracle's identity, voice, characteristic imagery, "
+            "and first-person perspective:\n"
             f"{compact_memory}"
         )
 

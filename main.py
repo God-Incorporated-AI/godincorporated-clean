@@ -2240,7 +2240,7 @@ def get_session_memory(session_id: str, depth: Optional[int]):
             if depth is None:
                 cur.execute(
                     """
-                    SELECT question_text, response_text
+                    SELECT question_text, response_text, mode
                     FROM oracle_interactions
                     WHERE session_id = %s
                     ORDER BY created_at DESC
@@ -2250,7 +2250,7 @@ def get_session_memory(session_id: str, depth: Optional[int]):
             else:
                 cur.execute(
                     """
-                    SELECT question_text, response_text
+                    SELECT question_text, response_text, mode
                     FROM oracle_interactions
                     WHERE session_id = %s
                     ORDER BY created_at DESC
@@ -2277,8 +2277,12 @@ def get_session_memory(session_id: str, depth: Optional[int]):
             if len(parts) > 1:
                 a = parts[1].strip()
 
+        oracle = (r.get("mode") or "").strip()
+        if oracle not in {"Hathor", "Moses"}:
+            oracle = "Oracle"
+
         history.append(
-            f"User: {q}\nAssistant: {a}"
+            f"Seeker (speaking with {oracle}): {q}\n{oracle}: {a}"
         )
 
     return "\n\n".join(history)
@@ -2300,7 +2304,7 @@ def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: Optio
             if depth is None:
                 cur.execute(
                     """
-                    SELECT question_text, response_text
+                    SELECT question_text, response_text, mode
                     FROM oracle_interactions
                     WHERE user_id = %s
                       AND session_id IS DISTINCT FROM %s::uuid
@@ -2311,7 +2315,7 @@ def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: Optio
             else:
                 cur.execute(
                     """
-                    SELECT question_text, response_text
+                    SELECT question_text, response_text, mode
                     FROM oracle_interactions
                     WHERE user_id = %s
                       AND session_id IS DISTINCT FROM %s::uuid
@@ -2329,8 +2333,15 @@ def retrieve_seeker_memory(user_id: Optional[str], session_id: str, depth: Optio
     memories = []
 
     for row in rows:
+        oracle = (row.get("mode") or "").strip()
+        if oracle not in {"Hathor", "Moses"}:
+            oracle = "Oracle"
+
         memories.append(
-            f"Seeker previously asked:\n{row['question_text']}\nOracle answered:\n{row['response_text'][:400]}"
+            f"Seeker previously asked {oracle}:\n"
+            f"{row['question_text']}\n"
+            f"{oracle} answered:\n"
+            f"{row['response_text'][:400]}"
         )
 
     return memories
@@ -13019,6 +13030,15 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 
         # --— structured memory weighting ---
         memory_block = ""
+
+        if recent_memory or limited_memories:
+            memory_block += (
+                "MEMORY PROVENANCE RULE:\n"
+                "Remembered dialogue may come from Hathor or Moses. "
+                "Treat another Oracle's dialogue as shared seeker context, "
+                "not as your own prior speech. Preserve the current Oracle's "
+                "identity, voice, characteristic imagery, and first-person perspective.\n\n"
+            )
 
         if recent_memory:
             memory_block += "PRIMARY EVIDENCE — RECENT EXACT DIALOGUE:\n"
