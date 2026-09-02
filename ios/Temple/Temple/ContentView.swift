@@ -1050,10 +1050,8 @@ struct NativeVoiceSessionView: View {
                                             )
                                         )
                                         .disabled(
-                                            isWorking
-                                                || isRecording
-                                                || isPlayingAudio
-                                                || isContinuousConversationActive
+                                            isPlayingAudio
+                                                || (isWorking && !isRecording)
                                         )
                                     }
 
@@ -3046,8 +3044,9 @@ struct NativeVoiceSessionView: View {
                 return nil
             }
 
-            if origin == .replay && isContinuousConversationActive {
-                return nil
+            if origin == .replay
+                && (isContinuousConversationActive || isRecording) {
+                stopVoiceSessionActivity(clearExchange: false)
             }
 
             if speechSynthesizer.isSpeaking {
