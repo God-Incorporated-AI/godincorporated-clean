@@ -12640,6 +12640,19 @@ def detect_memory_intent(question: str) -> str:
         "remember when we talked"
     ]
 
+    # Named-Oracle recall must still explicitly refer to the seeker's
+    # prior dialogue. Do not treat ordinary historical/theological
+    # questions about Moses or Hathor as conversation recall.
+    named_oracle_recall_patterns = [
+        r"\bwhat did (?:moses|hathor) (?:tell me|say to me)\b",
+        r"\bwhat has (?:moses|hathor) (?:told me|said to me)\b",
+        r"\b(?:remind me|recall) what (?:moses|hathor) (?:told me|said to me)\b",
+    ]
+
+    for pattern in named_oracle_recall_patterns:
+        if re.search(pattern, q):
+            return "recall"
+
     for pattern in recall_patterns:
         if pattern in q:
             return "recall"
