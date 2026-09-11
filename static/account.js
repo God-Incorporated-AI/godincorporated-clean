@@ -68,20 +68,9 @@ document.addEventListener("DOMContentLoaded", async function () {
 
     const parts = [];
 
-    if (voiceAccess.has_recurring_web_realtime) {
-      if (voiceAccess.web_realtime_fair_use) {
-        parts.push("Live realtime voice under fair-use monitoring");
-      } else if (voiceAccess.web_realtime_monthly_turns) {
-        parts.push(`${voiceAccess.web_realtime_monthly_turns} live realtime turns/month`);
-      } else {
-        parts.push("Live realtime voice");
-      }
-    } else {
-      parts.push("Regular Speak voice with browser voice-out");
-      if (voiceAccess.one_time_realtime_preview_turns) {
-        parts.push(`${voiceAccess.one_time_realtime_preview_turns}-turn live preview`);
-      }
-    }
+    parts.push("Live voice");
+    parts.push("Uses the standard question allowance");
+    parts.push("Regular Speak fallback");
 
     if (voiceAccess.library_full_research) {
       parts.push("full library/research");

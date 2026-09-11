@@ -865,115 +865,59 @@ def get_realtime_voice_window_start(user_id=None, plan_code="anon"):
 def build_realtime_voice_access_payload(
     usage_context: dict,
     is_admin: bool = False,
+    client_interaction_id: Optional[str] = None,
 ) -> dict:
-    plan_code = normalize_plan_code(usage_context.get("plan_code") or "anon")
+    plan_code = normalize_plan_code(
+        usage_context.get("plan_code") or "anon"
+    )
     policy = get_voice_policy(plan_code)
     user_id = usage_context.get("user_id")
-    anonymous_user_id = usage_context.get("anonymous_user_id")
+    anonymous_user_id = usage_context.get(
+        "anonymous_user_id"
+    )
     identity_kind = "user" if user_id else "anonymous"
 
     if is_admin:
-        return {
-            "allowed": True,
-            "reason": "admin_unrestricted",
-            "message": "Admin realtime voice access is unrestricted in this environment.",
-            "plan_code": plan_code,
-            "plan_label": policy["plan_label"],
-            "identity_kind": identity_kind,
-            "is_preview": False,
-            "regular_speak_voice": True,
-            "browser_voice_out": True,
-            "monthly_limit": None,
-            "monthly_used": 0,
-            "monthly_remaining": None,
-            "preview_turn_limit": policy["one_time_realtime_preview_turns"],
-            "preview_turns_used": 0,
-            "preview_turns_remaining": None,
-            "web_realtime_fair_use": True,
-        }
-
-    if policy["has_recurring_web_realtime"]:
-        window_start = get_realtime_voice_window_start(user_id=user_id, plan_code=plan_code)
-        monthly_used = get_realtime_voice_turn_count(
-            user_id=user_id,
-            anonymous_user_id=anonymous_user_id,
-            window_start=window_start,
+        allowed = True
+        reason = "admin_unrestricted"
+        message = (
+            "Admin live voice access is unrestricted "
+            "in this environment."
         )
-        monthly_limit = policy["web_realtime_monthly_turns"]
-
-        if monthly_limit is None:
-            return {
-                "allowed": True,
-                "reason": "realtime_fair_use_allowed",
-                "message": "Live realtime voice is available under fair-use monitoring.",
-                "plan_code": plan_code,
-                "plan_label": policy["plan_label"],
-                "identity_kind": identity_kind,
-                "is_preview": False,
-                "regular_speak_voice": True,
-                "browser_voice_out": True,
-                "monthly_limit": None,
-                "monthly_used": monthly_used,
-                "monthly_remaining": None,
-                "preview_turn_limit": policy["one_time_realtime_preview_turns"],
-                "preview_turns_used": 0,
-                "preview_turns_remaining": None,
-                "web_realtime_fair_use": True,
-            }
-
-        remaining = max(monthly_limit - monthly_used, 0)
-        return {
-            "allowed": remaining > 0,
-            "reason": "realtime_monthly_turns_available" if remaining > 0 else "realtime_monthly_turn_limit_reached",
-            "message": (
-                f"{remaining} live realtime voice turn{'s' if remaining != 1 else ''} remain this month."
-                if remaining > 0
-                else "Your live realtime voice turns are complete for this month. You can continue with regular Speak voice."
-            ),
-            "plan_code": plan_code,
-            "plan_label": policy["plan_label"],
-            "identity_kind": identity_kind,
-            "is_preview": False,
-            "regular_speak_voice": True,
-            "browser_voice_out": True,
-            "monthly_limit": monthly_limit,
-            "monthly_used": monthly_used,
-            "monthly_remaining": remaining,
-            "preview_turn_limit": policy["one_time_realtime_preview_turns"],
-            "preview_turns_used": 0,
-            "preview_turns_remaining": None,
-            "web_realtime_fair_use": False,
-        }
-
-    preview_used = get_realtime_voice_turn_count(
-        user_id=user_id,
-        anonymous_user_id=anonymous_user_id,
-        window_start=None,
-    )
-    preview_limit = policy["one_time_realtime_preview_turns"]
-    preview_remaining = max(preview_limit - preview_used, 0)
+    else:
+        allowed = bool(
+            anonymous_user_id
+            and can_user_ask(
+                anonymous_user_id,
+                user_id,
+                exclude_realtime_client_interaction_id=
+                    client_interaction_id,
+            )
+        )
+        reason = (
+            "question_quota_available"
+            if allowed
+            else "question_limit_reached"
+        )
+        message = (
+            "Live voice is available and uses your normal "
+            "question allowance."
+            if allowed
+            else
+            "Your Oracle question allowance is complete "
+            "for this access period."
+        )
 
     return {
-        "allowed": preview_remaining > 0,
-        "reason": "realtime_preview_available" if preview_remaining > 0 else "realtime_preview_used",
-        "message": (
-            f"Your one-time live voice preview has {preview_remaining} turn{'s' if preview_remaining != 1 else ''} remaining."
-            if preview_remaining > 0
-            else "Your one-time live voice preview is complete. You can continue with regular Speak voice."
-        ),
+        "allowed": allowed,
+        "reason": reason,
+        "message": message,
         "plan_code": plan_code,
         "plan_label": policy["plan_label"],
         "identity_kind": identity_kind,
-        "is_preview": True,
         "regular_speak_voice": True,
         "browser_voice_out": True,
-        "monthly_limit": 0,
-        "monthly_used": 0,
-        "monthly_remaining": 0,
-        "preview_turn_limit": preview_limit,
-        "preview_turns_used": preview_used,
-        "preview_turns_remaining": preview_remaining,
-        "web_realtime_fair_use": False,
+        "question_quota_authoritative": True,
     }
 
 
@@ -4088,6 +4032,1097 @@ def create_pending_oracle_inference(
         conn.close()
 
 
+
+def create_or_reuse_realtime_oracle_reservation(
+    *,
+    session_id: str,
+    anonymous_user_id: str,
+    user_id: Optional[str],
+    deity: str,
+    client_interaction_id: str,
+    prepared_state: dict,
+    quota_unrestricted: bool = False,
+) -> dict:
+    """
+    Atomically reserve one ordinary Oracle question for browser realtime.
+
+    Authenticated reservations serialize on the user row.
+    Anonymous reservations serialize on the persistent browser owner row.
+    """
+    client_interaction_id = str(
+        client_interaction_id or ""
+    ).strip()
+
+    if not session_id:
+        raise ValueError("session_id is required")
+    if not anonymous_user_id:
+        raise ValueError("anonymous_user_id is required")
+    if not client_interaction_id:
+        raise ValueError("client_interaction_id is required")
+    if len(client_interaction_id) > 160:
+        raise ValueError("client_interaction_id is too long")
+    if deity not in {"Hathor", "Moses"}:
+        raise ValueError("deity must be Hathor or Moses")
+
+    finalization_state = dict(
+        (prepared_state or {}).get("finalization_state")
+        or {}
+    )
+    question = str(
+        finalization_state.get("question") or ""
+    ).strip()
+
+    if not question:
+        raise ValueError(
+            "prepared realtime reservation requires a question"
+        )
+
+    expire_stale_pending_oracle_inferences()
+
+    if user_id:
+        entitlement = get_user_entitlement_snapshot(user_id)
+        effective_plan = normalize_plan_code(
+            entitlement["effective_plan_code"]
+        )
+        unlimited = (
+            quota_unrestricted
+            or plan_has_unlimited_questions(
+                effective_plan
+            )
+        )
+        question_limit = PLAN_LIMITS.get(
+            effective_plan,
+            PLAN_LIMITS["anon"],
+        )
+        window_start = (
+            get_effective_usage_window_start(
+                entitlement
+            )
+        )
+    else:
+        effective_plan = "anon"
+        unlimited = bool(quota_unrestricted)
+        question_limit = PLAN_LIMITS["anon"]
+        window_start = None
+
+    def same_value(left, right):
+        left_value = (
+            str(left)
+            if left is not None
+            else None
+        )
+        right_value = (
+            str(right)
+            if right is not None
+            else None
+        )
+        return left_value == right_value
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+            if user_id:
+                cur.execute(
+                    """
+                    SELECT id
+                    FROM users
+                    WHERE id = %s::uuid
+                    FOR UPDATE
+                    """,
+                    (user_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id
+                    FROM anonymous_users
+                    WHERE id = %s
+                    FOR UPDATE
+                    """,
+                    (anonymous_user_id,),
+                )
+
+            owner = cur.fetchone()
+            if not owner:
+                raise RuntimeError(
+                    "Realtime quota owner could not be locked"
+                )
+
+            # Completed retry wins.
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    session_id,
+                    anonymous_user_id,
+                    user_id,
+                    question_text,
+                    mode
+                FROM oracle_interactions
+                WHERE client_interaction_id = %s
+                LIMIT 1
+                """,
+                (client_interaction_id,),
+            )
+            completed = cur.fetchone()
+
+            if completed:
+                if not (
+                    same_value(
+                        completed.get("session_id"),
+                        session_id,
+                    )
+                    and same_value(
+                        completed.get(
+                            "anonymous_user_id"
+                        ),
+                        anonymous_user_id,
+                    )
+                    and same_value(
+                        completed.get("user_id"),
+                        user_id,
+                    )
+                    and completed.get("question_text")
+                    == question
+                    and completed.get("mode") == deity
+                ):
+                    raise RuntimeError(
+                        "Realtime client interaction id "
+                        "already belongs to a different "
+                        "authoritative interaction"
+                    )
+
+                conn.commit()
+                return {
+                    "status": "completed",
+                    "interaction_id":
+                        str(completed["id"]),
+                    "reused": True,
+                    "plan_code": effective_plan,
+                }
+
+            # Prepared retry reuses the same reservation.
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    session_id,
+                    anonymous_user_id,
+                    user_id,
+                    deity,
+                    status,
+                    reservation_kind,
+                    prepared_state,
+                    (expires_at > NOW()) AS active
+                FROM oracle_pending_inferences
+                WHERE client_interaction_id = %s
+                LIMIT 1
+                """,
+                (client_interaction_id,),
+            )
+            existing = cur.fetchone()
+
+            if existing:
+                if (
+                    existing.get("reservation_kind")
+                    != "browser_realtime"
+                ):
+                    raise RuntimeError(
+                        "Realtime client interaction id "
+                        "belongs to a different reservation kind"
+                    )
+
+                if not (
+                    same_value(
+                        existing.get("session_id"),
+                        session_id,
+                    )
+                    and same_value(
+                        existing.get(
+                            "anonymous_user_id"
+                        ),
+                        anonymous_user_id,
+                    )
+                    and same_value(
+                        existing.get("user_id"),
+                        user_id,
+                    )
+                    and existing.get("deity") == deity
+                ):
+                    raise RuntimeError(
+                        "Realtime client interaction id "
+                        "already belongs to a different "
+                        "reservation"
+                    )
+
+                status = existing.get("status")
+
+                if (
+                    status != "prepared"
+                    or not bool(existing.get("active"))
+                ):
+                    conn.commit()
+                    return {
+                        "status": status or "expired",
+                        "interaction_id":
+                            str(existing["id"]),
+                        "reused": True,
+                        "plan_code": effective_plan,
+                    }
+
+                existing_state = (
+                    existing.get("prepared_state")
+                    or {}
+                )
+                if isinstance(existing_state, str):
+                    existing_state = json.loads(
+                        existing_state
+                    )
+
+                existing_finalization = dict(
+                    existing_state.get(
+                        "finalization_state"
+                    )
+                    or {}
+                )
+
+                if (
+                    existing_finalization.get(
+                        "question"
+                    )
+                    != question
+                ):
+                    raise RuntimeError(
+                        "Realtime reservation retry question "
+                        "does not match authoritative state"
+                    )
+
+                conn.commit()
+                return {
+                    "status": "prepared",
+                    "interaction_id":
+                        str(existing["id"]),
+                    "reused": True,
+                    "plan_code": effective_plan,
+                }
+
+            if not unlimited:
+                if user_id:
+                    if window_start:
+                        cur.execute(
+                            """
+                            SELECT COUNT(*) AS total
+                            FROM oracle_interactions
+                            WHERE user_id = %s::uuid
+                              AND created_at >= %s
+                            """,
+                            (user_id, window_start),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT COUNT(*) AS total
+                            FROM oracle_interactions
+                            WHERE user_id = %s::uuid
+                            """,
+                            (user_id,),
+                        )
+                else:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) AS total
+                        FROM oracle_interactions
+                        WHERE anonymous_user_id = %s
+                        """,
+                        (anonymous_user_id,),
+                    )
+
+                completed_row = cur.fetchone()
+                completed_count = int(
+                    (completed_row or {}).get(
+                        "total"
+                    )
+                    or 0
+                )
+
+                if user_id:
+                    if window_start:
+                        cur.execute(
+                            """
+                            SELECT COUNT(*) AS total
+                            FROM oracle_pending_inferences
+                            WHERE user_id = %s::uuid
+                              AND reservation_kind =
+                                  'browser_realtime'
+                              AND status IN (
+                                  'prepared',
+                                  'completing'
+                              )
+                              AND expires_at > NOW()
+                              AND created_at >= %s
+                            """,
+                            (user_id, window_start),
+                        )
+                    else:
+                        cur.execute(
+                            """
+                            SELECT COUNT(*) AS total
+                            FROM oracle_pending_inferences
+                            WHERE user_id = %s::uuid
+                              AND reservation_kind =
+                                  'browser_realtime'
+                              AND status IN (
+                                  'prepared',
+                                  'completing'
+                              )
+                              AND expires_at > NOW()
+                            """,
+                            (user_id,),
+                        )
+                else:
+                    cur.execute(
+                        """
+                        SELECT COUNT(*) AS total
+                        FROM oracle_pending_inferences
+                        WHERE anonymous_user_id = %s
+                          AND reservation_kind =
+                              'browser_realtime'
+                          AND status IN (
+                              'prepared',
+                              'completing'
+                          )
+                          AND expires_at > NOW()
+                        """,
+                        (anonymous_user_id,),
+                    )
+
+                pending_row = cur.fetchone()
+                pending_count = int(
+                    (pending_row or {}).get(
+                        "total"
+                    )
+                    or 0
+                )
+
+                if (
+                    completed_count + pending_count
+                    >= question_limit
+                ):
+                    conn.commit()
+                    return {
+                        "status": "denied",
+                        "interaction_id": None,
+                        "reused": False,
+                        "plan_code": effective_plan,
+                        "question_limit":
+                            question_limit,
+                        "questions_used":
+                            completed_count,
+                        "questions_reserved":
+                            pending_count,
+                    }
+
+            cur.execute(
+                """
+                INSERT INTO oracle_pending_inferences (
+                    session_id,
+                    user_id,
+                    anonymous_user_id,
+                    deity,
+                    input_mode,
+                    status,
+                    prepared_state,
+                    expires_at,
+                    client_interaction_id,
+                    reservation_kind
+                )
+                VALUES (
+                    %s::uuid,
+                    %s::uuid,
+                    %s,
+                    %s,
+                    'voice',
+                    'prepared',
+                    %s::jsonb,
+                    NOW() + INTERVAL '15 minutes',
+                    %s,
+                    'browser_realtime'
+                )
+                RETURNING id
+                """,
+                (
+                    session_id,
+                    user_id,
+                    anonymous_user_id,
+                    deity,
+                    _safe_json_payload(
+                        prepared_state or {}
+                    ),
+                    client_interaction_id,
+                ),
+            )
+            row = cur.fetchone()
+
+        conn.commit()
+
+        if not row or not row.get("id"):
+            raise RuntimeError(
+                "Realtime reservation insert "
+                "returned no id"
+            )
+
+        return {
+            "status": "prepared",
+            "interaction_id": str(row["id"]),
+            "reused": False,
+            "plan_code": effective_plan,
+        }
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
+def realtime_oracle_reservation_is_active(
+    *,
+    interaction_id: str,
+    client_interaction_id: str,
+    session_id: str,
+    anonymous_user_id: str,
+    user_id: Optional[str],
+) -> bool:
+    try:
+        str(uuid.UUID(str(interaction_id)))
+    except (
+        TypeError,
+        ValueError,
+        AttributeError,
+    ):
+        return False
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id
+                FROM oracle_pending_inferences
+                WHERE id = %s::uuid
+                  AND client_interaction_id = %s
+                  AND reservation_kind =
+                      'browser_realtime'
+                  AND session_id = %s::uuid
+                  AND anonymous_user_id
+                      IS NOT DISTINCT FROM %s
+                  AND user_id
+                      IS NOT DISTINCT FROM %s::uuid
+                  AND status = 'prepared'
+                  AND expires_at > NOW()
+                LIMIT 1
+                """,
+                (
+                    interaction_id,
+                    client_interaction_id,
+                    session_id,
+                    anonymous_user_id,
+                    user_id,
+                ),
+            )
+            return bool(cur.fetchone())
+
+    finally:
+        conn.close()
+
+
+def abandon_realtime_oracle_reservation(
+    *,
+    client_interaction_id: str,
+    session_id: str,
+    anonymous_user_id: str,
+    user_id: Optional[str],
+    interaction_id: Optional[str] = None,
+    reason: str = "client_abandon",
+) -> dict:
+    """
+    Idempotently release one still-prepared browser realtime question.
+
+    This is deliberately separate from the PCC abandonment contract.
+    It may never alter device/PCC reservations.
+    """
+    client_interaction_id = str(
+        client_interaction_id or ""
+    ).strip()
+
+    if not client_interaction_id:
+        raise ValueError(
+            "client_interaction_id is required"
+        )
+
+    if not session_id:
+        raise ValueError("session_id is required")
+
+    if not anonymous_user_id:
+        raise ValueError(
+            "anonymous_user_id is required"
+        )
+
+    interaction_uuid = None
+
+    if interaction_id:
+        interaction_uuid = str(
+            uuid.UUID(str(interaction_id))
+        )
+
+    reason = str(
+        reason or "client_abandon"
+    ).strip()[:120] or "client_abandon"
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, status
+                FROM oracle_pending_inferences
+                WHERE client_interaction_id = %s
+                  AND reservation_kind =
+                      'browser_realtime'
+                  AND session_id = %s::uuid
+                  AND anonymous_user_id
+                      IS NOT DISTINCT FROM %s
+                  AND user_id
+                      IS NOT DISTINCT FROM %s::uuid
+                  AND (
+                      %s::uuid IS NULL
+                      OR id = %s::uuid
+                  )
+                FOR UPDATE
+                """,
+                (
+                    client_interaction_id,
+                    session_id,
+                    anonymous_user_id,
+                    user_id,
+                    interaction_uuid,
+                    interaction_uuid,
+                ),
+            )
+            pending = cur.fetchone()
+
+            if not pending:
+                conn.commit()
+                return {
+                    "abandoned": False,
+                    "status": "not_found",
+                    "interaction_id":
+                        interaction_uuid,
+                    "client_interaction_id":
+                        client_interaction_id,
+                }
+
+            pending_id = str(pending["id"])
+            pending_status = str(
+                pending.get("status") or ""
+            )
+
+            if pending_status == "prepared":
+                cur.execute(
+                    """
+                    UPDATE oracle_pending_inferences
+                    SET
+                        status = 'expired',
+                        expires_at = NOW(),
+                        prepared_state =
+                            jsonb_build_object(
+                                'abandoned',
+                                true,
+                                'reservation_kind',
+                                'browser_realtime',
+                                'reason',
+                                %s,
+                                'client_interaction_id',
+                                %s
+                            )
+                    WHERE id = %s::uuid
+                      AND status = 'prepared'
+                    RETURNING id
+                    """,
+                    (
+                        reason,
+                        client_interaction_id,
+                        pending_id,
+                    ),
+                )
+                abandoned = bool(cur.fetchone())
+
+                conn.commit()
+
+                return {
+                    "abandoned": abandoned,
+                    "status": (
+                        "expired"
+                        if abandoned
+                        else "unchanged"
+                    ),
+                    "interaction_id":
+                        pending_id,
+                    "client_interaction_id":
+                        client_interaction_id,
+                }
+
+            conn.commit()
+
+            return {
+                "abandoned": False,
+                "status": pending_status,
+                "interaction_id": pending_id,
+                "client_interaction_id":
+                    client_interaction_id,
+            }
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
+def finalize_realtime_oracle_reservation(
+    *,
+    interaction_id: str,
+    client_interaction_id: str,
+    session_id: str,
+    anonymous_user_id: str,
+    user_id: Optional[str],
+    reported_question: str,
+    reported_deity: str,
+    assistant_transcript: str,
+    provider: str,
+    model: str,
+    metadata: dict,
+) -> dict:
+    """
+    Atomically convert one browser-realtime reservation into one
+    durable ordinary Oracle interaction.
+
+    A duplicate is accepted only when the server reservation UUID and
+    browser client interaction id identify the same durable row.
+    """
+    interaction_id = str(
+        uuid.UUID(str(interaction_id))
+    )
+
+    client_interaction_id = str(
+        client_interaction_id or ""
+    ).strip()
+
+    reported_question = str(
+        reported_question or ""
+    ).strip()[:1000]
+
+    reported_deity = str(
+        reported_deity or ""
+    ).strip()
+
+    assistant_transcript = str(
+        assistant_transcript or ""
+    ).strip()
+
+    if not client_interaction_id:
+        raise ValueError(
+            "client_interaction_id is required"
+        )
+
+    if not reported_question:
+        raise ValueError(
+            "reported_question is required"
+        )
+
+    if reported_deity not in {
+        "Hathor",
+        "Moses",
+    }:
+        raise ValueError(
+            "reported_deity must be Hathor or Moses"
+        )
+
+    if not assistant_transcript:
+        raise ValueError(
+            "assistant_transcript is required"
+        )
+
+    def same_value(left, right):
+        left_value = (
+            str(left)
+            if left is not None
+            else None
+        )
+        right_value = (
+            str(right)
+            if right is not None
+            else None
+        )
+        return left_value == right_value
+
+    def find_matching_durable(
+        cur,
+        question: str,
+        answer: str,
+        deity: str,
+    ):
+        cur.execute(
+            """
+            SELECT id
+            FROM oracle_interactions
+            WHERE id = %s::uuid
+              AND client_interaction_id = %s
+              AND session_id
+                  IS NOT DISTINCT FROM %s::uuid
+              AND anonymous_user_id
+                  IS NOT DISTINCT FROM %s
+              AND user_id
+                  IS NOT DISTINCT FROM %s::uuid
+              AND input_type = 'voice'
+              AND question_text = %s
+              AND response_text = %s
+              AND mode = %s
+            LIMIT 1
+            """,
+            (
+                interaction_id,
+                client_interaction_id,
+                session_id,
+                anonymous_user_id,
+                user_id,
+                question,
+                answer,
+                deity,
+            ),
+        )
+        return cur.fetchone()
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    session_id,
+                    anonymous_user_id,
+                    user_id,
+                    deity,
+                    input_mode,
+                    status,
+                    prepared_state,
+                    (expires_at > NOW()) AS active,
+                    client_interaction_id
+                FROM oracle_pending_inferences
+                WHERE id = %s::uuid
+                  AND reservation_kind =
+                      'browser_realtime'
+                FOR UPDATE
+                """,
+                (interaction_id,),
+            )
+            pending = cur.fetchone()
+
+            if not pending:
+                durable = find_matching_durable(
+                    cur,
+                    reported_question,
+                    assistant_transcript,
+                    reported_deity,
+                )
+
+                if durable:
+                    conn.commit()
+                    return {
+                        "oracle_interaction_id":
+                            str(durable["id"]),
+                        "duplicate": True,
+                        "question":
+                            reported_question,
+                        "deity":
+                            reported_deity,
+                    }
+
+                raise RuntimeError(
+                    "Realtime reservation does not exist "
+                    "and no exact durable interaction matches"
+                )
+
+            if not (
+                same_value(
+                    pending.get("session_id"),
+                    session_id,
+                )
+                and same_value(
+                    pending.get(
+                        "anonymous_user_id"
+                    ),
+                    anonymous_user_id,
+                )
+                and same_value(
+                    pending.get("user_id"),
+                    user_id,
+                )
+                and pending.get(
+                    "client_interaction_id"
+                )
+                == client_interaction_id
+            ):
+                raise RuntimeError(
+                    "Realtime reservation identity "
+                    "does not match"
+                )
+
+            if pending.get("status") == "completed":
+                durable = find_matching_durable(
+                    cur,
+                    reported_question,
+                    assistant_transcript,
+                    reported_deity,
+                )
+
+                if not durable:
+                    raise RuntimeError(
+                        "Completed realtime reservation "
+                        "does not match one exact durable "
+                        "Oracle interaction"
+                    )
+
+                conn.commit()
+
+                return {
+                    "oracle_interaction_id":
+                        str(durable["id"]),
+                    "duplicate": True,
+                    "question":
+                        reported_question,
+                    "deity":
+                        reported_deity,
+                }
+
+            if (
+                pending.get("status") != "prepared"
+                or not bool(pending.get("active"))
+            ):
+                raise RuntimeError(
+                    "Realtime reservation is "
+                    "no longer active"
+                )
+
+            prepared_state = (
+                pending.get("prepared_state")
+                or {}
+            )
+
+            if isinstance(prepared_state, str):
+                prepared_state = json.loads(
+                    prepared_state
+                )
+
+            finalization_state = dict(
+                prepared_state.get(
+                    "finalization_state"
+                )
+                or {}
+            )
+
+            question = str(
+                finalization_state.get(
+                    "question"
+                )
+                or ""
+            ).strip()
+
+            deity = str(
+                finalization_state.get(
+                    "deity"
+                )
+                or ""
+            ).strip()
+
+            input_mode = str(
+                finalization_state.get(
+                    "input_mode"
+                )
+                or ""
+            ).strip().lower()
+
+            if not question:
+                raise RuntimeError(
+                    "Realtime reservation has no "
+                    "authoritative question"
+                )
+
+            if deity not in {
+                "Hathor",
+                "Moses",
+            }:
+                raise RuntimeError(
+                    "Realtime reservation has invalid "
+                    "Oracle identity"
+                )
+
+            if reported_question != question:
+                raise RuntimeError(
+                    "Realtime completion question does "
+                    "not match authoritative reservation"
+                )
+
+            if reported_deity != deity:
+                raise RuntimeError(
+                    "Realtime completion Oracle does "
+                    "not match authoritative reservation"
+                )
+
+            if input_mode != "voice":
+                raise RuntimeError(
+                    "Realtime reservation input mode "
+                    "is not voice"
+                )
+
+            cur.execute(
+                """
+                UPDATE oracle_pending_inferences
+                SET status = 'completing'
+                WHERE id = %s::uuid
+                  AND status = 'prepared'
+                """,
+                (interaction_id,),
+            )
+
+            if cur.rowcount != 1:
+                raise RuntimeError(
+                    "Realtime reservation could not "
+                    "be claimed"
+                )
+
+            cur.execute(
+                """
+                INSERT INTO oracle_interactions (
+                    id,
+                    session_id,
+                    anonymous_user_id,
+                    user_id,
+                    input_type,
+                    question_text,
+                    response_text,
+                    model_provider,
+                    model_name,
+                    mode,
+                    reason,
+                    client_interaction_id,
+                    metadata_json
+                )
+                VALUES (
+                    %s::uuid,
+                    %s::uuid,
+                    %s,
+                    %s::uuid,
+                    'voice',
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    'realtime_voice',
+                    %s,
+                    %s::jsonb
+                )
+                ON CONFLICT (id) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    interaction_id,
+                    session_id,
+                    anonymous_user_id,
+                    user_id,
+                    question,
+                    assistant_transcript,
+                    provider,
+                    model,
+                    deity,
+                    client_interaction_id,
+                    _safe_json_payload(
+                        metadata or {}
+                    ),
+                ),
+            )
+            inserted = cur.fetchone()
+            duplicate = False
+
+            if inserted:
+                oracle_interaction_id = str(
+                    inserted["id"]
+                )
+            else:
+                duplicate = True
+                existing = find_matching_durable(
+                    cur,
+                    question,
+                    assistant_transcript,
+                    deity,
+                )
+
+                if not existing:
+                    raise RuntimeError(
+                        "Realtime durable interaction "
+                        "conflict does not match both "
+                        "authoritative correlation ids"
+                    )
+
+                oracle_interaction_id = str(
+                    existing["id"]
+                )
+
+            cur.execute(
+                """
+                UPDATE oracle_pending_inferences
+                SET
+                    status = 'completed',
+                    completed_at = NOW(),
+                    prepared_state = '{}'::jsonb
+                WHERE id = %s::uuid
+                  AND status = 'completing'
+                """,
+                (interaction_id,),
+            )
+
+            if cur.rowcount != 1:
+                raise RuntimeError(
+                    "Realtime reservation could not "
+                    "be completed"
+                )
+
+        conn.commit()
+
+        return {
+            "oracle_interaction_id":
+                oracle_interaction_id,
+            "duplicate": duplicate,
+            "question": question,
+            "deity": deity,
+        }
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
 IOS_PCC_POST_PREPARE_FALLBACK_CODES = {
     "pcc_execution_unavailable",
     "pcc_execution_failed",
@@ -7009,16 +8044,81 @@ def get_anonymous_oracle_usage_counts(
     }
 
 
+def get_active_realtime_question_reservation_count(
+    anonymous_user_id: str,
+    user_id: Optional[str] = None,
+    window_start: Optional[datetime.datetime] = None,
+    exclude_client_interaction_id: Optional[str] = None,
+) -> int:
+    """
+    Count active browser-realtime question reservations.
+
+    These reservations consume the same ordinary Oracle allowance as
+    completed oracle_interactions while they are active.
+    """
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+            params = []
+
+            if user_id:
+                where = [
+                    "user_id = %s::uuid",
+                    "reservation_kind = 'browser_realtime'",
+                    "status IN ('prepared', 'completing')",
+                    "expires_at > NOW()",
+                ]
+                params.append(user_id)
+
+                if window_start:
+                    where.append("created_at >= %s")
+                    params.append(window_start)
+            else:
+                where = [
+                    "anonymous_user_id = %s",
+                    "reservation_kind = 'browser_realtime'",
+                    "status IN ('prepared', 'completing')",
+                    "expires_at > NOW()",
+                ]
+                params.append(anonymous_user_id)
+
+            if exclude_client_interaction_id:
+                where.append(
+                    "client_interaction_id IS DISTINCT FROM %s"
+                )
+                params.append(exclude_client_interaction_id)
+
+            cur.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM oracle_pending_inferences
+                WHERE
+                """
+                + " AND ".join(where),
+                tuple(params),
+            )
+            row = cur.fetchone()
+
+        return int((row or {}).get("total") or 0)
+
+    finally:
+        conn.close()
+
+
 def can_user_ask(
     anonymous_user_id: str,
     user_id: Optional[str] = None,
+    exclude_realtime_client_interaction_id: Optional[str] = None,
 ) -> bool:
     if user_id:
         entitlement = get_user_entitlement_snapshot(user_id)
-        usage_window_start = get_effective_usage_window_start(entitlement)
+        usage_window_start = get_effective_usage_window_start(
+            entitlement
+        )
         usage = get_oracle_usage_counts(
             user_id=user_id,
-            window_start=usage_window_start
+            window_start=usage_window_start,
         )
 
         if plan_has_unlimited_questions(
@@ -7028,13 +8128,37 @@ def can_user_ask(
 
         limit = PLAN_LIMITS.get(
             entitlement["effective_plan_code"],
-            PLAN_LIMITS["anon"]
+            PLAN_LIMITS["anon"],
         )
 
-        return usage["questions_used"] < limit
+        reserved = (
+            get_active_realtime_question_reservation_count(
+                anonymous_user_id,
+                user_id=user_id,
+                window_start=usage_window_start,
+                exclude_client_interaction_id=
+                    exclude_realtime_client_interaction_id,
+            )
+        )
 
-    usage = get_anonymous_oracle_usage_counts(anonymous_user_id)
-    return usage["questions_used"] < PLAN_LIMITS["anon"]
+        return (
+            usage["questions_used"] + reserved
+        ) < limit
+
+    usage = get_anonymous_oracle_usage_counts(
+        anonymous_user_id
+    )
+    reserved = (
+        get_active_realtime_question_reservation_count(
+            anonymous_user_id,
+            exclude_client_interaction_id=
+                exclude_realtime_client_interaction_id,
+        )
+    )
+
+    return (
+        usage["questions_used"] + reserved
+    ) < PLAN_LIMITS["anon"]
 
 
 def get_or_create_session_id(request: Request) -> str:
@@ -8928,10 +10052,6 @@ async def voice_tts_endpoint(request: Request):
 
 
 
-@app.get("/voice-preview", response_class=HTMLResponse)
-async def voice_preview_page(request: Request):
-    return templates.TemplateResponse("voice_preview.html", {"request": request})
-
 @app.get("/xai-realtime-lab", response_class=HTMLResponse)
 async def xai_realtime_lab_page(request: Request):
     require_admin(request)
@@ -9007,6 +10127,150 @@ async def voice_realtime_client_event_endpoint(request: Request):
     return {"recorded": True, "event_name": event_name, "sequence": body.get("sequence")}
 
 
+@app.post("/voice/realtime/reservation/abandon")
+async def voice_realtime_reservation_abandon_endpoint(
+    request: Request,
+):
+    """
+    Release one still-prepared browser realtime question reservation.
+
+    This endpoint is separate from PCC/device abandonment.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    deity = str(
+        body.get("deity")
+        or body.get("voice")
+        or "Hathor"
+    ).strip()
+
+    if deity not in {
+        "Hathor",
+        "Moses",
+    }:
+        deity = "Hathor"
+
+    client_interaction_id = str(
+        body.get("client_interaction_id")
+        or ""
+    ).strip()
+
+    interaction_id = str(
+        body.get("interaction_id")
+        or ""
+    ).strip() or None
+
+    reason = str(
+        body.get("reason")
+        or "client_abandon"
+    ).strip()[:120] or "client_abandon"
+
+    if not client_interaction_id:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "abandoned": False,
+                "error":
+                    "client_interaction_id is required",
+            },
+        )
+
+    usage_context = get_voice_usage_context(
+        request,
+        deity,
+    )
+
+    try:
+        result = (
+            abandon_realtime_oracle_reservation(
+                client_interaction_id=
+                    client_interaction_id,
+                interaction_id=interaction_id,
+                session_id=
+                    usage_context.get("session_id"),
+                anonymous_user_id=
+                    usage_context.get(
+                        "anonymous_user_id"
+                    ),
+                user_id=
+                    usage_context.get("user_id"),
+                reason=reason,
+            )
+        )
+
+        record_voice_usage_event(
+            **usage_context,
+            input_mode="realtime_voice",
+            deity=deity,
+            stage=
+                "realtime_reservation_abandon",
+            status=(
+                "ok"
+                if result.get("abandoned")
+                else str(
+                    result.get("status")
+                    or "noop"
+                )
+            ),
+            total_ms=None,
+            metadata_json={
+                "phase": "11.10R",
+                "event_source":
+                    "voice_realtime_reservation_"
+                    "abandon_endpoint",
+                "reason": reason,
+                "interaction_id":
+                    result.get("interaction_id"),
+                "client_interaction_id":
+                    client_interaction_id,
+                "abandoned":
+                    bool(
+                        result.get("abandoned")
+                    ),
+                "reservation_status":
+                    result.get("status"),
+            },
+        )
+
+        return result
+
+    except ValueError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "abandoned": False,
+                "error": str(exc),
+                "client_interaction_id":
+                    client_interaction_id,
+                "interaction_id":
+                    interaction_id,
+            },
+        )
+
+    except Exception as exc:
+        logger.error(
+            "Realtime reservation abandon failed: %s",
+            exc,
+        )
+
+        return JSONResponse(
+            status_code=409,
+            content={
+                "abandoned": False,
+                "error":
+                    "Realtime reservation could not "
+                    "be released.",
+                "client_interaction_id":
+                    client_interaction_id,
+                "interaction_id":
+                    interaction_id,
+            },
+        )
+
+
 @app.post("/voice/realtime/turn")
 async def voice_realtime_turn_endpoint(request: Request):
     try:
@@ -9014,17 +10278,50 @@ async def voice_realtime_turn_endpoint(request: Request):
     except Exception:
         body = {}
 
-    deity = (body.get("voice") or body.get("deity") or "Hathor").strip() or "Hathor"
-    usage_context = get_voice_usage_context(request, deity)
-    user = get_current_user(request)
-    is_admin = bool(user and user_has_admin_access(user))
+    deity = (
+        body.get("voice")
+        or body.get("deity")
+        or "Hathor"
+    ).strip() or "Hathor"
 
-    access_before = build_realtime_voice_access_payload(
-        usage_context,
-        is_admin=is_admin,
+    usage_context = get_voice_usage_context(
+        request,
+        deity,
+    )
+    user = get_current_user(request)
+    is_admin = bool(
+        user and user_has_admin_access(user)
     )
 
-    if not access_before.get("allowed"):
+    interaction_id = str(
+        body.get("interaction_id") or ""
+    ).strip()
+    client_interaction_id = str(
+        body.get("client_interaction_id") or ""
+    ).strip()
+
+    reservation_active = False
+
+    if interaction_id and client_interaction_id:
+        reservation_active = (
+            realtime_oracle_reservation_is_active(
+                interaction_id=interaction_id,
+                client_interaction_id=
+                    client_interaction_id,
+                session_id=usage_context.get(
+                    "session_id"
+                ),
+                anonymous_user_id=
+                    usage_context.get(
+                        "anonymous_user_id"
+                    ),
+                user_id=usage_context.get(
+                    "user_id"
+                ),
+            )
+        )
+
+    if not is_admin and not reservation_active:
         record_voice_usage_event(
             **usage_context,
             input_mode="realtime_voice",
@@ -9033,14 +10330,36 @@ async def voice_realtime_turn_endpoint(request: Request):
             status="denied",
             total_ms=None,
             metadata_json={
-                "phase": "11.6B",
-                "event_source": "voice_realtime_turn_endpoint",
-                "reason": access_before.get("reason"),
-                "access": access_before,
+                "phase": "11.10R",
+                "event_source":
+                    "voice_realtime_turn_endpoint",
+                "reason":
+                    "missing_or_inactive_question_reservation",
+                "interaction_id":
+                    interaction_id,
+                "client_interaction_id":
+                    client_interaction_id,
                 "client_payload": body,
             },
         )
-        return JSONResponse(status_code=403, content=access_before)
+
+        return JSONResponse(
+            status_code=409,
+            content={
+                "allowed": False,
+                "reason":
+                    "missing_or_inactive_question_reservation",
+                "message":
+                    "This live voice turn has no active "
+                    "Oracle question reservation.",
+            },
+        )
+
+    reason = (
+        "question_reserved"
+        if reservation_active
+        else "admin_unrestricted"
+    )
 
     record_voice_usage_event(
         **usage_context,
@@ -9050,31 +10369,55 @@ async def voice_realtime_turn_endpoint(request: Request):
         status="ok",
         total_ms=None,
         metadata_json={
-            "phase": "11.6B",
-            "event_source": "voice_realtime_turn_endpoint",
-            "provider": body.get("provider") or "xai",
-            "realtime_voice": body.get("realtime_voice"),
-            "speech_turn": body.get("speech_turn"),
-            "turn_input_audio_seconds": body.get("turn_input_audio_seconds"),
-            "client_turn_commit_silence_ms": body.get("client_turn_commit_silence_ms"),
+            "phase": "11.10R",
+            "event_source":
+                "voice_realtime_turn_endpoint",
+            "provider":
+                body.get("provider") or "xai",
+            "realtime_voice":
+                body.get("realtime_voice"),
+            "speech_turn":
+                body.get("speech_turn"),
+            "turn_input_audio_seconds":
+                body.get(
+                    "turn_input_audio_seconds"
+                ),
+            "client_turn_commit_silence_ms":
+                body.get(
+                    "client_turn_commit_silence_ms"
+                ),
             "client_diagnostics": (
                 body.get("client_diagnostics")
-                if isinstance(body.get("client_diagnostics"), dict)
+                if isinstance(
+                    body.get(
+                        "client_diagnostics"
+                    ),
+                    dict,
+                )
                 else {}
             ),
-            "preview_mode": body.get("preview_mode"),
-            "mode": body.get("mode"),
-            "access_before": access_before,
+            "interaction_id":
+                interaction_id,
+            "client_interaction_id":
+                client_interaction_id,
+            "reservation_active":
+                reservation_active,
+            "admin_unrestricted":
+                is_admin,
         },
     )
 
-    access_after = build_realtime_voice_access_payload(
-        usage_context,
-        is_admin=is_admin,
-    )
-    access_after["turn_recorded"] = True
-    return access_after
-
+    return {
+        "allowed": True,
+        "reason": reason,
+        "turn_recorded": True,
+        "interaction_id":
+            interaction_id or None,
+        "client_interaction_id":
+            client_interaction_id or None,
+        "question_quota_authoritative":
+            bool(reservation_active),
+    }
 
 @app.post("/voice/realtime/prepare")
 async def voice_realtime_prepare_endpoint(request: Request):
@@ -9098,6 +10441,28 @@ async def voice_realtime_prepare_endpoint(request: Request):
     if deity not in {"Hathor", "Moses"}:
         deity = "Hathor"
 
+    client_interaction_id = str(
+        body.get("client_interaction_id") or ""
+    ).strip()
+
+    if not client_interaction_id:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error":
+                    "client_interaction_id is required"
+            },
+        )
+
+    if len(client_interaction_id) > 160:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error":
+                    "client_interaction_id is too long"
+            },
+        )
+
     if not question:
         return JSONResponse(
             status_code=400,
@@ -9106,9 +10471,14 @@ async def voice_realtime_prepare_endpoint(request: Request):
 
     usage_context = get_voice_usage_context(request, deity)
     user = get_current_user(request)
+    is_admin = bool(
+        user and user_has_admin_access(user)
+    )
     access = build_realtime_voice_access_payload(
         usage_context,
-        is_admin=bool(user and user_has_admin_access(user)),
+        is_admin=is_admin,
+        client_interaction_id=
+            client_interaction_id,
     )
 
     if not access.get("allowed"):
@@ -9125,6 +10495,12 @@ async def voice_realtime_prepare_endpoint(request: Request):
 
     request.state.oracle_input_mode = "voice"
     request.state.oracle_execution_mode = "realtime_prepare"
+    request.state.oracle_client_interaction_id = (
+        client_interaction_id
+    )
+    request.state.oracle_realtime_admin_unrestricted = (
+        is_admin
+    )
 
     oracle_payload = QuestionInput(
         question=question,
@@ -9149,18 +10525,15 @@ def _normalize_realtime_interaction_label(value, default="", max_chars=120):
 
 
 @app.post("/voice/realtime/interaction")
-async def voice_realtime_interaction_endpoint(request: Request):
+async def voice_realtime_interaction_endpoint(
+    request: Request,
+):
     """
-    Phase 11.10A provider-neutral completed-turn logging.
-
-    /voice/realtime/turn remains the pre-commit quota and cost gate.
-    This endpoint stores completed realtime Q/A text into oracle_interactions
-    so realtime conversations contribute to seeker memory and future corpus.
+    Finalize one completed browser realtime turn against its
+    server-owned ordinary-question reservation.
     """
-    import json
     import logging as _logging
     import time
-    import uuid
 
     started = time.perf_counter()
 
@@ -9174,24 +10547,34 @@ async def voice_realtime_interaction_endpoint(request: Request):
         default="Hathor",
         max_chars=40,
     )
-
-    usage_context = get_voice_usage_context(request, deity)
-    user_transcript = _normalize_realtime_interaction_text(
-        body.get("input_transcript") or body.get("user_transcript"),
-        max_chars=12000,
-    )
-    assistant_transcript = _normalize_realtime_interaction_text(
-        body.get("assistant_transcript") or body.get("response_transcript"),
-        max_chars=12000,
+    usage_context = get_voice_usage_context(
+        request,
+        deity,
     )
 
+    user_transcript = (
+        _normalize_realtime_interaction_text(
+            body.get("input_transcript")
+            or body.get("user_transcript"),
+            max_chars=12000,
+        )
+    )
+    assistant_transcript = (
+        _normalize_realtime_interaction_text(
+            body.get("assistant_transcript")
+            or body.get("response_transcript"),
+            max_chars=12000,
+        )
+    )
     provider = _normalize_realtime_interaction_label(
-        body.get("provider") or body.get("model_provider"),
+        body.get("provider")
+        or body.get("model_provider"),
         default="unknown",
         max_chars=80,
     )
     model = _normalize_realtime_interaction_label(
-        body.get("model") or body.get("model_name"),
+        body.get("model")
+        or body.get("model_name"),
         default="",
         max_chars=160,
     )
@@ -9200,205 +10583,315 @@ async def voice_realtime_interaction_endpoint(request: Request):
         default="",
         max_chars=80,
     )
-    provider_voice = _normalize_realtime_interaction_label(
-        body.get("provider_voice") or body.get("realtime_voice") or body.get("voice_name"),
-        default="",
-        max_chars=80,
+    provider_voice = (
+        _normalize_realtime_interaction_label(
+            body.get("provider_voice")
+            or body.get("realtime_voice")
+            or body.get("voice_name"),
+            default="",
+            max_chars=80,
+        )
     )
     route = _normalize_realtime_interaction_label(
         body.get("route") or body.get("mode"),
         default="temple_main_live_realtime",
         max_chars=120,
     )
-    input_mode = _normalize_realtime_interaction_label(
-        body.get("input_mode"),
-        default="realtime_voice",
-        max_chars=80,
+    input_mode = (
+        _normalize_realtime_interaction_label(
+            body.get("input_mode"),
+            default="realtime_voice",
+            max_chars=80,
+        )
+    )
+    client_interaction_id = (
+        _normalize_realtime_interaction_label(
+            body.get("client_interaction_id"),
+            default="",
+            max_chars=160,
+        )
+    )
+    interaction_id = (
+        _normalize_realtime_interaction_label(
+            body.get("interaction_id"),
+            default="",
+            max_chars=80,
+        )
     )
 
-    client_interaction_id = _normalize_realtime_interaction_label(
-        body.get("client_interaction_id"),
-        default="",
-        max_chars=160,
-    )
-
-    if not client_interaction_id:
-        client_interaction_id = "rt-" + str(uuid.uuid4())
+    if (
+        not client_interaction_id
+        or not interaction_id
+    ):
+        return JSONResponse(
+            status_code=400,
+            content={
+                "stored": False,
+                "error":
+                    "Realtime interaction reservation "
+                    "identity is required.",
+                "client_interaction_id":
+                    client_interaction_id,
+                "interaction_id":
+                    interaction_id,
+            },
+        )
 
     metadata = {
-        "phase": "11.10A",
-        "event_source": "voice_realtime_interaction_endpoint",
-        "source": _normalize_realtime_interaction_label(body.get("source"), default="temple", max_chars=80),
+        "phase": "11.10R",
+        "event_source":
+            "voice_realtime_interaction_endpoint",
+        "source":
+            _normalize_realtime_interaction_label(
+                body.get("source"),
+                default="temple",
+                max_chars=80,
+            ),
         "route": route,
         "input_mode": input_mode,
         "provider": provider,
         "model": model,
         "transport": transport,
         "provider_voice": provider_voice,
-        "client_session_id": _normalize_realtime_interaction_label(body.get("client_session_id"), default="", max_chars=160),
-        "provider_session_id": _normalize_realtime_interaction_label(body.get("provider_session_id"), default="", max_chars=160),
-        "client_interaction_id": client_interaction_id,
-        "speech_turn": body.get("speech_turn"),
-        "assistant_turn": body.get("assistant_turn"),
-        "input_transcript_source": _normalize_realtime_interaction_label(body.get("input_transcript_source"), default="provider_realtime", max_chars=80),
-        "assistant_transcript_source": _normalize_realtime_interaction_label(body.get("assistant_transcript_source"), default="provider_audio_transcript", max_chars=80),
-        "turn_input_audio_seconds": body.get("turn_input_audio_seconds"),
-        "output_audio_seconds": body.get("output_audio_seconds"),
-        "first_audio_delta_ms": body.get("first_audio_delta_ms"),
-        "preview_mode": body.get("preview_mode"),
-        "client_observed_provider_realtime": True,
-        "note": "Completed realtime turn transcript captured by client and normalized for provider-neutral Oracle memory.",
+        "client_session_id":
+            _normalize_realtime_interaction_label(
+                body.get("client_session_id"),
+                default="",
+                max_chars=160,
+            ),
+        "provider_session_id":
+            _normalize_realtime_interaction_label(
+                body.get("provider_session_id"),
+                default="",
+                max_chars=160,
+            ),
+        "client_interaction_id":
+            client_interaction_id,
+        "interaction_id":
+            interaction_id,
+        "speech_turn":
+            body.get("speech_turn"),
+        "assistant_turn":
+            body.get("assistant_turn"),
+        "input_transcript_source":
+            _normalize_realtime_interaction_label(
+                body.get(
+                    "input_transcript_source"
+                ),
+                default="provider_realtime",
+                max_chars=80,
+            ),
+        "assistant_transcript_source":
+            _normalize_realtime_interaction_label(
+                body.get(
+                    "assistant_transcript_source"
+                ),
+                default=
+                    "provider_audio_transcript",
+                max_chars=80,
+            ),
+        "turn_input_audio_seconds":
+            body.get(
+                "turn_input_audio_seconds"
+            ),
+        "output_audio_seconds":
+            body.get(
+                "output_audio_seconds"
+            ),
+        "first_audio_delta_ms":
+            body.get(
+                "first_audio_delta_ms"
+            ),
+        "completion_reason":
+            body.get("completion_reason"),
+        "client_observed_provider_realtime":
+            True,
+        "question_quota_authoritative":
+            True,
     }
 
-    if not user_transcript or not assistant_transcript:
+    if (
+        not user_transcript
+        or not assistant_transcript
+    ):
+        try:
+            abandon_realtime_oracle_reservation(
+                client_interaction_id=
+                    client_interaction_id,
+                interaction_id=
+                    interaction_id,
+                session_id=
+                    usage_context.get(
+                        "session_id"
+                    ),
+                anonymous_user_id=
+                    usage_context.get(
+                        "anonymous_user_id"
+                    ),
+                user_id=
+                    usage_context.get("user_id"),
+                reason="missing_transcript",
+            )
+        except Exception as abandon_exc:
+            logger.warning(
+                "Realtime missing-transcript "
+                "reservation release failed: %s",
+                abandon_exc,
+            )
+
         record_voice_usage_event(
             **usage_context,
             input_mode="realtime_voice",
             deity=deity,
             stage="realtime_interaction",
             status="skipped",
-            total_ms=round((time.perf_counter() - started) * 1000, 2),
-            transcript_chars=len(user_transcript),
-            answer_chars=len(assistant_transcript),
+            total_ms=round(
+                (
+                    time.perf_counter()
+                    - started
+                )
+                * 1000,
+                2,
+            ),
+            transcript_chars=
+                len(user_transcript),
+            answer_chars=
+                len(assistant_transcript),
             metadata_json={
                 **metadata,
-                "reason": "missing_transcript",
-                "has_input_transcript": bool(user_transcript),
-                "has_assistant_transcript": bool(assistant_transcript),
+                "reason":
+                    "missing_transcript",
+                "has_input_transcript":
+                    bool(user_transcript),
+                "has_assistant_transcript":
+                    bool(
+                        assistant_transcript
+                    ),
             },
         )
+
         return {
             "stored": False,
             "reason": "missing_transcript",
-            "client_interaction_id": client_interaction_id,
+            "client_interaction_id":
+                client_interaction_id,
+            "interaction_id":
+                interaction_id,
         }
 
-    conn = None
-    inserted_id = None
-    duplicate = False
-
     try:
-        conn = get_db_connection()
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO oracle_interactions
-                    (
-                        session_id,
-                        anonymous_user_id,
-                        user_id,
-                        input_type,
-                        question_text,
-                        response_text,
-                        model_provider,
-                        model_name,
-                        mode,
-                        reason,
-                        client_interaction_id,
-                        metadata_json
-                    )
-                VALUES
-                    (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
-                ON CONFLICT (client_interaction_id)
-                    WHERE client_interaction_id IS NOT NULL
-                    DO NOTHING
-                RETURNING id
-                """,
-                (
-                    usage_context.get("session_id"),
-                    usage_context.get("anonymous_user_id"),
-                    usage_context.get("user_id"),
-                    "voice",
-                    user_transcript,
-                    assistant_transcript,
-                    provider,
-                    model,
-                    deity,
-                    "realtime_voice",
+        result = (
+            finalize_realtime_oracle_reservation(
+                interaction_id=
+                    interaction_id,
+                client_interaction_id=
                     client_interaction_id,
-                    json.dumps(metadata),
-                ),
-            )
-            row = cur.fetchone()
-
-            if row:
-                inserted_id = str(row["id"] if isinstance(row, dict) else row[0])
-            else:
-                duplicate = True
-                cur.execute(
-                    """
-                    SELECT id
-                    FROM oracle_interactions
-                    WHERE client_interaction_id = %s
-                      AND session_id IS NOT DISTINCT FROM %s::uuid
-                      AND anonymous_user_id IS NOT DISTINCT FROM %s
-                      AND user_id IS NOT DISTINCT FROM %s::uuid
-                    LIMIT 1
-                    """,
-                    (
-                        client_interaction_id,
-                        usage_context.get("session_id"),
-                        usage_context.get("anonymous_user_id"),
-                        usage_context.get("user_id"),
+                session_id=
+                    usage_context.get(
+                        "session_id"
                     ),
-                )
-                existing = cur.fetchone()
+                anonymous_user_id=
+                    usage_context.get(
+                        "anonymous_user_id"
+                    ),
+                user_id=
+                    usage_context.get(
+                        "user_id"
+                    ),
+                reported_question=
+                    user_transcript,
+                reported_deity=deity,
+                assistant_transcript=
+                    assistant_transcript,
+                provider=provider,
+                model=model,
+                metadata=metadata,
+            )
+        )
 
-                if not existing:
-                    raise RuntimeError(
-                        "Realtime interaction id conflict does not match "
-                        "authoritative identity context"
-                    )
-
-                inserted_id = str(
-                    existing["id"]
-                    if isinstance(existing, dict)
-                    else existing[0]
-                )
-
-        conn.commit()
+        inserted_id = result[
+            "oracle_interaction_id"
+        ]
+        duplicate = bool(
+            result.get("duplicate")
+        )
+        durable_deity = (
+            result.get("deity")
+            or deity
+        )
 
         record_voice_usage_event(
             **usage_context,
             input_mode="realtime_voice",
-            deity=deity,
+            deity=durable_deity,
             stage="realtime_interaction",
-            status="duplicate" if duplicate else "ok",
-            total_ms=round((time.perf_counter() - started) * 1000, 2),
-            transcript_chars=len(user_transcript),
-            answer_chars=len(assistant_transcript),
+            status=(
+                "duplicate"
+                if duplicate
+                else "ok"
+            ),
+            total_ms=round(
+                (
+                    time.perf_counter()
+                    - started
+                )
+                * 1000,
+                2,
+            ),
+            transcript_chars=
+                len(user_transcript),
+            answer_chars=
+                len(assistant_transcript),
             metadata_json={
                 **metadata,
-                "oracle_interaction_id": inserted_id,
-                "duplicate": duplicate,
+                "oracle_interaction_id":
+                    inserted_id,
+                "duplicate":
+                    duplicate,
             },
         )
 
         _logging.info(
-            "REALTIME_INTERACTION_STAGE status=%s provider=%s model=%s deity=%s provider_voice=%s question_chars=%s answer_chars=%s oracle_interaction_id=%s client_interaction_id=%s",
-            "duplicate" if duplicate else "ok",
+            "REALTIME_INTERACTION_STAGE "
+            "status=%s provider=%s model=%s "
+            "deity=%s provider_voice=%s "
+            "question_chars=%s answer_chars=%s "
+            "oracle_interaction_id=%s "
+            "client_interaction_id=%s "
+            "reservation_id=%s",
+            (
+                "duplicate"
+                if duplicate
+                else "ok"
+            ),
             provider,
             model,
-            deity,
+            durable_deity,
             provider_voice,
             len(user_transcript),
             len(assistant_transcript),
             inserted_id,
             client_interaction_id,
+            interaction_id,
         )
 
         return {
             "stored": not duplicate,
             "duplicate": duplicate,
-            "oracle_interaction_id": inserted_id,
-            "client_interaction_id": client_interaction_id,
+            "oracle_interaction_id":
+                inserted_id,
+            "client_interaction_id":
+                client_interaction_id,
+            "interaction_id":
+                interaction_id,
         }
 
     except Exception as exc:
-        if conn:
-            conn.rollback()
-
-        logger.error("Realtime interaction logging failed: %s", exc)
+        logger.error(
+            "Realtime interaction "
+            "finalization failed: %s",
+            exc,
+        )
 
         record_voice_usage_event(
             **usage_context,
@@ -9406,9 +10899,18 @@ async def voice_realtime_interaction_endpoint(request: Request):
             deity=deity,
             stage="realtime_interaction",
             status="error",
-            total_ms=round((time.perf_counter() - started) * 1000, 2),
-            transcript_chars=len(user_transcript),
-            answer_chars=len(assistant_transcript),
+            total_ms=round(
+                (
+                    time.perf_counter()
+                    - started
+                )
+                * 1000,
+                2,
+            ),
+            transcript_chars=
+                len(user_transcript),
+            answer_chars=
+                len(assistant_transcript),
             metadata_json={
                 **metadata,
                 "error": str(exc),
@@ -9416,18 +10918,18 @@ async def voice_realtime_interaction_endpoint(request: Request):
         )
 
         return JSONResponse(
-            status_code=500,
+            status_code=409,
             content={
                 "stored": False,
-                "error": "Realtime interaction could not be logged.",
-                "client_interaction_id": client_interaction_id,
+                "error":
+                    "Realtime interaction could "
+                    "not be finalized.",
+                "client_interaction_id":
+                    client_interaction_id,
+                "interaction_id":
+                    interaction_id,
             },
         )
-
-    finally:
-        if conn:
-            conn.close()
-
 
 @app.post("/voice/xai/realtime/session")
 async def voice_xai_realtime_session_endpoint(request: Request):
@@ -9540,6 +11042,39 @@ async def voice_realtime_session_endpoint(request: Request):
         provider = (data.get("provider") or provider).strip().lower() or "openai"
 
         usage_context = get_voice_usage_context(request, deity)
+        user = get_current_user(request)
+        access = build_realtime_voice_access_payload(
+            usage_context,
+            is_admin=bool(user and user_has_admin_access(user)),
+        )
+
+        if not access.get("allowed"):
+            record_voice_usage_event(
+                **usage_context,
+                input_mode="realtime_voice",
+                deity=deity,
+                stage="realtime_session",
+                status="denied",
+                total_ms=None,
+                metadata_json={
+                    "phase": "11.10R",
+                    "event_source": "voice_realtime_session_endpoint",
+                    "reason": access.get("reason"),
+                    "provider": provider,
+                    "access": access,
+                },
+            )
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": (
+                        access.get("message")
+                        or "Live realtime voice is not available for this access level."
+                    ),
+                    "voice_access": access,
+                },
+            )
+
         session_id = usage_context.get("session_id") or get_or_create_session_id(request)
         user_id = usage_context.get("user_id")
         plan_code = usage_context.get("plan_code") or "anon"
@@ -9582,6 +11117,7 @@ async def voice_realtime_session_endpoint(request: Request):
             instructions=instructions,
             metadata=metadata,
         )
+        result["voice_access"] = access
 
         total_ms = voice_stage_ms(started_at, datetime.datetime.now())
 
@@ -12975,7 +14511,30 @@ async def ask_oracle(request: Request, payload: QuestionInput):
     plan_code = "anon"
     memory_depth = 1
 
-    if not can_user_ask(anonymous_user_id, user_id):
+    realtime_client_interaction_id = (
+        getattr(
+            request.state,
+            "oracle_client_interaction_id",
+            None,
+        )
+    )
+    realtime_admin_unrestricted = bool(
+        getattr(
+            request.state,
+            "oracle_realtime_admin_unrestricted",
+            False,
+        )
+    )
+
+    if (
+        not realtime_admin_unrestricted
+        and not can_user_ask(
+            anonymous_user_id,
+            user_id,
+            exclude_realtime_client_interaction_id=
+                realtime_client_interaction_id,
+        )
+    ):
         return JSONResponse(
             content={
             "oracle_message": "The Oracle grows quiet. To continue the dialogue, please log in or support the Temple."
@@ -13315,8 +14874,14 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             realtime_system_instructions = "\n\n".join(
                 part.strip()
                 for part in (
-                    prepared_inference.get("system_prompt") or "",
-                    prepared_inference.get("memory_block") or "",
+                    prepared_inference.get(
+                        "system_prompt"
+                    )
+                    or "",
+                    prepared_inference.get(
+                        "memory_block"
+                    )
+                    or "",
                 )
                 if part and part.strip()
             )
@@ -13326,9 +14891,11 @@ async def ask_oracle(request: Request, payload: QuestionInput):
 Do not treat this message as a new seeker question. Answer the immediately preceding spoken question using the following turn guidance and background evidence.
 
 Turn guidance:
+
 {instruction_block}
 
 Interaction style:
+
 {oracle_interaction_style}
 
 {context_block}
@@ -13336,14 +14903,126 @@ Interaction style:
 
             if not realtime_system_instructions:
                 raise RuntimeError(
-                    "Realtime inference preparation produced no system instructions"
+                    "Realtime inference preparation "
+                    "produced no system instructions"
+                )
+
+            client_interaction_id = str(
+                getattr(
+                    request.state,
+                    "oracle_client_interaction_id",
+                    "",
+                )
+                or ""
+            ).strip()
+
+            if not client_interaction_id:
+                raise RuntimeError(
+                    "Realtime inference preparation "
+                    "has no client interaction id"
+                )
+
+            pending_state = {
+                "schema":
+                    "oracle_pending_inference_state.v3",
+                "reservation_kind":
+                    "browser_realtime",
+                "finalization_state":
+                    finalization_state,
+            }
+
+            reservation = (
+                create_or_reuse_realtime_oracle_reservation(
+                    session_id=str(session_id),
+                    anonymous_user_id=str(
+                        anonymous_user_id
+                    ),
+                    user_id=(
+                        str(user_id)
+                        if user_id
+                        else None
+                    ),
+                    deity=deity,
+                    client_interaction_id=
+                        client_interaction_id,
+                    prepared_state=pending_state,
+                    quota_unrestricted=
+                        realtime_admin_unrestricted,
+                )
+            )
+
+            if (
+                reservation.get("status")
+                == "denied"
+            ):
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "oracle_message":
+                            "The Oracle grows quiet. "
+                            "Your question allowance "
+                            "is complete for this "
+                            "access period.",
+                        "reason":
+                            "question_limit_reached",
+                    },
+                )
+
+            if (
+                reservation.get("status")
+                != "prepared"
+            ):
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "error":
+                            "This live voice turn is "
+                            "no longer available for "
+                            "generation.",
+                        "reason":
+                            "realtime_reservation_"
+                            + str(
+                                reservation.get(
+                                    "status"
+                                )
+                                or "invalid"
+                            ),
+                        "interaction_id":
+                            reservation.get(
+                                "interaction_id"
+                            ),
+                    },
+                )
+
+            interaction_id = (
+                reservation.get(
+                    "interaction_id"
+                )
+            )
+
+            if not interaction_id:
+                raise RuntimeError(
+                    "Realtime reservation produced "
+                    "no interaction id"
                 )
 
             return {
                 "status": "prepared",
                 "deity": deity,
-                "system_instructions": realtime_system_instructions,
-                "user_context": realtime_user_context,
+                "system_instructions":
+                    realtime_system_instructions,
+                "user_context":
+                    realtime_user_context,
+                "interaction_id":
+                    interaction_id,
+                "client_interaction_id":
+                    client_interaction_id,
+                "reservation_reused":
+                    bool(
+                        reservation.get("reused")
+                    ),
+                "question_quota_authoritative":
+                    True,
             }
 
         if execution_mode == "device_prepare":

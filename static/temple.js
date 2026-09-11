@@ -1910,7 +1910,7 @@ if (seekerInput && oracleForm) {
   function showBrowserVoiceUnavailable() {
     setVoiceStatus(
       "Voice playback unavailable",
-      "The written Oracle answer is ready. Your browser may not support voice playback, or voice output may be blocked by browser settings. Try another browser, check sound permissions, or continue by reading the answer on screen. Recurring live realtime voice begins at Sovereign.",
+      "The written Oracle answer is ready. Your browser may not support voice playback, or voice output may be blocked by browser settings. Try another browser, check sound permissions, or continue by reading the answer on screen. Live voice uses your normal question allowance.",
       "notice"
     );
   }
@@ -2259,9 +2259,6 @@ if (seekerInput && oracleForm) {
     startSequence: 0,
     sessionToken: 0,
     sessionOracleGeneration: 0,
-    previewMode: false,
-    endAfterCurrentResponse: false,
-
     selectedDeity: "Hathor",
     selectedRealtimeVoice: "eve",
 
@@ -2324,6 +2321,7 @@ if (seekerInput && oracleForm) {
     currentInputTranscript: "",
     currentAssistantTranscript: "",
     currentClientInteractionId: "",
+    currentReservationInteractionId: "",
     interactionReportPending: false,
     interactionReportPendingId: "",
     interactionReportedIds: {},
@@ -2360,6 +2358,163 @@ if (seekerInput && oracleForm) {
 
     return templeRealtimeState.clientRealtimeSessionId;
   }
+
+
+  async function templeRealtimeAbandonReservation(
+    clientInteractionId,
+    interactionId,
+    reason,
+    keepalive
+  ) {
+    const clientId =
+      String(clientInteractionId || "").trim();
+
+    const reservationId =
+      String(interactionId || "").trim();
+
+    if (!clientId) {
+      return {
+        abandoned: false,
+        status: "missing_client_interaction_id"
+      };
+    }
+
+    try {
+      const response = await identityFetch(
+        "/voice/realtime/reservation/abandon",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+          },
+          keepalive: keepalive === true,
+          body: JSON.stringify({
+            client_interaction_id: clientId,
+            interaction_id: reservationId || null,
+            deity:
+              templeRealtimeState.selectedDeity ||
+              "Hathor",
+            reason:
+              reason ||
+              "client_abandon"
+          })
+        }
+      );
+
+      const payload =
+        await templeRealtimeReadJsonResponse(
+          response
+        );
+
+      templeRealtimeLog(
+        "TEMPLE_REALTIME_RESERVATION_ABANDON_RESULT",
+        {
+          ok: response.ok,
+          status: response.status,
+          reason: reason || "",
+          client_interaction_id: clientId,
+          interaction_id: reservationId,
+          payload: payload
+        }
+      );
+
+      if (
+        response.ok &&
+        templeRealtimeState
+          .currentClientInteractionId ===
+          clientId &&
+        (
+          !reservationId ||
+          templeRealtimeState
+            .currentReservationInteractionId ===
+            reservationId
+        )
+      ) {
+        templeRealtimeState
+          .currentReservationInteractionId = "";
+      }
+
+      return payload;
+    } catch (err) {
+      templeRealtimeLog(
+        "TEMPLE_REALTIME_RESERVATION_ABANDON_FAILED",
+        {
+          reason: reason || "",
+          client_interaction_id: clientId,
+          interaction_id: reservationId,
+          error: err.message || String(err)
+        }
+      );
+
+      return {
+        abandoned: false,
+        status: "request_failed",
+        error: err.message || String(err)
+      };
+    }
+  }
+
+  function templeRealtimeAbandonCurrentReservation(
+    reason,
+    force,
+    keepalive
+  ) {
+    const clientInteractionId =
+      templeRealtimeState
+        .currentClientInteractionId;
+
+    const responseMetadata =
+      templeRealtimeState
+        .expectedResponseMetadata || {};
+
+    const interactionId =
+      templeRealtimeState
+        .currentReservationInteractionId ||
+      responseMetadata.interaction_id ||
+      "";
+
+    if (!clientInteractionId) {
+      return Promise.resolve({
+        abandoned: false,
+        status: "no_current_interaction"
+      });
+    }
+
+    if (
+      force !== true &&
+      (
+        templeRealtimeState
+          .currentResponseCompleted ||
+        templeRealtimeState
+          .interactionReportPending
+      )
+    ) {
+      return Promise.resolve({
+        abandoned: false,
+        status:
+          "completion_or_report_in_progress"
+      });
+    }
+
+    return templeRealtimeAbandonReservation(
+      clientInteractionId,
+      interactionId,
+      reason,
+      keepalive
+    );
+  }
+
+  window.addEventListener(
+    "pagehide",
+    function () {
+      void templeRealtimeAbandonCurrentReservation(
+        "pagehide",
+        false,
+        true
+      );
+    }
+  );
 
   function templeRealtimeResponseAuditDetails(event) {
     const response = event && event.response && typeof event.response === "object"
@@ -2496,9 +2651,15 @@ if (seekerInput && oracleForm) {
     const inputTranscript = (templeRealtimeState.currentInputTranscript || "").trim();
     const assistantTranscript = (templeRealtimeState.currentAssistantTranscript || "").trim();
     const clientInteractionId = templeRealtimeEnsureInteractionId();
+    const responseMetadata =
+      templeRealtimeState.expectedResponseMetadata || {};
 
     return {
       client_interaction_id: clientInteractionId,
+      interaction_id:
+        responseMetadata.interaction_id ||
+        templeRealtimeState.currentReservationInteractionId ||
+        "",
       client_session_id: sessionData.id || sessionData.session_id || "",
       provider_session_id: sessionData.provider_session_id || sessionData.id || sessionData.session_id || "",
       source: "temple",
@@ -2519,7 +2680,6 @@ if (seekerInput && oracleForm) {
       turn_input_audio_seconds: Number(((templeRealtimeState.inputSamplesSent - templeRealtimeState.turnInputStartSamples) / TEMPLE_REALTIME_INPUT_SAMPLE_RATE).toFixed(3)),
       output_audio_seconds: Number(((templeRealtimeState.outputSamplesReceived - templeRealtimeState.responseOutputStartSamples) / TEMPLE_REALTIME_OUTPUT_SAMPLE_RATE).toFixed(3)),
       first_audio_delta_ms: templeRealtimeState.firstAudioDeltaAt || null,
-      preview_mode: templeRealtimeState.previewMode === true,
       completion_reason: reason || "response.done"
     };
   }
@@ -2587,6 +2747,15 @@ if (seekerInput && oracleForm) {
             clientInteractionId
         }
       );
+
+      await templeRealtimeAbandonReservation(
+        clientInteractionId,
+        templeRealtimeState
+          .currentReservationInteractionId,
+        "missing_transcript",
+        false
+      );
+
 
       return;
     }
@@ -2704,8 +2873,33 @@ if (seekerInput && oracleForm) {
           .interactionReportedIds[
             clientInteractionId
           ] = true;
+
+        if (
+          templeRealtimeState
+            .currentReservationInteractionId ===
+          String(
+            payload.interaction_id || ""
+          )
+        ) {
+          templeRealtimeState
+            .currentReservationInteractionId = "";
+        }
+      } else {
+        await templeRealtimeAbandonReservation(
+          payload.client_interaction_id,
+          payload.interaction_id,
+          "interaction_report_http_failed",
+          false
+        );
       }
     } catch (err) {
+      await templeRealtimeAbandonReservation(
+        payload.client_interaction_id,
+        payload.interaction_id,
+        "interaction_report_failed",
+        false
+      );
+
       if (!interactionIsCurrent()) {
         return;
       }
@@ -2860,21 +3054,11 @@ if (seekerInput && oracleForm) {
     if (access.allowed !== true) return false;
 
     const reason = String(access.reason || "");
-    const isPreview = access.is_preview === true || access.preview_mode === true || reason.includes("preview");
-
-    if (isPreview) return true;
 
     if (reason === "admin_unrestricted") return true;
-    if (reason === "realtime_fair_use_allowed") return true;
-    if (access.web_realtime_fair_use === true) return true;
+    if (reason === "question_quota_available") return true;
 
-    if (reason === "realtime_monthly_turns_available") return true;
-
-    if (typeof access.monthly_remaining === "number") {
-      return access.monthly_remaining > 0;
-    }
-
-    return false;
+    return access.question_quota_authoritative === true;
   }
 
   async function templeRealtimeFetchAccess(deity) {
@@ -3460,7 +3644,6 @@ if (seekerInput && oracleForm) {
     templeRealtimeState.assistantSpeaking = false;
     templeRealtimeState.turnCommitPending = false;
     templeRealtimeState.responsePreparePending = false;
-    templeRealtimeState.endAfterCurrentResponse = false;
     templeRealtimeState.preRollChunks = [];
     templeRealtimeState.preRollSamples = 0;
     templeRealtimeState.trailingMsRemaining = 0;
@@ -3496,6 +3679,7 @@ if (seekerInput && oracleForm) {
     templeRealtimeState.currentInputTranscript = "";
     templeRealtimeState.currentAssistantTranscript = "";
     templeRealtimeState.currentClientInteractionId = "";
+    templeRealtimeState.currentReservationInteractionId = "";
     templeRealtimeState.interactionReportPending = false;
     templeRealtimeState.interactionReportPendingId = "";
     templeRealtimeState.interactionReportedIds = {};
@@ -3569,7 +3753,6 @@ if (seekerInput && oracleForm) {
 
     templeRealtimeState.starting = true;
     templeRealtimeState.ending = false;
-    templeRealtimeState.previewMode = false;
     templeRealtimeState.selectedDeity =
       selectedDeity;
     templeRealtimeState.selectedRealtimeVoice =
@@ -3618,18 +3801,6 @@ if (seekerInput && oracleForm) {
 
       templeRealtimeState.sessionData =
         sessionData;
-
-      const sessionAccess = (
-        sessionData &&
-        sessionData.voice_access
-      ) || {};
-
-      templeRealtimeState.previewMode = (
-        sessionAccess.is_preview === true ||
-        sessionAccess.preview_mode === true ||
-        String(sessionAccess.reason || "")
-          .includes("preview")
-      );
 
       await templeRealtimeOpenWebSocket(
         sessionData,
@@ -4041,6 +4212,7 @@ if (seekerInput && oracleForm) {
         templeRealtimeState.currentInputTranscript = "";
         templeRealtimeState.currentAssistantTranscript = "";
         templeRealtimeState.currentClientInteractionId = templeRealtimeGenerateInteractionId();
+        templeRealtimeState.currentReservationInteractionId = "";
         templeRealtimeState.lifecycleFirstTextLogged = false;
         templeRealtimeState.lifecycleFirstAudioLogged = false;
         templeRealtimeState.lifecycleAudioResumeAttempted = false;
@@ -4089,7 +4261,8 @@ if (seekerInput && oracleForm) {
     generation,
     sessionToken,
     deity,
-    clientInteractionId
+    clientInteractionId,
+    interactionId
   ) {
     function turnIsCurrent() {
       return templeRealtimeTurnIsCurrent(
@@ -4118,8 +4291,8 @@ if (seekerInput && oracleForm) {
     const requestPayload = {
       provider: "xai",
       mode: "temple_main_live_realtime",
-      preview_mode:
-        templeRealtimeState.previewMode === true,
+      client_interaction_id: clientInteractionId,
+      interaction_id: interactionId,
       voice: deity,
       deity: deity,
       realtime_voice: realtimeVoice,
@@ -4357,10 +4530,6 @@ if (seekerInput && oracleForm) {
         payload &&
         payload.turn_recorded === true
       ) {
-        templeRealtimeState
-          .endAfterCurrentResponse =
-          payload.allowed === false;
-
         return {
           allowed: true,
           stale: false,
@@ -4522,16 +4691,29 @@ if (seekerInput && oracleForm) {
             },
             body: JSON.stringify({
               question: transcript,
-              deity: deity
+              deity: deity,
+              client_interaction_id: clientInteractionId
             })
           }
         );
 
       if (!turnAuthorityIsCurrent()) {
+        await templeRealtimeAbandonReservation(
+          clientInteractionId,
+          "",
+          "stale_after_prepare_response",
+          false
+        );
         return;
       }
 
       if (!turnSocketIsCurrent()) {
+        await templeRealtimeAbandonReservation(
+          clientInteractionId,
+          "",
+          "socket_closed_after_prepare_response",
+          false
+        );
         throw new Error(
           "Live realtime voice socket is no longer open."
         );
@@ -4543,10 +4725,22 @@ if (seekerInput && oracleForm) {
         );
 
       if (!turnAuthorityIsCurrent()) {
+        await templeRealtimeAbandonReservation(
+          clientInteractionId,
+          "",
+          "stale_after_prepare_payload",
+          false
+        );
         return;
       }
 
       if (!turnSocketIsCurrent()) {
+        await templeRealtimeAbandonReservation(
+          clientInteractionId,
+          "",
+          "socket_closed_after_prepare_payload",
+          false
+        );
         throw new Error(
           "Live realtime voice socket is no longer open."
         );
@@ -4559,6 +4753,21 @@ if (seekerInput && oracleForm) {
           "The Temple could not prepare this live voice turn."
         );
       }
+
+      const interactionId =
+        prepared && prepared.interaction_id
+          ? String(prepared.interaction_id).trim()
+          : "";
+
+      if (!interactionId) {
+        throw new Error(
+          "The Temple prepared no question reservation for this live voice turn."
+        );
+      }
+
+      templeRealtimeState
+        .currentReservationInteractionId =
+        interactionId;
 
       const systemInstructions =
         prepared &&
@@ -4598,14 +4807,27 @@ if (seekerInput && oracleForm) {
           generation,
           sessionToken,
           deity,
-          clientInteractionId
+          clientInteractionId,
+          interactionId
         );
 
       if (!turnAuthorityIsCurrent()) {
+        await templeRealtimeAbandonReservation(
+          clientInteractionId,
+          interactionId,
+          "stale_after_turn_authorization",
+          false
+        );
         return;
       }
 
       if (turnAccess && turnAccess.stale) {
+        await templeRealtimeAbandonReservation(
+          clientInteractionId,
+          interactionId,
+          "stale_turn_authorization",
+          false
+        );
         return;
       }
 
@@ -4623,8 +4845,8 @@ if (seekerInput && oracleForm) {
           .turnCommitPending = false;
 
         setVoiceStatus(
-          "Live voice limit reached",
-          "Continuing with regular Speak voice is available.",
+          "Live voice turn unavailable",
+          "The Temple could not authorize this live turn. Tap Speak to try again.",
           "notice"
         );
 
@@ -4654,6 +4876,12 @@ if (seekerInput && oracleForm) {
       }
 
       if (!turnSocketIsCurrent()) {
+        await templeRealtimeAbandonReservation(
+          clientInteractionId,
+          interactionId,
+          "socket_closed_before_response_create",
+          false
+        );
         return;
       }
 
@@ -4666,6 +4894,9 @@ if (seekerInput && oracleForm) {
 
         client_interaction_id:
           clientInteractionId,
+
+        interaction_id:
+          interactionId,
 
         speech_turn:
           String(speechTurn),
@@ -5557,19 +5788,6 @@ if (seekerInput && oracleForm) {
       templeRealtimeState.turnCommitPending = false;
       templeRealtimeState.listeningCooldownUntil = performance.now() + TEMPLE_REALTIME_POST_PLAYBACK_COOLDOWN_MS;
 
-      if (templeRealtimeState.endAfterCurrentResponse) {
-        templeRealtimeState.endAfterCurrentResponse = false;
-        templeRealtimeEndConversation("realtime_allowance_complete", true);
-
-        setVoiceStatus(
-          "Live voice allowance complete",
-          "Your available realtime voice turns are complete. Regular Speak voice remains available.",
-          "notice"
-        );
-
-        return;
-      }
-
       setVoiceStatus(
         "Live voice listening",
         "Speak again, or tap End Live Voice when finished.",
@@ -5661,6 +5879,12 @@ if (seekerInput && oracleForm) {
   function templeRealtimeHandleUnexpectedSocketClose(event) {
     if (templeRealtimeState.ending) return;
 
+    void templeRealtimeAbandonCurrentReservation(
+      "unexpected_socket_close",
+      false,
+      true
+    );
+
     templeRealtimeClearIdleAutoEndTimer();
 
     if (templeRealtimeState.idleTimer) {
@@ -5699,8 +5923,6 @@ if (seekerInput && oracleForm) {
     templeRealtimeState.turnCommitPending = false;
     templeRealtimeState.assistantSpeaking = false;
     templeRealtimeState.speechGateOpen = false;
-    templeRealtimeState.previewMode = false;
-    templeRealtimeState.endAfterCurrentResponse = false;
     templeRealtimeState.socket = null;
 
     templeRealtimeSetButtonIdle();
@@ -5742,6 +5964,13 @@ if (seekerInput && oracleForm) {
     if (templeRealtimeState.ending) return;
 
     templeRealtimeState.ending = true;
+
+    void templeRealtimeAbandonCurrentReservation(
+      reason || "manual_end",
+      false,
+      false
+    );
+
     templeRealtimeState.active = false;
     templeRealtimeState.starting = false;
     templeRealtimeState.sessionToken = 0;
@@ -5809,8 +6038,6 @@ if (seekerInput && oracleForm) {
       );
     }
 
-    templeRealtimeState.previewMode = false;
-    templeRealtimeState.endAfterCurrentResponse = false;
     templeRealtimeState.ending = false;
   }
 
@@ -5884,9 +6111,27 @@ if (seekerInput && oracleForm) {
     }
 
     if (!access.allowed) {
+      const denialReason =
+        String(
+          (
+            access.payload &&
+            access.payload.reason
+          ) || ""
+        );
+
+      if (denialReason === "question_limit_reached") {
+        setVoiceStatus(
+          "Question allowance complete",
+          "The Oracle grows quiet until your allowance renews or your access changes.",
+          "notice"
+        );
+
+        return null;
+      }
+
       setVoiceStatus(
         "Regular Speak voice",
-        "Realtime voice is not available for this account or has reached its limit. Using regular Speak voice.",
+        "Live voice is temporarily unavailable. Using Regular Speak voice.",
         "notice"
       );
 

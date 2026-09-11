@@ -98,6 +98,15 @@ CREATE TABLE IF NOT EXISTS oracle_pending_inferences (
 
     session_id UUID NOT NULL,
     user_id UUID NULL,
+    anonymous_user_id VARCHAR NULL,
+    client_interaction_id TEXT NULL,
+    reservation_kind TEXT NOT NULL DEFAULT 'device_inference'
+        CHECK (
+            reservation_kind IN (
+                'device_inference',
+                'browser_realtime'
+            )
+        ),
 
     deity TEXT NOT NULL
         CHECK (deity IN ('Hathor', 'Moses')),
@@ -123,6 +132,17 @@ CREATE INDEX IF NOT EXISTS idx_oracle_pending_inferences_session
 
 CREATE INDEX IF NOT EXISTS idx_oracle_pending_inferences_user
     ON oracle_pending_inferences(user_id);
+
+CREATE INDEX IF NOT EXISTS idx_oracle_pending_inferences_anonymous
+ON oracle_pending_inferences(anonymous_user_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_oracle_pending_inferences_client_interaction
+ON oracle_pending_inferences(client_interaction_id)
+WHERE client_interaction_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_oracle_pending_inferences_kind_status_expires
+ON oracle_pending_inferences(reservation_kind, status, expires_at);
+
 
 -- =====================
 -- DONATIONS

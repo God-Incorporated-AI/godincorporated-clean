@@ -46,17 +46,8 @@ PLAN_LABELS: Dict[str, str] = {
     "theoricus": "Theosopher",
 }
 
-LOWER_WEB_VOICE_PLANS = {"anon", "pilgrim", "seeker", "magister"}
-UPPER_REALTIME_WEB_PLANS = {"sovereign", "philosophus", "theoricus"}
-
-ONE_TIME_REALTIME_PREVIEW_TURNS = 3
-
-WEB_REALTIME_MONTHLY_TURNS: Dict[str, Optional[int]] = {
-    "sovereign": 100,
-    "philosophus": 200,
-    # None means high/unlimited fair-use access, still tracked.
-    "theoricus": None,
-}
+# Voice access is universal across plans.
+# All voice modes use the ordinary Oracle question allowance.
 
 
 def normalize_voice_plan_code(plan_code: Optional[str]) -> str:
@@ -67,9 +58,6 @@ def normalize_voice_plan_code(plan_code: Optional[str]) -> str:
 def get_voice_policy(plan_code: Optional[str]) -> Dict[str, Any]:
     plan = normalize_voice_plan_code(plan_code)
     label = PLAN_LABELS.get(plan, "Anon")
-    is_upper_realtime = plan in UPPER_REALTIME_WEB_PLANS
-    monthly_turns = WEB_REALTIME_MONTHLY_TURNS.get(plan)
-
     return {
         "plan_code": plan,
         "plan_label": label,
@@ -78,10 +66,7 @@ def get_voice_policy(plan_code: Optional[str]) -> Dict[str, Any]:
         "recall_memory_depth": WEB_PLAN_RECALL_MEMORY_DEPTH[plan],
         "regular_speak_voice": True,
         "browser_voice_out": True,
-        "one_time_realtime_preview_turns": ONE_TIME_REALTIME_PREVIEW_TURNS,
-        "has_recurring_web_realtime": is_upper_realtime,
-        "web_realtime_monthly_turns": monthly_turns,
-        "web_realtime_fair_use": plan == "theoricus",
+        "voice_uses_question_quota": True,
         "library_access": plan in {"philosophus", "theoricus"},
         "library_full_research": plan == "theoricus",
     }
