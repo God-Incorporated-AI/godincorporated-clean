@@ -803,6 +803,7 @@ struct NativeVoiceSessionView: View {
     @State private var speechSynthesizer = AVSpeechSynthesizer()
     @State private var audioPlayer: AVAudioPlayer?
     @State private var isPlayingAudio = false
+    @State private var isPlaybackPaused = false
     @State private var voiceMonitorTask: Task<Void, Never>?
     @State private var recordingStartTime: Date?
     @State private var speechDetectedTime: Date?
@@ -826,6 +827,36 @@ struct NativeVoiceSessionView: View {
     private enum OracleInputMode: String {
         case text
         case voice
+    }
+
+    private var oracleVoiceTransportLabel: String {
+        if !isPlayingAudio {
+            return "▶ Replay Oracle Voice"
+        }
+
+        if isPlaybackPaused {
+            return "▶ Resume Oracle Voice"
+        }
+
+        if audioPlayer?.isPlaying == true
+            || speechSynthesizer.isSpeaking {
+            return "⏸ Pause Oracle Voice"
+        }
+
+        return "Oracle Voice Preparing..."
+    }
+
+    private var oracleVoiceTransportDisabled: Bool {
+        if isPlayingAudio {
+            if isPlaybackPaused {
+                return false
+            }
+
+            return audioPlayer?.isPlaying != true
+                && !speechSynthesizer.isSpeaking
+        }
+
+        return isWorking && !isRecording
     }
 
     private struct LiveVoiceOracleResult {
@@ -1033,18 +1064,20 @@ struct NativeVoiceSessionView: View {
 
                                     if !lastSpokenOracleAnswer.isEmpty {
                                         Button {
-                                            Task {
-                                                await speakOracleAnswerProviderFirst(
-                                                    lastSpokenOracleAnswer,
-                                                    deity: oracleVoice,
-                                                    origin: .replay
-                                                )
+                                            if isPlayingAudio {
+                                                toggleOracleVoicePlaybackPause()
+                                            } else {
+                                                Task {
+                                                    await speakOracleAnswerProviderFirst(
+                                                        lastSpokenOracleAnswer,
+                                                        deity: oracleVoice,
+                                                        origin: .replay
+                                                    )
+                                                }
                                             }
                                         } label: {
                                             Text(
-                                                isPlayingAudio
-                                                    ? "Oracle Voice Speaking..."
-                                                    : "Replay Oracle Voice"
+                                                oracleVoiceTransportLabel
                                             )
                                             .frame(maxWidth: .infinity)
                                         }
@@ -1055,8 +1088,7 @@ struct NativeVoiceSessionView: View {
                                             )
                                         )
                                         .disabled(
-                                            isPlayingAudio
-                                                || (isWorking && !isRecording)
+                                            oracleVoiceTransportDisabled
                                         )
                                     }
 
@@ -1462,6 +1494,7 @@ struct NativeVoiceSessionView: View {
         isRecording = false
         isWorking = false
         isPlayingAudio = false
+        isPlaybackPaused = false
         isAutoSubmittingRecording = false
 
         recordingStartTime = nil
@@ -1526,6 +1559,7 @@ struct NativeVoiceSessionView: View {
             audioPlayer = nil
             activePlaybackOrigin = nil
             isPlayingAudio = false
+            isPlaybackPaused = false
             recoveryMessage = ""
             showRecoveryActions = false
 
@@ -2948,6 +2982,7 @@ struct NativeVoiceSessionView: View {
 
         activePlaybackOrigin = .liveTurn
         isPlayingAudio = true
+        isPlaybackPaused = false
         statusTitle = "Oracle speaking"
         statusMessage = "The Oracle has begun answering while the full response continues."
 
@@ -2983,6 +3018,7 @@ struct NativeVoiceSessionView: View {
         audioPlayer?.stop()
         audioPlayer = nil
         isPlayingAudio = false
+        isPlaybackPaused = false
         activePlaybackOrigin = nil
     }
 
@@ -2997,7 +3033,7 @@ struct NativeVoiceSessionView: View {
         // remainder into the existing native speech completion rail.
         while generation == voiceSessionGeneration,
               activePlaybackOrigin == .liveTurn,
-              speechSynthesizer.isSpeaking {
+              (speechSynthesizer.isSpeaking || isPlaybackPaused) {
             do {
                 try await Task.sleep(
                     nanoseconds: 100_000_000
@@ -3066,6 +3102,7 @@ struct NativeVoiceSessionView: View {
             audioPlayer = nil
             activePlaybackOrigin = origin
             isPlayingAudio = true
+            isPlaybackPaused = false
             statusTitle = "Oracle speaking"
             statusMessage = "The written answer is ready. Provider voice is being prepared."
 
@@ -3193,6 +3230,7 @@ struct NativeVoiceSessionView: View {
 
             audioPlayer = player
             isPlayingAudio = true
+            isPlaybackPaused = false
             statusTitle = "Oracle speaking"
             statusMessage = "Provider voice is speaking the response."
 
@@ -3217,6 +3255,15 @@ struct NativeVoiceSessionView: View {
                 return
             }
 
+            if isPlaybackPaused {
+                monitorProviderAudioCompletion(
+                    player: player,
+                    origin: origin,
+                    generation: generation
+                )
+                return
+            }
+
             if player.isPlaying {
                 monitorProviderAudioCompletion(
                     player: player,
@@ -3235,6 +3282,58 @@ struct NativeVoiceSessionView: View {
         }
     }
 
+    @MainActor
+    private func toggleOracleVoicePlaybackPause() {
+        guard isPlayingAudio else {
+            return
+        }
+
+        if isPlaybackPaused {
+            if let player = audioPlayer {
+                guard player.play() else {
+                    statusTitle = "Voice remains paused"
+                    statusMessage = "The Oracle voice could not resume yet. Try Resume again or end the conversation."
+                    return
+                }
+
+                isPlaybackPaused = false
+                statusTitle = "Oracle speaking"
+                statusMessage = "Provider voice is speaking the response."
+                return
+            }
+
+            if speechSynthesizer.isPaused {
+                guard speechSynthesizer.continueSpeaking() else {
+                    statusTitle = "Voice remains paused"
+                    statusMessage = "The Oracle voice could not resume yet. Try Resume again or end the conversation."
+                    return
+                }
+
+                isPlaybackPaused = false
+                statusTitle = "Oracle speaking"
+                statusMessage = "Native iOS voice is speaking the response."
+            }
+
+            return
+        }
+
+        if let player = audioPlayer,
+           player.isPlaying {
+            player.pause()
+            isPlaybackPaused = true
+            statusTitle = "Oracle voice paused"
+            statusMessage = "Tap Resume Oracle Voice to continue from this point."
+            return
+        }
+
+        if speechSynthesizer.isSpeaking,
+           speechSynthesizer.pauseSpeaking(at: .immediate) {
+            isPlaybackPaused = true
+            statusTitle = "Oracle voice paused"
+            statusMessage = "Tap Resume Oracle Voice to continue from this point."
+        }
+    }
+
     private func finishVoicePlayback(
         origin: VoicePlaybackOrigin,
         generation: Int
@@ -3245,6 +3344,7 @@ struct NativeVoiceSessionView: View {
         }
 
         isPlayingAudio = false
+        isPlaybackPaused = false
         activePlaybackOrigin = nil
 
         if statusTitle == "Oracle speaking" {
@@ -3336,6 +3436,7 @@ struct NativeVoiceSessionView: View {
             recoveryMessage = "You can read the answer above, replay if available, ask another question, or switch to text entry."
             showRecoveryActions = true
             isPlayingAudio = false
+            isPlaybackPaused = false
             return
         }
 
@@ -3361,6 +3462,7 @@ struct NativeVoiceSessionView: View {
 
         speechSynthesizer.speak(utterance)
         isPlayingAudio = true
+        isPlaybackPaused = false
 
         monitorNativeSpeechCompletion(
             synthesizer: speechSynthesizer,
@@ -3406,6 +3508,15 @@ struct NativeVoiceSessionView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             guard generation == voiceSessionGeneration,
                   activePlaybackOrigin == origin else {
+                return
+            }
+
+            if isPlaybackPaused {
+                monitorNativeSpeechCompletion(
+                    synthesizer: synthesizer,
+                    origin: origin,
+                    generation: generation
+                )
                 return
             }
 
