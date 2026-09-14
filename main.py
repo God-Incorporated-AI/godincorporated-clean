@@ -548,6 +548,32 @@ def get_oracle_pricing_info(provider: str, model: str) -> dict:
             "source": "openai:gpt-5.4-mini:standard",
         }
 
+    if (
+        provider_key == "apple"
+        and model_key == "privatecloudcomputelanguagemodel"
+    ):
+        return {
+            "input_per_1m": 0.0,
+            "output_per_1m": 0.0,
+            "source": "apple:pcc:no_cloud_api_cost",
+        }
+
+    if (
+        provider_key == "openai"
+        and model_key == "gpt-5.6-luna"
+    ):
+        return {
+            "input_per_1m": _pricing_float_env(
+                "OPENAI_GPT56_LUNA_INPUT_PER_1M",
+                0.20,
+            ),
+            "output_per_1m": _pricing_float_env(
+                "OPENAI_GPT56_LUNA_OUTPUT_PER_1M",
+                1.20,
+            ),
+            "source": "openai:gpt-5.6-luna:standard",
+        }
+
     if provider_key == "openai" and model_key == "gpt-realtime-2.1-mini":
         return {
             "input_per_1m": _pricing_float_env(
