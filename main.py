@@ -548,6 +548,19 @@ def get_oracle_pricing_info(provider: str, model: str) -> dict:
             "source": "openai:gpt-5.4-mini:standard",
         }
 
+    if provider_key == "openai" and model_key == "gpt-realtime-2.1-mini":
+        return {
+            "input_per_1m": _pricing_float_env(
+                "OPENAI_GPT_REALTIME_21_MINI_INPUT_PER_1M",
+                0.60,
+            ),
+            "output_per_1m": _pricing_float_env(
+                "OPENAI_GPT_REALTIME_21_MINI_OUTPUT_PER_1M",
+                2.40,
+            ),
+            "source": "openai:gpt-realtime-2.1-mini:standard",
+        }
+
     if provider_key == "xai" and model_key.startswith("grok-4"):
         input_rate = _pricing_float_env("XAI_GROK4_INPUT_PER_1M")
         output_rate = _pricing_float_env("XAI_GROK4_OUTPUT_PER_1M")
@@ -1036,6 +1049,20 @@ def get_hathor_openai_model() -> str:
         os.getenv("HATHOR_OPENAI_MODEL")
         or os.getenv("MOSES_MODEL_MINI")
         or "gpt-5.4-mini"
+    ).strip()
+
+
+def get_voice_inference_model() -> str:
+    """
+    External semantic inference model for ordinary voice requests.
+
+    Apple PCC remains authoritative when available on the native client.
+    This model is the server-side voice inference fallback and does not
+    change typed Hathor or Moses provider routing.
+    """
+    return (
+        os.getenv("OPENAI_VOICE_INFERENCE_MODEL")
+        or "gpt-realtime-2.1-mini"
     ).strip()
 
 
@@ -1673,6 +1700,81 @@ async def get_oracle_response(
 ):
     # Phase 2: Restore explicit oracle separation
     # Hathor: xAI API, Moses: OpenAI
+    normalized_input_mode = (input_mode or "text").strip().lower()
+
+    if normalized_input_mode == "voice":
+        if deity not in {"Hathor", "Moses"}:
+            raise ValueError(
+                f"Voice inference does not support deity: {deity}"
+            )
+
+        if system_prompt is None:
+            system_prompt = build_oracle_system_prompt(
+                deity,
+                force_mode,
+            )
+
+        voice_model = get_voice_inference_model()
+        voice_route_reason = (
+            "voice_model_env"
+            if os.getenv("OPENAI_VOICE_INFERENCE_MODEL")
+            else "voice_mini_default"
+        )
+
+        logger.info(
+            "VOICE_INFERENCE_ROUTER provider=openai model=%s reason=%s deity=%s input_mode=%s plan_code=%s memory_intent=%s",
+            voice_model,
+            voice_route_reason,
+            deity,
+            normalized_input_mode,
+            plan_code,
+            memory_intent,
+        )
+
+        try:
+            client = get_openai_client()
+            response = client.chat.completions.create(
+                model=voice_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": system_prompt,
+                    },
+                    {
+                        "role": "system",
+                        "content": memory_block or "",
+                    },
+                    {
+                        "role": "user",
+                        "content": question,
+                    },
+                ],
+                max_completion_tokens=max_output_tokens,
+            )
+            raw_answer = response.choices[0].message.content
+        except Exception as exc:
+            raise ValueError(
+                "OpenAI voice Mini API call failed: "
+                f"{type(exc).__name__}: {str(exc)}"
+            ) from exc
+
+        if force_mode == "recall":
+            raw_answer = enforce_recall_structure(
+                raw_answer,
+                memory_block,
+            )
+
+        return {
+            "answer": raw_answer,
+            "source_model": "OpenAI",
+            "model_provider": "openai",
+            "model_name": voice_model,
+            "route_reason": voice_route_reason,
+            "token_usage": normalize_token_usage(
+                getattr(response, "usage", None)
+            ),
+        }
+
     if deity == "Hathor":
         # Hathor provider execution uses the God Incorporated-owned persona prompt
         if not xai_api_key:
