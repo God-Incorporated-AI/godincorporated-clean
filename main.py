@@ -10180,12 +10180,6 @@ async def voice_tts_endpoint(request: Request):
 
 
 
-@app.get("/xai-realtime-lab", response_class=HTMLResponse)
-async def xai_realtime_lab_page(request: Request):
-    require_admin(request)
-    return templates.TemplateResponse("xai_realtime_lab.html", {"request": request})
-
-
 @app.get("/voice/realtime/access")
 async def voice_realtime_access_endpoint(request: Request):
     deity = (request.query_params.get("voice") or request.query_params.get("deity") or "Hathor").strip() or "Hathor"
@@ -10552,7 +10546,7 @@ async def voice_realtime_prepare_endpoint(request: Request):
     """
     Prepare one browser realtime voice turn using the same God Incorporated
     identity, entitlement, memory, retrieval, and prompt authority as /ask.
-    Provider generation remains on the existing xAI realtime websocket.
+    Provider generation is issued explicitly only after backend preparation and turn authorization.
     """
     try:
         body = await request.json()
@@ -11058,92 +11052,6 @@ async def voice_realtime_interaction_endpoint(
                     interaction_id,
             },
         )
-
-@app.post("/voice/xai/realtime/session")
-async def voice_xai_realtime_session_endpoint(request: Request):
-    import logging as _logging
-    from services.xai_realtime import create_xai_realtime_session
-
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    deity = (body.get("voice") or body.get("deity") or "Hathor").strip() or "Hathor"
-    voice_override = body.get("realtime_voice") or body.get("voice_name") or body.get("xai_voice")
-
-    usage_context = get_voice_usage_context(request, deity)
-    user = get_current_user(request)
-    access = build_realtime_voice_access_payload(
-        usage_context,
-        is_admin=bool(user and user_has_admin_access(user)),
-    )
-
-    if not access.get("allowed"):
-        record_voice_usage_event(
-            **usage_context,
-            input_mode="realtime_voice",
-            deity=deity,
-            stage="realtime_session",
-            status="denied",
-            total_ms=None,
-            metadata_json={
-                "phase": "11.6B",
-                "event_source": "voice_xai_realtime_session_endpoint",
-                "reason": access.get("reason"),
-                "provider": "xai",
-                "access": access,
-            },
-        )
-        return JSONResponse(status_code=403, content={
-            "error": access.get("message") or "Live realtime voice is not available for this access level.",
-            "voice_access": access,
-        })
-
-    try:
-        result = create_xai_realtime_session(deity, voice_override=voice_override)
-        result["voice_access"] = access
-
-        record_voice_usage_event(
-            **usage_context,
-            input_mode="realtime_voice",
-            deity=deity,
-            stage="realtime_session",
-            status="ok",
-            total_ms=result.get("total_ms"),
-            metadata_json={
-                "phase": "11.6B",
-                "event_source": "voice_xai_realtime_session_endpoint",
-                "provider": result.get("provider"),
-                "model": result.get("model"),
-                "transport": result.get("transport"),
-                "realtime_voice": result.get("realtime_voice"),
-                "access": access,
-            },
-        )
-
-        _logging.info(
-            "XAI_REALTIME_SESSION_STAGE status=ok provider=%s model=%s deity=%s realtime_voice=%s total_ms=%s transport=%s plan_code=%s access_reason=%s",
-            result.get("provider"),
-            result.get("model"),
-            result.get("deity"),
-            result.get("realtime_voice"),
-            result.get("total_ms"),
-            result.get("transport"),
-            access.get("plan_code"),
-            access.get("reason"),
-        )
-        return result
-    except Exception as exc:
-        _logging.exception("xAI realtime session endpoint failed")
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "xAI realtime voice session could not be prepared.",
-                "detail": str(exc),
-            },
-        )
-
 
 @app.get("/realtime-lab", response_class=HTMLResponse)
 async def realtime_lab_page(request: Request):
