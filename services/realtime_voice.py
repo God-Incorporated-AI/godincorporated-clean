@@ -29,8 +29,21 @@ def get_realtime_provider() -> str:
     return os.getenv("REALTIME_VOICE_PROVIDER", "openai").strip().lower() or "openai"
 
 
+OPENAI_REALTIME_MODEL_ID = "gpt-realtime-2.1-mini"
+
+
 def get_openai_realtime_model() -> str:
-    return os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime").strip() or "gpt-realtime"
+    return OPENAI_REALTIME_MODEL_ID
+
+
+def get_openai_realtime_transcription_model() -> str:
+    return (
+        os.getenv(
+            "OPENAI_REALTIME_TRANSCRIBE_MODEL",
+            "gpt-4o-mini-transcribe",
+        ).strip()
+        or "gpt-4o-mini-transcribe"
+    )
 
 
 def get_openai_realtime_voice(deity: str) -> str:
@@ -155,10 +168,15 @@ def build_openai_realtime_payload(
                 "noise_reduction": {
                     "type": "near_field",
                 },
+                "transcription": {
+                    "model": get_openai_realtime_transcription_model(),
+                },
                 "turn_detection": {
                     "type": "server_vad",
-                    "create_response": True,
-                    "interrupt_response": True,
+                    "create_response": False,
+                    "interrupt_response": False,
+                    "prefix_padding_ms": 650,
+                    "silence_duration_ms": 3500,
                 },
             },
             "output": {
