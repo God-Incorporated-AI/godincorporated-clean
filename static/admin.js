@@ -266,46 +266,88 @@ document.addEventListener("DOMContentLoaded", () => {
       renderMetricCard("Total tokens", formatNumber(oracleSummary.total_tokens ?? 0)),
       renderMetricCard("Avg Oracle time", formatMs(oracleSummary.avg_total_ms)),
       renderMetricCard("Voice stage events", formatNumber(voiceSummary.total_events ?? 0)),
-      renderMetricCard("Est. TTS cost", formatMoney(voiceSummary.estimated_tts_cost_usd || 0)),
       renderMetricCard("Avg transcription", formatMs(voiceSummary.avg_transcribe_ms)),
       renderMetricCard("Avg TTS", formatMs(voiceSummary.avg_tts_ms)),
-      renderMetricCard("Est. cost", formatMoney(oracleSummary.estimated_cost_usd ?? 0))
+      renderMetricCard(
+        "Est. Oracle inference cost",
+        formatMoney(
+          oracleSummary.estimated_oracle_cost_usd ??
+          oracleSummary.estimated_cost_usd ??
+          0
+        )
+      ),
+      renderMetricCard(
+        "Est. transcription cost",
+        formatMoney(
+          voiceSummary.estimated_transcription_cost_usd ?? 0
+        )
+      ),
+      renderMetricCard(
+        "Est. realtime voice cost",
+        formatMoney(
+          voiceSummary.estimated_realtime_cost_usd ?? 0
+        )
+      ),
+      renderMetricCard(
+        "Est. hosted TTS cost",
+        formatMoney(
+          voiceSummary.estimated_tts_cost_usd ?? 0
+        )
+      ),
+      renderMetricCard(
+        "Est. total external AI cost",
+        formatMoney(
+          voiceSummary.estimated_total_external_ai_cost_usd ?? 0
+        )
+      ),
+      renderMetricCard(
+        "PCC/local $0 events",
+        formatNumber(
+          voiceSummary.zero_cost_events ?? 0
+        )
+      ),
+      renderMetricCard(
+        "Unpriced events",
+        formatNumber(
+          voiceSummary.unpriced_events ?? 0
+        )
+      )
     ].join("");
 
     const byInputMode = renderUsageList(
       report?.oracle?.by_input_mode || [],
       row => `${row.input_mode || "unknown"} (${row.total_events || 0})`,
-      row => `${formatNumber(row.total_tokens || 0)} tokens · avg ${formatMs(row.avg_total_ms)}`
+      row => `${formatNumber(row.total_tokens || 0)} tokens · ${formatMoney(row.estimated_cost_usd || 0)} est. · ${formatNumber(row.unpriced_events || 0)} unpriced · avg ${formatMs(row.avg_total_ms)}`
     );
 
     const byDeity = renderUsageList(
       report?.oracle?.by_deity || [],
       row => `${row.deity || "unknown"} (${row.total_events || 0})`,
-      row => `${formatNumber(row.total_tokens || 0)} tokens · avg ${formatMs(row.avg_total_ms)}`
+      row => `${formatNumber(row.total_tokens || 0)} tokens · ${formatMoney(row.estimated_cost_usd || 0)} est. · ${formatNumber(row.unpriced_events || 0)} unpriced · avg ${formatMs(row.avg_total_ms)}`
     );
 
     const byProviderModel = renderUsageList(
       report?.oracle?.by_provider_model || [],
       row => `${row.provider || "unknown"} / ${row.model || "unknown"}`,
-      row => `${row.total_events || 0} event(s) · ${formatNumber(row.total_tokens || 0)} tokens · avg ${formatMs(row.avg_total_ms)}`
+      row => `${row.total_events || 0} event(s) · ${formatNumber(row.total_tokens || 0)} tokens · ${formatMoney(row.estimated_cost_usd || 0)} est. · ${formatNumber(row.unpriced_events || 0)} unpriced · avg ${formatMs(row.avg_total_ms)}`
     );
 
     const voiceByStage = renderUsageList(
       report?.voice?.by_stage_status || [],
       row => `${row.stage || "unknown"} / ${row.status || "unknown"}`,
-      row => `${row.total_events || 0} event(s) · transcribe ${formatMs(row.avg_transcribe_ms)} · tts ${formatMs(row.avg_tts_ms)} · total ${formatMs(row.avg_total_ms)}`
+      row => `${row.total_events || 0} event(s) · ${formatMoney(row.estimated_external_cost_usd || 0)} est. · ${formatNumber(row.unpriced_events || 0)} unpriced · transcribe ${formatMs(row.avg_transcribe_ms)} · tts ${formatMs(row.avg_tts_ms)} · total ${formatMs(row.avg_total_ms)}`
     );
 
     const slowestOracle = renderUsageList(
       report?.oracle?.slowest_events || [],
       row => `${row.created_at || "unknown"} · ${row.deity || "unknown"} · ${row.input_mode || "unknown"}`,
-      row => `${formatNumber(row.total_tokens || 0)} tokens · ${formatMs(row.total_ms)} · ${row.provider || "unknown"}/${row.model || "unknown"}`
+      row => `${formatNumber(row.total_tokens || 0)} tokens · ${formatMoney(row.estimated_cost_usd || 0)} est. · ${formatMs(row.total_ms)} · ${row.provider || "unknown"}/${row.model || "unknown"}`
     );
 
     const slowestVoice = renderUsageList(
       report?.voice?.slowest_events || [],
       row => `${row.created_at || "unknown"} · ${row.stage || "unknown"} · ${row.status || "unknown"}`,
-      row => `total ${formatMs(row.total_ms)} · transcribe ${formatMs(row.transcribe_ms)} · tts ${formatMs(row.tts_ms)}`
+      row => `total ${formatMs(row.total_ms)} · ${row.estimated_external_cost_usd == null ? "unpriced" : formatMoney(row.estimated_external_cost_usd)} est. · transcribe ${formatMs(row.transcribe_ms)} · tts ${formatMs(row.tts_ms)}`
     );
 
     usageBreakdown.innerHTML = [
@@ -458,6 +500,7 @@ document.addEventListener("DOMContentLoaded", () => {
         <div class="muted">${escapeHtml(event.created_at || "—")}</div>
         ${renderKV("Provider/model", `${event.provider || "unknown"} / ${event.model || "unknown"}`)}
         ${renderKV("Tokens", formatNumber(event.total_tokens || 0))}
+        ${renderKV("Estimated Oracle inference cost", formatMoney(event.estimated_cost_usd || 0))}
         ${renderKV("Final model time", formatMs(event.final_model_ms))}
         ${renderKV("Total time", formatMs(event.total_ms))}
       </div>
@@ -480,7 +523,14 @@ document.addEventListener("DOMContentLoaded", () => {
         ${renderKV("Transcript chars", formatNumber(event.transcript_chars || 0))}
         ${renderKV("Answer chars", formatNumber(event.answer_chars || 0))}
         ${renderKV("Audio URL present", event.audio_url_present === true ? "yes" : event.audio_url_present === false ? "no" : "—")}
-        ${renderKV("Estimated TTS cost", formatMoney(event.estimated_tts_cost_usd || 0))}
+        ${renderKV(
+          "Estimated external AI cost",
+          event.estimated_external_cost_usd == null
+            ? "unpriced"
+            : formatMoney(event.estimated_external_cost_usd)
+        )}
+        ${renderKV("Estimated hosted TTS cost", formatMoney(event.estimated_tts_cost_usd || 0))}
+        ${renderKV("Pricing source", event.pricing_source || "—")}
       </div>
     `).join("");
   }
@@ -493,13 +543,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const byDeity = renderUsageList(
       report?.oracle?.by_deity || [],
       row => `${row.deity || "unknown"} (${row.total_events || 0})`,
-      row => `${formatNumber(row.total_tokens || 0)} tokens · avg ${formatMs(row.avg_total_ms)}`
+      row => `${formatNumber(row.total_tokens || 0)} tokens · ${formatMoney(row.estimated_cost_usd || 0)} est. · ${formatNumber(row.unpriced_events || 0)} unpriced · avg ${formatMs(row.avg_total_ms)}`
     );
 
     const byProviderModel = renderUsageList(
       report?.oracle?.by_provider_model || [],
       row => `${row.provider || "unknown"} / ${row.model || "unknown"}`,
-      row => `${row.total_events || 0} event(s) · ${formatNumber(row.total_tokens || 0)} tokens · avg ${formatMs(row.avg_total_ms)}`
+      row => `${row.total_events || 0} event(s) · ${formatNumber(row.total_tokens || 0)} tokens · ${formatMoney(row.estimated_cost_usd || 0)} est. · ${formatNumber(row.unpriced_events || 0)} unpriced · avg ${formatMs(row.avg_total_ms)}`
     );
 
     detailUsageCards.innerHTML = `
@@ -515,7 +565,14 @@ document.addEventListener("DOMContentLoaded", () => {
         ${renderKV("Avg final model time", formatMs(oracleSummary.avg_final_model_ms))}
         ${renderKV("Avg total time", formatMs(oracleSummary.avg_total_ms))}
         ${renderKV("Max total time", formatMs(oracleSummary.max_total_ms))}
-        ${renderKV("Estimated cost", formatMoney(oracleSummary.estimated_cost_usd || 0))}
+        ${renderKV(
+          "Estimated Oracle inference cost",
+          formatMoney(
+            oracleSummary.estimated_oracle_cost_usd ??
+            oracleSummary.estimated_cost_usd ??
+            0
+          )
+        )}
       </div>
 
       <div class="detail-card">
@@ -530,7 +587,42 @@ document.addEventListener("DOMContentLoaded", () => {
         ${renderKV("Avg voice stage time", formatMs(voiceSummary.avg_total_ms))}
         ${renderKV("Max voice stage time", formatMs(voiceSummary.max_total_ms))}
         ${renderKV("Audio URL events", formatNumber(voiceSummary.audio_url_events || 0))}
-        ${renderKV("Estimated TTS cost", formatMoney(voiceSummary.estimated_tts_cost_usd || 0))}
+        ${renderKV(
+          "Estimated transcription cost",
+          formatMoney(
+            voiceSummary.estimated_transcription_cost_usd ?? 0
+          )
+        )}
+        ${renderKV(
+          "Estimated realtime voice cost",
+          formatMoney(
+            voiceSummary.estimated_realtime_cost_usd ?? 0
+          )
+        )}
+        ${renderKV(
+          "Estimated hosted TTS cost",
+          formatMoney(
+            voiceSummary.estimated_tts_cost_usd ?? 0
+          )
+        )}
+        ${renderKV(
+          "Estimated total external AI cost",
+          formatMoney(
+            voiceSummary.estimated_total_external_ai_cost_usd ?? 0
+          )
+        )}
+        ${renderKV(
+          "PCC/local $0 events",
+          formatNumber(
+            voiceSummary.zero_cost_events ?? 0
+          )
+        )}
+        ${renderKV(
+          "Unpriced events",
+          formatNumber(
+            voiceSummary.unpriced_events ?? 0
+          )
+        )}
       </div>
 
       ${renderSummaryCard("Oracle by Deity", byDeity)}

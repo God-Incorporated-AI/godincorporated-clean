@@ -2301,6 +2301,7 @@ if (seekerInput && oracleForm) {
     lifecycleAudioResumeAttempted: false,
     currentResponseId: "",
     expectedResponseMetadata: null,
+    currentResponseUsage: null,
     currentResponseCompleted: false
   };
 
@@ -2703,6 +2704,8 @@ if (seekerInput && oracleForm) {
       input_mode: "realtime_voice",
       provider: sessionData.provider || "openai",
       model: sessionData.model || "",
+      provider_usage:
+        templeRealtimeState.currentResponseUsage,
       transport: sessionData.transport || "webrtc",
       deity: templeRealtimeState.selectedDeity,
       provider_voice:
@@ -2766,42 +2769,58 @@ if (seekerInput && oracleForm) {
         ""
       ).trim();
 
+    const hasProviderUsage =
+      Boolean(
+        templeRealtimeState.currentResponseUsage &&
+        typeof templeRealtimeState.currentResponseUsage ===
+          "object"
+      );
+
     if (!inputTranscript || !assistantTranscript) {
       templeRealtimeAuditEvent(
-        "interaction_report_skipped",
+        hasProviderUsage
+          ? "interaction_report_missing_transcript_cost_only"
+          : "interaction_report_skipped",
         {
           requested_reason: reason || "",
           skip_reason: "missing_transcript",
           has_input_transcript:
             Boolean(inputTranscript),
           has_assistant_transcript:
-            Boolean(assistantTranscript)
+            Boolean(assistantTranscript),
+          provider_usage_present:
+            hasProviderUsage
         }
       );
 
       templeRealtimeLog(
-        "TEMPLE_REALTIME_INTERACTION_LOG_SKIPPED",
+        hasProviderUsage
+          ? "TEMPLE_REALTIME_INTERACTION_COST_ONLY"
+          : "TEMPLE_REALTIME_INTERACTION_LOG_SKIPPED",
         {
           reason: "missing_transcript",
           has_input_transcript:
             Boolean(inputTranscript),
           has_assistant_transcript:
             Boolean(assistantTranscript),
+          provider_usage_present:
+            hasProviderUsage,
           client_interaction_id:
             clientInteractionId
         }
       );
 
-      await templeRealtimeAbandonReservation(
-        clientInteractionId,
-        templeRealtimeState
-          .currentReservationInteractionId,
-        "missing_transcript",
-        false
-      );
+      if (!hasProviderUsage) {
+        await templeRealtimeAbandonReservation(
+          clientInteractionId,
+          templeRealtimeState
+            .currentReservationInteractionId,
+          "missing_transcript",
+          false
+        );
 
-
-      return;
+        return;
+      }
     }
 
     const reportPendingForThisInteraction =
@@ -3836,6 +3855,7 @@ if (seekerInput && oracleForm) {
     templeRealtimeState.interactionReportedIds = {};
     templeRealtimeState.currentResponseId = "";
     templeRealtimeState.expectedResponseMetadata = null;
+    templeRealtimeState.currentResponseUsage = null;
     templeRealtimeState.currentResponseCompleted = false;
     templeRealtimeState.clientRealtimeSessionId = templeRealtimeGenerateInteractionId();
     templeRealtimeState.lifecycleSequence = 0;
@@ -5048,6 +5068,9 @@ if (seekerInput && oracleForm) {
       templeRealtimeState
         .expectedResponseMetadata =
           null;
+      templeRealtimeState
+        .currentResponseUsage =
+          null;
 
       templeRealtimeState
         .currentResponseCompleted =
@@ -5580,6 +5603,9 @@ if (seekerInput && oracleForm) {
 
       templeRealtimeState.currentResponseId =
         responseId;
+      templeRealtimeState
+        .currentResponseUsage =
+          null;
 
       templeRealtimeState
         .currentResponseCompleted =
@@ -5786,6 +5812,14 @@ if (seekerInput && oracleForm) {
         String(
           response.status || ""
         );
+
+      templeRealtimeState.currentResponseUsage =
+        (
+          response.usage &&
+          typeof response.usage === "object"
+        )
+          ? response.usage
+          : null;
 
       if (
         !String(
@@ -6148,6 +6182,7 @@ if (seekerInput && oracleForm) {
     templeRealtimeState.starting = false;
     templeRealtimeState.sessionToken = 0;
     templeRealtimeState.sessionOracleGeneration = 0;
+    templeRealtimeState.currentResponseUsage = null;
 
     templeRealtimeClearIdleAutoEndTimer();
 

@@ -115,11 +115,18 @@ def _xai_rest_stt(
         payload = response.text
 
     transcript = _first_text_value(payload)
+    duration_seconds = (
+        payload.get("duration")
+        if isinstance(payload, dict)
+        else None
+    )
+
     return {
         "provider": "xai",
         "model": os.getenv("XAI_STT_MODEL", "xai-stt-rest"),
         "transcript": transcript,
         "api_ms": api_ms,
+        "duration_seconds": duration_seconds,
         "raw_response_type": type(payload).__name__,
     }
 
@@ -149,15 +156,32 @@ def _openai_rest_stt(
     )
     api_ms = _ms_since(started)
 
-    transcript = getattr(result, "text", "") or _first_text_value(
-        result.model_dump() if hasattr(result, "model_dump") else result
+    result_data = (
+        result.model_dump()
+        if hasattr(result, "model_dump")
+        else result
     )
+
+    transcript = (
+        getattr(result, "text", "")
+        or _first_text_value(result_data)
+    )
+
+    usage = (
+        result_data.get("usage")
+        if isinstance(result_data, dict)
+        else getattr(result, "usage", None)
+    )
+
+    if usage is not None and hasattr(usage, "model_dump"):
+        usage = usage.model_dump()
 
     return {
         "provider": "openai",
         "model": model,
         "transcript": transcript.strip(),
         "api_ms": api_ms,
+        "usage": usage,
         "raw_response_type": type(result).__name__,
     }
 

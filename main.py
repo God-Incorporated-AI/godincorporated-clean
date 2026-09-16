@@ -678,6 +678,306 @@ def calculate_tts_estimated_cost_usd(provider: str, model: str, answer_chars=Non
 
 
 
+
+def get_transcription_pricing_info(
+    provider: str,
+    model: str,
+) -> dict:
+    provider_key = (provider or "").strip().lower()
+    model_key = (model or "").strip().lower()
+
+    if provider_key in {
+        "local",
+        "local_whisper",
+        "whisper",
+    }:
+        return {
+            "kind": "local",
+            "source": "local_whisper:no_external_api_cost",
+        }
+
+    if provider_key == "xai":
+        rate = _pricing_float_env(
+            "XAI_STT_PRICE_PER_HOUR"
+        )
+        return {
+            "kind": "duration",
+            "per_hour": rate,
+            "source": (
+                "xai:stt:env"
+                if rate is not None
+                else "xai:stt:env_missing"
+            ),
+        }
+
+    if (
+        provider_key == "openai"
+        and model_key == "gpt-4o-mini-transcribe"
+    ):
+        input_rate = _pricing_float_env(
+            "OPENAI_GPT4O_MINI_TRANSCRIBE_INPUT_PER_1M"
+        )
+        output_rate = _pricing_float_env(
+            "OPENAI_GPT4O_MINI_TRANSCRIBE_OUTPUT_PER_1M"
+        )
+        return {
+            "kind": "tokens",
+            "input_per_1m": input_rate,
+            "output_per_1m": output_rate,
+            "source": (
+                "openai:gpt-4o-mini-transcribe:env"
+                if (
+                    input_rate is not None
+                    and output_rate is not None
+                )
+                else
+                "openai:gpt-4o-mini-transcribe:env_missing"
+            ),
+        }
+
+    return {
+        "kind": "unknown",
+        "source": "unknown",
+    }
+
+
+def calculate_transcription_estimated_cost_usd(
+    provider: str,
+    model: str,
+    duration_seconds=None,
+    usage=None,
+):
+    pricing = get_transcription_pricing_info(
+        provider,
+        model,
+    )
+    kind = pricing.get("kind")
+
+    if kind == "local":
+        return 0.0
+
+    if kind == "duration":
+        rate = pricing.get("per_hour")
+        if rate is None:
+            return None
+        try:
+            seconds = float(duration_seconds)
+        except (TypeError, ValueError):
+            return None
+        if seconds < 0:
+            return None
+        return round(
+            (seconds / 3600.0) * rate,
+            8,
+        )
+
+    if kind == "tokens":
+        if not isinstance(usage, dict):
+            return None
+
+        input_tokens = _usage_int_or_none(
+            usage.get("input_tokens")
+        )
+        output_tokens = _usage_int_or_none(
+            usage.get("output_tokens")
+        )
+
+        if (
+            input_tokens is None
+            and output_tokens is None
+        ):
+            return None
+
+        input_rate = pricing.get("input_per_1m")
+        output_rate = pricing.get("output_per_1m")
+
+        if (
+            input_rate is None
+            or output_rate is None
+        ):
+            return None
+
+        return round(
+            (
+                ((input_tokens or 0) / 1_000_000)
+                * input_rate
+            )
+            + (
+                ((output_tokens or 0) / 1_000_000)
+                * output_rate
+            ),
+            8,
+        )
+
+    return None
+
+
+
+def get_realtime_voice_pricing_info(
+    provider: str,
+    model: str,
+) -> dict:
+    provider_key = (provider or "").strip().lower()
+    model_key = (model or "").strip().lower()
+
+    if (
+        provider_key == "openai"
+        and model_key == "gpt-realtime-2.1-mini"
+    ):
+        return {
+            "text_input_per_1m": _pricing_float_env(
+                "OPENAI_GPT_REALTIME_21_MINI_INPUT_PER_1M",
+                0.60,
+            ),
+            "text_cached_input_per_1m": _pricing_float_env(
+                "OPENAI_GPT_REALTIME_21_MINI_CACHED_INPUT_PER_1M",
+                0.06,
+            ),
+            "text_output_per_1m": _pricing_float_env(
+                "OPENAI_GPT_REALTIME_21_MINI_OUTPUT_PER_1M",
+                2.40,
+            ),
+            "audio_input_per_1m": _pricing_float_env(
+                "OPENAI_GPT_REALTIME_21_MINI_AUDIO_INPUT_PER_1M",
+                10.00,
+            ),
+            "audio_cached_input_per_1m": _pricing_float_env(
+                "OPENAI_GPT_REALTIME_21_MINI_AUDIO_CACHED_INPUT_PER_1M",
+                0.30,
+            ),
+            "audio_output_per_1m": _pricing_float_env(
+                "OPENAI_GPT_REALTIME_21_MINI_AUDIO_OUTPUT_PER_1M",
+                20.00,
+            ),
+            "source":
+                "openai:gpt-realtime-2.1-mini:"
+                "token_usage",
+        }
+
+    return {
+        "text_input_per_1m": None,
+        "text_cached_input_per_1m": None,
+        "text_output_per_1m": None,
+        "audio_input_per_1m": None,
+        "audio_cached_input_per_1m": None,
+        "audio_output_per_1m": None,
+        "source": "unknown",
+    }
+
+
+def calculate_realtime_voice_estimated_cost_usd(
+    provider: str,
+    model: str,
+    usage=None,
+):
+    if not isinstance(usage, dict):
+        return None
+
+    pricing = get_realtime_voice_pricing_info(
+        provider,
+        model,
+    )
+
+    rates = (
+        pricing.get("text_input_per_1m"),
+        pricing.get("text_cached_input_per_1m"),
+        pricing.get("text_output_per_1m"),
+        pricing.get("audio_input_per_1m"),
+        pricing.get("audio_cached_input_per_1m"),
+        pricing.get("audio_output_per_1m"),
+    )
+
+    if any(rate is None for rate in rates):
+        return None
+
+    input_details = usage.get(
+        "input_token_details"
+    )
+    output_details = usage.get(
+        "output_token_details"
+    )
+
+    if not isinstance(input_details, dict):
+        return None
+
+    if not isinstance(output_details, dict):
+        return None
+
+    cached_details = input_details.get(
+        "cached_tokens_details"
+    )
+    if not isinstance(cached_details, dict):
+        cached_details = {}
+
+    def token_count(value):
+        parsed = _usage_int_or_none(value)
+        return max(parsed or 0, 0)
+
+    text_input = token_count(
+        input_details.get("text_tokens")
+    )
+    audio_input = token_count(
+        input_details.get("audio_tokens")
+    )
+    image_input = token_count(
+        input_details.get("image_tokens")
+    )
+
+    cached_text = min(
+        token_count(
+            cached_details.get("text_tokens")
+        ),
+        text_input,
+    )
+    cached_audio = min(
+        token_count(
+            cached_details.get("audio_tokens")
+        ),
+        audio_input,
+    )
+    cached_image = token_count(
+        cached_details.get("image_tokens")
+    )
+
+    # Current Temple realtime lane is audio/text only.
+    # Refuse to silently underprice a future image-bearing turn.
+    if image_input or cached_image:
+        return None
+
+    uncached_text = text_input - cached_text
+    uncached_audio = audio_input - cached_audio
+
+    total_output = token_count(
+        usage.get("output_tokens")
+    )
+    audio_output = min(
+        token_count(
+            output_details.get("audio_tokens")
+        ),
+        total_output,
+    )
+
+    # Any non-audio output tokens use the text-output rate.
+    non_audio_output = total_output - audio_output
+
+    cost = (
+        (uncached_text / 1_000_000)
+        * pricing["text_input_per_1m"]
+        + (cached_text / 1_000_000)
+        * pricing["text_cached_input_per_1m"]
+        + (uncached_audio / 1_000_000)
+        * pricing["audio_input_per_1m"]
+        + (cached_audio / 1_000_000)
+        * pricing["audio_cached_input_per_1m"]
+        + (non_audio_output / 1_000_000)
+        * pricing["text_output_per_1m"]
+        + (audio_output / 1_000_000)
+        * pricing["audio_output_per_1m"]
+    )
+
+    return round(cost, 8)
+
+
 def record_oracle_usage_event(
     session_id=None,
     user_id=None,
@@ -980,6 +1280,7 @@ def record_voice_usage_event(
     tts_model=None,
     tts_voice=None,
     estimated_tts_cost_usd=None,
+    estimated_external_cost_usd=None,
     metadata_json=None,
     raise_on_error=False,
 ) -> None:
@@ -1014,11 +1315,13 @@ def record_voice_usage_event(
                     tts_model,
                     tts_voice,
                     estimated_tts_cost_usd,
+                    estimated_external_cost_usd,
                     metadata_json
                 )
                 VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s::jsonb
                 )
                 """,
                 (
@@ -1041,6 +1344,9 @@ def record_voice_usage_event(
                     tts_model,
                     tts_voice,
                     _usage_numeric_or_none(estimated_tts_cost_usd),
+                    _usage_numeric_or_none(
+                        estimated_external_cost_usd
+                    ),
                     json.dumps(metadata_json or {}, default=str),
                 )
             )
@@ -8949,6 +9255,13 @@ def get_admin_usage_summary(days: int = 30) -> dict:
                     COALESCE(plan_code, 'unknown') AS plan_code,
                     COUNT(*) AS total_events,
                     COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    COALESCE(
+                        SUM(estimated_cost_usd),
+                        0
+                    ) AS estimated_cost_usd,
+                    COUNT(*) FILTER (
+                        WHERE estimated_cost_usd IS NULL
+                    ) AS unpriced_events,
                     AVG(total_ms) AS avg_total_ms
                 FROM oracle_usage_events
                 WHERE created_at >= %s
@@ -8965,6 +9278,13 @@ def get_admin_usage_summary(days: int = 30) -> dict:
                     COALESCE(input_mode, 'unknown') AS input_mode,
                     COUNT(*) AS total_events,
                     COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    COALESCE(
+                        SUM(estimated_cost_usd),
+                        0
+                    ) AS estimated_cost_usd,
+                    COUNT(*) FILTER (
+                        WHERE estimated_cost_usd IS NULL
+                    ) AS unpriced_events,
                     AVG(total_ms) AS avg_total_ms
                 FROM oracle_usage_events
                 WHERE created_at >= %s
@@ -8981,6 +9301,13 @@ def get_admin_usage_summary(days: int = 30) -> dict:
                     COALESCE(deity, 'unknown') AS deity,
                     COUNT(*) AS total_events,
                     COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    COALESCE(
+                        SUM(estimated_cost_usd),
+                        0
+                    ) AS estimated_cost_usd,
+                    COUNT(*) FILTER (
+                        WHERE estimated_cost_usd IS NULL
+                    ) AS unpriced_events,
                     AVG(total_ms) AS avg_total_ms
                 FROM oracle_usage_events
                 WHERE created_at >= %s
@@ -8998,6 +9325,13 @@ def get_admin_usage_summary(days: int = 30) -> dict:
                     COALESCE(model, 'unknown') AS model,
                     COUNT(*) AS total_events,
                     COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    COALESCE(
+                        SUM(estimated_cost_usd),
+                        0
+                    ) AS estimated_cost_usd,
+                    COUNT(*) FILTER (
+                        WHERE estimated_cost_usd IS NULL
+                    ) AS unpriced_events,
                     AVG(total_ms) AS avg_total_ms
                 FROM oracle_usage_events
                 WHERE created_at >= %s
@@ -9022,7 +9356,8 @@ def get_admin_usage_summary(days: int = 30) -> dict:
                     model,
                     total_tokens,
                     final_model_ms,
-                    total_ms
+                    total_ms,
+                    estimated_cost_usd
                 FROM oracle_usage_events
                 WHERE created_at >= %s
                 ORDER BY total_ms DESC NULLS LAST
@@ -9056,9 +9391,242 @@ def get_admin_usage_summary(days: int = 30) -> dict:
             cur.execute(
                 """
                 SELECT
+                    COALESCE(
+                        SUM(estimated_cost_usd),
+                        0
+                    ) AS estimated_oracle_cost_usd,
+                    COUNT(*) FILTER (
+                        WHERE estimated_cost_usd = 0
+                          AND COALESCE(
+                              metadata_json->>'pricing_source',
+                              ''
+                          ) = 'apple:pcc:no_cloud_api_cost'
+                    ) AS zero_cost_events,
+                    COUNT(*) FILTER (
+                        WHERE estimated_cost_usd IS NULL
+                    ) AS unpriced_events
+                FROM oracle_usage_events
+                WHERE created_at >= %s
+                """,
+                (window_start,)
+            )
+            oracle_economics = cur.fetchone() or {}
+
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(
+                        SUM(estimated_external_cost_usd)
+                        FILTER (
+                            WHERE stage = 'transcribe'
+                        ),
+                        0
+                    ) AS estimated_transcription_cost_usd,
+
+                    COALESCE(
+                        SUM(estimated_external_cost_usd)
+                        FILTER (
+                            WHERE stage = 'realtime_interaction'
+                              AND COALESCE(status, '') <> 'duplicate'
+                        ),
+                        0
+                    ) AS estimated_realtime_cost_usd,
+
+                    COALESCE(
+                        SUM(
+                            COALESCE(
+                                estimated_external_cost_usd,
+                                estimated_tts_cost_usd
+                            )
+                        )
+                        FILTER (
+                            WHERE stage = 'tts'
+                        ),
+                        0
+                    ) AS estimated_tts_cost_usd,
+
+                    COUNT(*) FILTER (
+                        WHERE stage IN (
+                            'transcribe',
+                            'tts',
+                            'realtime_interaction'
+                        )
+                          AND COALESCE(status, '') <> 'duplicate'
+                          AND COALESCE(
+                              estimated_external_cost_usd,
+                              CASE
+                                  WHEN stage = 'tts'
+                                  THEN estimated_tts_cost_usd
+                                  ELSE NULL
+                              END
+                          ) = 0
+                          AND COALESCE(
+                              metadata_json->>'pricing_source',
+                              ''
+                          ) IN (
+                              'local_whisper:no_external_api_cost',
+                              'apple:pcc:no_cloud_api_cost'
+                          )
+                    ) AS zero_cost_events,
+
+                    COUNT(*) FILTER (
+                        WHERE stage IN (
+                            'transcribe',
+                            'tts',
+                            'realtime_interaction'
+                        )
+                          AND COALESCE(status, '') NOT IN (
+                              'duplicate',
+                              'denied'
+                          )
+                          AND estimated_external_cost_usd IS NULL
+                          AND NOT (
+                              stage = 'tts'
+                              AND estimated_tts_cost_usd IS NOT NULL
+                          )
+                    ) AS unpriced_events
+                FROM voice_usage_events
+                WHERE created_at >= %s
+                """,
+                (window_start,)
+            )
+            voice_economics = cur.fetchone() or {}
+
+            oracle_summary = dict(oracle_summary or {})
+            voice_summary = dict(voice_summary or {})
+
+            estimated_oracle_cost_usd = (
+                oracle_economics.get(
+                    "estimated_oracle_cost_usd"
+                )
+                or 0
+            )
+            estimated_transcription_cost_usd = (
+                voice_economics.get(
+                    "estimated_transcription_cost_usd"
+                )
+                or 0
+            )
+            estimated_realtime_cost_usd = (
+                voice_economics.get(
+                    "estimated_realtime_cost_usd"
+                )
+                or 0
+            )
+            estimated_tts_cost_usd = (
+                voice_economics.get(
+                    "estimated_tts_cost_usd"
+                )
+                or 0
+            )
+
+            oracle_summary[
+                "estimated_oracle_cost_usd"
+            ] = estimated_oracle_cost_usd
+
+            voice_summary[
+                "estimated_transcription_cost_usd"
+            ] = estimated_transcription_cost_usd
+
+            voice_summary[
+                "estimated_realtime_cost_usd"
+            ] = estimated_realtime_cost_usd
+
+            voice_summary[
+                "estimated_tts_cost_usd"
+            ] = estimated_tts_cost_usd
+
+            voice_summary[
+                "estimated_total_external_ai_cost_usd"
+            ] = (
+                estimated_oracle_cost_usd
+                + estimated_transcription_cost_usd
+                + estimated_realtime_cost_usd
+                + estimated_tts_cost_usd
+            )
+
+            oracle_zero_cost_events = int(
+                oracle_economics.get(
+                    "zero_cost_events"
+                )
+                or 0
+            )
+            voice_zero_cost_events = int(
+                voice_economics.get(
+                    "zero_cost_events"
+                )
+                or 0
+            )
+
+            oracle_unpriced_events = int(
+                oracle_economics.get(
+                    "unpriced_events"
+                )
+                or 0
+            )
+            voice_unpriced_events = int(
+                voice_economics.get(
+                    "unpriced_events"
+                )
+                or 0
+            )
+
+            oracle_summary[
+                "zero_cost_events"
+            ] = oracle_zero_cost_events
+            oracle_summary[
+                "unpriced_events"
+            ] = oracle_unpriced_events
+
+            voice_summary[
+                "zero_cost_events"
+            ] = (
+                oracle_zero_cost_events
+                + voice_zero_cost_events
+            )
+
+            voice_summary[
+                "unpriced_events"
+            ] = (
+                oracle_unpriced_events
+                + voice_unpriced_events
+            )
+
+            cur.execute(
+                """
+                SELECT
                     COALESCE(stage, 'unknown') AS stage,
                     COALESCE(status, 'unknown') AS status,
                     COUNT(*) AS total_events,
+                    COALESCE(
+                        SUM(
+                            COALESCE(
+                                estimated_external_cost_usd,
+                                CASE
+                                    WHEN stage = 'tts'
+                                    THEN estimated_tts_cost_usd
+                                    ELSE NULL
+                                END
+                            )
+                        ),
+                        0
+                    ) AS estimated_external_cost_usd,
+                    COUNT(*) FILTER (
+                        WHERE stage IN (
+                            'transcribe',
+                            'tts',
+                            'realtime_interaction'
+                        )
+                          AND COALESCE(status, '') NOT IN (
+                              'duplicate',
+                              'denied'
+                          )
+                          AND estimated_external_cost_usd IS NULL
+                          AND NOT (
+                              stage = 'tts'
+                              AND estimated_tts_cost_usd IS NOT NULL
+                          )
+                    ) AS unpriced_events,
                     AVG(transcribe_ms) AS avg_transcribe_ms,
                     AVG(tts_ms) AS avg_tts_ms,
                     AVG(total_ms) AS avg_total_ms
@@ -9092,7 +9660,10 @@ def get_admin_usage_summary(days: int = 30) -> dict:
                     tts_provider,
                     tts_model,
                     tts_voice,
-                    estimated_tts_cost_usd
+                    estimated_tts_cost_usd,
+                    estimated_external_cost_usd,
+                    metadata_json->>'pricing_source'
+                        AS pricing_source
                 FROM voice_usage_events
                 WHERE created_at >= %s
                 ORDER BY total_ms DESC NULLS LAST
@@ -9178,6 +9749,13 @@ def get_admin_user_usage_report(user_id: str, days: int = 30) -> dict:
                     COALESCE(deity, 'unknown') AS deity,
                     COUNT(*) AS total_events,
                     COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    COALESCE(
+                        SUM(estimated_cost_usd),
+                        0
+                    ) AS estimated_cost_usd,
+                    COUNT(*) FILTER (
+                        WHERE estimated_cost_usd IS NULL
+                    ) AS unpriced_events,
                     AVG(total_ms) AS avg_total_ms
                 FROM oracle_usage_events
                 WHERE user_id = %s
@@ -9196,6 +9774,13 @@ def get_admin_user_usage_report(user_id: str, days: int = 30) -> dict:
                     COALESCE(model, 'unknown') AS model,
                     COUNT(*) AS total_events,
                     COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                    COALESCE(
+                        SUM(estimated_cost_usd),
+                        0
+                    ) AS estimated_cost_usd,
+                    COUNT(*) FILTER (
+                        WHERE estimated_cost_usd IS NULL
+                    ) AS unpriced_events,
                     AVG(total_ms) AS avg_total_ms
                 FROM oracle_usage_events
                 WHERE user_id = %s
@@ -9218,7 +9803,8 @@ def get_admin_user_usage_report(user_id: str, days: int = 30) -> dict:
                     model,
                     total_tokens,
                     final_model_ms,
-                    total_ms
+                    total_ms,
+                    estimated_cost_usd
                 FROM oracle_usage_events
                 WHERE user_id = %s
                   AND created_at >= %s
@@ -9254,6 +9840,212 @@ def get_admin_user_usage_report(user_id: str, days: int = 30) -> dict:
             cur.execute(
                 """
                 SELECT
+                    COALESCE(
+                        SUM(estimated_cost_usd),
+                        0
+                    ) AS estimated_oracle_cost_usd,
+                    COUNT(*) FILTER (
+                        WHERE estimated_cost_usd = 0
+                          AND COALESCE(
+                              metadata_json->>'pricing_source',
+                              ''
+                          ) = 'apple:pcc:no_cloud_api_cost'
+                    ) AS zero_cost_events,
+                    COUNT(*) FILTER (
+                        WHERE estimated_cost_usd IS NULL
+                    ) AS unpriced_events
+                FROM oracle_usage_events
+                WHERE user_id = %s
+                  AND created_at >= %s
+                """,
+                (user_id, window_start)
+            )
+            oracle_economics = cur.fetchone() or {}
+
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(
+                        SUM(estimated_external_cost_usd)
+                        FILTER (
+                            WHERE stage = 'transcribe'
+                        ),
+                        0
+                    ) AS estimated_transcription_cost_usd,
+
+                    COALESCE(
+                        SUM(estimated_external_cost_usd)
+                        FILTER (
+                            WHERE stage = 'realtime_interaction'
+                              AND COALESCE(status, '') <> 'duplicate'
+                        ),
+                        0
+                    ) AS estimated_realtime_cost_usd,
+
+                    COALESCE(
+                        SUM(
+                            COALESCE(
+                                estimated_external_cost_usd,
+                                estimated_tts_cost_usd
+                            )
+                        )
+                        FILTER (
+                            WHERE stage = 'tts'
+                        ),
+                        0
+                    ) AS estimated_tts_cost_usd,
+
+                    COUNT(*) FILTER (
+                        WHERE stage IN (
+                            'transcribe',
+                            'tts',
+                            'realtime_interaction'
+                        )
+                          AND COALESCE(status, '') <> 'duplicate'
+                          AND COALESCE(
+                              estimated_external_cost_usd,
+                              CASE
+                                  WHEN stage = 'tts'
+                                  THEN estimated_tts_cost_usd
+                                  ELSE NULL
+                              END
+                          ) = 0
+                          AND COALESCE(
+                              metadata_json->>'pricing_source',
+                              ''
+                          ) IN (
+                              'local_whisper:no_external_api_cost',
+                              'apple:pcc:no_cloud_api_cost'
+                          )
+                    ) AS zero_cost_events,
+
+                    COUNT(*) FILTER (
+                        WHERE stage IN (
+                            'transcribe',
+                            'tts',
+                            'realtime_interaction'
+                        )
+                          AND COALESCE(status, '') NOT IN (
+                              'duplicate',
+                              'denied'
+                          )
+                          AND estimated_external_cost_usd IS NULL
+                          AND NOT (
+                              stage = 'tts'
+                              AND estimated_tts_cost_usd IS NOT NULL
+                          )
+                    ) AS unpriced_events
+                FROM voice_usage_events
+                WHERE user_id = %s
+                  AND created_at >= %s
+                """,
+                (user_id, window_start)
+            )
+            voice_economics = cur.fetchone() or {}
+
+            oracle_summary = dict(oracle_summary or {})
+            voice_summary = dict(voice_summary or {})
+
+            estimated_oracle_cost_usd = (
+                oracle_economics.get(
+                    "estimated_oracle_cost_usd"
+                )
+                or 0
+            )
+            estimated_transcription_cost_usd = (
+                voice_economics.get(
+                    "estimated_transcription_cost_usd"
+                )
+                or 0
+            )
+            estimated_realtime_cost_usd = (
+                voice_economics.get(
+                    "estimated_realtime_cost_usd"
+                )
+                or 0
+            )
+            estimated_tts_cost_usd = (
+                voice_economics.get(
+                    "estimated_tts_cost_usd"
+                )
+                or 0
+            )
+
+            oracle_summary[
+                "estimated_oracle_cost_usd"
+            ] = estimated_oracle_cost_usd
+
+            voice_summary[
+                "estimated_transcription_cost_usd"
+            ] = estimated_transcription_cost_usd
+
+            voice_summary[
+                "estimated_realtime_cost_usd"
+            ] = estimated_realtime_cost_usd
+
+            voice_summary[
+                "estimated_tts_cost_usd"
+            ] = estimated_tts_cost_usd
+
+            voice_summary[
+                "estimated_total_external_ai_cost_usd"
+            ] = (
+                estimated_oracle_cost_usd
+                + estimated_transcription_cost_usd
+                + estimated_realtime_cost_usd
+                + estimated_tts_cost_usd
+            )
+
+            oracle_zero_cost_events = int(
+                oracle_economics.get(
+                    "zero_cost_events"
+                )
+                or 0
+            )
+            voice_zero_cost_events = int(
+                voice_economics.get(
+                    "zero_cost_events"
+                )
+                or 0
+            )
+
+            oracle_unpriced_events = int(
+                oracle_economics.get(
+                    "unpriced_events"
+                )
+                or 0
+            )
+            voice_unpriced_events = int(
+                voice_economics.get(
+                    "unpriced_events"
+                )
+                or 0
+            )
+
+            oracle_summary[
+                "zero_cost_events"
+            ] = oracle_zero_cost_events
+            oracle_summary[
+                "unpriced_events"
+            ] = oracle_unpriced_events
+
+            voice_summary[
+                "zero_cost_events"
+            ] = (
+                oracle_zero_cost_events
+                + voice_zero_cost_events
+            )
+
+            voice_summary[
+                "unpriced_events"
+            ] = (
+                oracle_unpriced_events
+                + voice_unpriced_events
+            )
+
+            cur.execute(
+                """
+                SELECT
                     created_at,
                     plan_code,
                     input_mode,
@@ -9269,7 +10061,10 @@ def get_admin_user_usage_report(user_id: str, days: int = 30) -> dict:
                     tts_provider,
                     tts_model,
                     tts_voice,
-                    estimated_tts_cost_usd
+                    estimated_tts_cost_usd,
+                    estimated_external_cost_usd,
+                    metadata_json->>'pricing_source'
+                        AS pricing_source
                 FROM voice_usage_events
                 WHERE user_id = %s
                   AND created_at >= %s
@@ -9585,6 +10380,29 @@ async def voice_transcribe_endpoint(
         transcribe_api_ms = transcription_result.get("api_ms", "-")
         transcribe_audio_bytes = transcription_result.get("audio_bytes", len(file_bytes or b""))
         transcribe_attempts = transcription_result.get("attempts", [])
+        transcribe_duration_seconds = (
+            transcription_result.get(
+                "duration_seconds"
+            )
+        )
+        transcribe_usage = transcription_result.get(
+            "usage"
+        )
+        transcribe_pricing = (
+            get_transcription_pricing_info(
+                transcribe_provider,
+                transcribe_model,
+            )
+        )
+        estimated_transcription_cost_usd = (
+            calculate_transcription_estimated_cost_usd(
+                provider=transcribe_provider,
+                model=transcribe_model,
+                duration_seconds=
+                    transcribe_duration_seconds,
+                usage=transcribe_usage,
+            )
+        )
 
         if not transcript:
             transcribe_ms = voice_stage_ms(transcribe_started_at, transcribe_finished_at)
@@ -9608,6 +10426,8 @@ async def voice_transcribe_endpoint(
                 transcribe_ms=transcribe_ms,
                 total_ms=total_ms,
                 transcript_chars=0,
+                estimated_external_cost_usd=
+                    estimated_transcription_cost_usd,
                 metadata_json={
                     "phase": "11.x",
                     "event_source": "voice_transcribe_endpoint",
@@ -9615,6 +10435,11 @@ async def voice_transcribe_endpoint(
                     "model": transcribe_model,
                     "api_ms": transcribe_api_ms,
                     "audio_bytes": transcribe_audio_bytes,
+                    "duration_seconds":
+                        transcribe_duration_seconds,
+                    "provider_usage": transcribe_usage,
+                    "pricing_source":
+                        transcribe_pricing.get("source"),
                     "attempts": transcribe_attempts,
                 }
             )
@@ -9645,6 +10470,8 @@ async def voice_transcribe_endpoint(
             transcribe_ms=transcribe_ms,
             total_ms=total_ms,
             transcript_chars=len(transcript or ""),
+            estimated_external_cost_usd=
+                estimated_transcription_cost_usd,
             metadata_json={
                 "phase": "11.x",
                 "event_source": "voice_transcribe_endpoint",
@@ -9652,6 +10479,11 @@ async def voice_transcribe_endpoint(
                 "model": transcribe_model,
                 "api_ms": transcribe_api_ms,
                 "audio_bytes": transcribe_audio_bytes,
+                "duration_seconds":
+                    transcribe_duration_seconds,
+                "provider_usage": transcribe_usage,
+                "pricing_source":
+                    transcribe_pricing.get("source"),
                 "attempts": transcribe_attempts,
             }
         )
@@ -10136,6 +10968,8 @@ async def voice_tts_endpoint(request: Request):
             tts_model=active_tts_model,
             tts_voice=voice,
             estimated_tts_cost_usd=estimated_tts_cost_usd,
+            estimated_external_cost_usd=
+                estimated_tts_cost_usd,
             metadata_json={
                 "phase": "10.7",
                 "event_source": "voice_tts_endpoint",
@@ -10759,6 +11593,24 @@ async def voice_realtime_interaction_endpoint(
             },
         )
 
+    provider_usage = body.get("provider_usage")
+    if not isinstance(provider_usage, dict):
+        provider_usage = None
+
+    realtime_pricing = (
+        get_realtime_voice_pricing_info(
+            provider,
+            model,
+        )
+    )
+    estimated_realtime_cost_usd = (
+        calculate_realtime_voice_estimated_cost_usd(
+            provider=provider,
+            model=model,
+            usage=provider_usage,
+        )
+    )
+
     metadata = {
         "phase": "11.10R",
         "event_source":
@@ -10773,6 +11625,9 @@ async def voice_realtime_interaction_endpoint(
         "input_mode": input_mode,
         "provider": provider,
         "model": model,
+        "provider_usage": provider_usage,
+        "pricing_source":
+            realtime_pricing.get("source"),
         "transport": transport,
         "provider_voice": provider_voice,
         "client_session_id":
@@ -10879,6 +11734,8 @@ async def voice_realtime_interaction_endpoint(
                 len(user_transcript),
             answer_chars=
                 len(assistant_transcript),
+            estimated_external_cost_usd=
+                estimated_realtime_cost_usd,
             metadata_json={
                 **metadata,
                 "reason":
@@ -10964,6 +11821,11 @@ async def voice_realtime_interaction_endpoint(
                 len(user_transcript),
             answer_chars=
                 len(assistant_transcript),
+            estimated_external_cost_usd=(
+                None
+                if duplicate
+                else estimated_realtime_cost_usd
+            ),
             metadata_json={
                 **metadata,
                 "oracle_interaction_id":
@@ -11033,6 +11895,8 @@ async def voice_realtime_interaction_endpoint(
                 len(user_transcript),
             answer_chars=
                 len(assistant_transcript),
+            estimated_external_cost_usd=
+                estimated_realtime_cost_usd,
             metadata_json={
                 **metadata,
                 "error": str(exc),
