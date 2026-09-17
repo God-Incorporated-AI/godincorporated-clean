@@ -2512,81 +2512,6 @@ if (seekerInput && oracleForm) {
     };
   }
 
-  function templeRealtimeMediaDiagnostic(name, providerEvent) {
-    try {
-      function shape(value) {
-        const object =
-          value !== null &&
-          typeof value === "object" &&
-          !Array.isArray(value);
-
-        return {
-          present: value !== undefined && value !== null,
-          type: value === null
-            ? "null"
-            : Array.isArray(value)
-              ? "array"
-              : typeof value,
-          keys: object ? Object.keys(value).sort().slice(0, 40) : []
-        };
-      }
-
-      const audio = templeRealtimeState.remoteAudio;
-      const stream = templeRealtimeState.remoteStream;
-      const track = stream && stream.getAudioTracks
-        ? stream.getAudioTracks()[0]
-        : null;
-      const pc = templeRealtimeState.peerConnection;
-      const clock = audio ? Number(audio.currentTime) : NaN;
-
-      const details = {
-        diagnostic_version: "20260917-realtime-media-diagnostics1",
-        client_monotonic_ms: Number(performance.now().toFixed(3)),
-        response_id: templeRealtimeState.currentResponseId || "",
-        transport: "webrtc",
-        visibility: document.visibilityState,
-        connection_state: pc ? pc.connectionState : null,
-        state_usage: shape(templeRealtimeState.currentResponseUsage),
-        media: audio ? {
-          present: true,
-          current_time_seconds: Number.isFinite(clock)
-            ? Number(clock.toFixed(3))
-            : null,
-          paused: Boolean(audio.paused),
-          ended: Boolean(audio.ended),
-          ready_state: audio.readyState,
-          network_state: audio.networkState,
-          muted: Boolean(audio.muted),
-          volume: audio.volume,
-          playback_rate: audio.playbackRate,
-          error_code: audio.error ? audio.error.code : null,
-          src_object_present: Boolean(audio.srcObject),
-          track_ready_state: track ? track.readyState : null,
-          track_muted: track ? Boolean(track.muted) : null,
-          track_enabled: track ? Boolean(track.enabled) : null
-        } : { present: false }
-      };
-
-      if (providerEvent && typeof providerEvent === "object") {
-        const response = providerEvent.response || {};
-        const usage = response.usage;
-        details.event_shape = shape(providerEvent);
-        details.response_shape = shape(response);
-        details.response_usage = shape(usage);
-        details.event_usage = shape(providerEvent.usage);
-        details.payload_usage = shape(providerEvent.provider_usage);
-        details.input_details = shape(usage && usage.input_token_details);
-        details.output_details = shape(usage && usage.output_token_details);
-      }
-
-      templeRealtimeAuditEvent(
-        "realtime_diagnostic_" + name,
-        details
-      );
-    } catch (err) {
-      // Diagnostics must not interrupt the existing voice path.
-    }
-  }
   function templeRealtimeEventResponseId(event) {
     const response = event && event.response && typeof event.response === "object"
       ? event.response
@@ -2935,7 +2860,6 @@ if (seekerInput && oracleForm) {
         reason
       );
 
-    templeRealtimeMediaDiagnostic("interaction_report_started", payload);
     templeRealtimeAuditEvent(
       "interaction_report_started",
       {
@@ -3486,20 +3410,6 @@ if (seekerInput && oracleForm) {
       );
     }
 
-    try {
-      [
-        "play", "playing", "pause", "waiting", "stalled",
-        "ended", "emptied", "error", "volumechange"
-      ].forEach(function (name) {
-        remoteAudio.addEventListener(name, function () {
-          if (transportIsCurrent()) {
-            templeRealtimeMediaDiagnostic("remote_audio_" + name);
-          }
-        });
-      });
-    } catch (err) {
-      // Diagnostic installation only.
-    }
     function endUnexpectedly(reason, details) {
       if (
         !transportIsCurrent() ||
@@ -3585,25 +3495,6 @@ if (seekerInput && oracleForm) {
 
         remoteAudio.srcObject =
           remoteStream;
-        try {
-          templeRealtimeMediaDiagnostic("remote_track_attached");
-
-          if (event.track && event.track.kind === "audio") {
-            ["mute", "unmute", "ended"].forEach(function (name) {
-              event.track.addEventListener(name, function () {
-                if (
-                  transportIsCurrent() &&
-                  templeRealtimeState.remoteStream === remoteStream
-                ) {
-                  templeRealtimeMediaDiagnostic("remote_track_" + name);
-                }
-              });
-            });
-          }
-        } catch (err) {
-          // Diagnostic installation only.
-        }
-
 
         const playResult =
           remoteAudio.play();
@@ -5885,7 +5776,6 @@ if (seekerInput && oracleForm) {
             )
           : 0;
 
-      templeRealtimeMediaDiagnostic("output_audio_done", event);
       templeRealtimeAuditEvent(
         "output_audio_done",
         {
@@ -5959,7 +5849,6 @@ if (seekerInput && oracleForm) {
         }
       }
 
-      templeRealtimeMediaDiagnostic("response_done", event);
       templeRealtimeAuditEvent(
         "response_done",
         {
@@ -6116,7 +6005,6 @@ if (seekerInput && oracleForm) {
         "webrtc_playback_stopped"
       );
 
-      templeRealtimeMediaDiagnostic("output_audio_buffer_stopped", event);
       templeRealtimeAuditEvent(
         "output_audio_buffer_stopped",
         {
