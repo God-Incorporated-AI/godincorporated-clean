@@ -1666,6 +1666,9 @@ def finalize_oracle_inference(
     memory_intent = finalization_state["memory_intent"]
     oracle_interaction_style = finalization_state["oracle_interaction_style"]
     response_word_cap = finalization_state["response_word_cap"]
+    requested_sentence_count = finalization_state.get(
+        "requested_sentence_count"
+    )
     interaction_id = finalization_state.get("interaction_id")
     pcc_fallback_code = finalization_state.get("pcc_fallback_code")
     pcc_abandoned_interaction_id = finalization_state.get(
@@ -1710,6 +1713,15 @@ def finalize_oracle_inference(
         raw_answer,
         response_word_cap,
     )
+
+    if (
+        normalized_input_mode == "text"
+        and requested_sentence_count
+    ):
+        raw_answer = trim_response_to_sentence_count(
+            raw_answer,
+            requested_sentence_count,
+        )
 
     # --- Authoritative durable completion ---
     durable_input_type = (
@@ -7377,6 +7389,108 @@ def words_to_max_tokens(word_cap: int) -> int:
     # A tight token cap causes the model to stop mid-sentence before
     # sentence-safe trimming can do its job.
     return max(180, int(word_cap * 2.25))
+
+
+def trim_response_to_sentence_count(
+    answer: str,
+    sentence_count: Optional[int],
+) -> str:
+    """
+    Cap a completed text response to the requested number of complete
+    sentences without creating a second response-processing rail.
+
+    Sentence boundaries intentionally mirror the native PCC first-sentence
+    detector for common abbreviations, initials, and compact dotted forms.
+    """
+    text = (answer or "").strip()
+
+    try:
+        target = int(sentence_count or 0)
+    except (TypeError, ValueError):
+        return text
+
+    if target <= 0 or not text:
+        return text
+
+    closing_characters = set("\"'”’)]}")
+    common_abbreviations = {
+        "mr.",
+        "mrs.",
+        "ms.",
+        "dr.",
+        "prof.",
+        "sr.",
+        "jr.",
+        "st.",
+        "vs.",
+        "etc.",
+        "e.g.",
+        "i.e.",
+    }
+
+    completed_sentences = 0
+    index = 0
+
+    while index < len(text):
+        terminal = text[index]
+
+        if terminal not in ".!?":
+            index += 1
+            continue
+
+        boundary = index + 1
+
+        while (
+            boundary < len(text)
+            and text[boundary] in closing_characters
+        ):
+            boundary += 1
+
+        candidate = text[:boundary].strip()
+
+        if terminal == ".":
+            lower_candidate = candidate.lower()
+
+            if any(
+                lower_candidate.endswith(abbreviation)
+                for abbreviation in common_abbreviations
+            ):
+                index += 1
+                continue
+
+            without_closing_characters = candidate.rstrip(
+                "\"'”’)]}"
+            )
+
+            before_period = (
+                without_closing_characters[:-1]
+                if without_closing_characters.endswith(".")
+                else without_closing_characters
+            )
+
+            final_token = (
+                before_period.split()[-1]
+                if before_period.split()
+                else ""
+            )
+
+            # Match the accepted iOS behavior: do not treat initials
+            # or compact dotted forms such as "J." or "U.S." as
+            # sentence boundaries.
+            if len(final_token) == 1 or "." in final_token:
+                index += 1
+                continue
+
+        completed_sentences += 1
+
+        if completed_sentences >= target:
+            return candidate
+
+        index = boundary
+
+    # If the provider returned fewer complete sentences than requested,
+    # preserve the usable response rather than fabricating content.
+    return text
 
 
 def trim_response_to_word_cap(answer: str, word_cap: int) -> str:
@@ -15629,14 +15743,51 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         normalized_length_request = re.sub(
             r"\s+", " ", (question or "").lower()
         ).strip()
+
+        sentence_count_pattern = (
+            r"\b(?:in|using|use|give me)\s+"
+            r"(?:exactly\s+)?"
+            r"(?P<count>one|a single|two|three|four|five|\d+)\s+"
+            r"(?:short\s+)?sentences?\b"
+        )
+
+        sentence_count_match = re.search(
+            sentence_count_pattern,
+            normalized_length_request,
+        )
+
+        requested_sentence_count = None
+
+        if sentence_count_match:
+            sentence_count_token = sentence_count_match.group("count")
+            sentence_count_words = {
+                "one": 1,
+                "a single": 1,
+                "two": 2,
+                "three": 3,
+                "four": 4,
+                "five": 5,
+            }
+
+            if sentence_count_token.isdigit():
+                parsed_sentence_count = int(sentence_count_token)
+            else:
+                parsed_sentence_count = sentence_count_words.get(
+                    sentence_count_token
+                )
+
+            if parsed_sentence_count and parsed_sentence_count > 0:
+                requested_sentence_count = parsed_sentence_count
+
         explicit_length_patterns = [
-            r"\b(?:in|using|use|give me)\s+(?:exactly\s+)?(?:one|a single|two|three|four|five|\d+)\s+(?:short\s+)?sentences?\b",
+            sentence_count_pattern,
             r"\b(?:exactly|about|around|under|within|at most|no more than|in)\s+\d+\s+words?\b",
             r"\bbriefly\s+(?:answer|explain|describe|summarize|respond)\b",
             r"\b(?:answer|explain|describe|summarize|respond)\s+(?:briefly|concisely)\b",
             r"\b(?:give me|provide)\s+(?:a\s+)?(?:brief|short|concise)\s+(?:answer|response|summary)\b",
             r"\bkeep\s+(?:it|the answer|your answer|the response|your response)\s+(?:brief|short|concise)\b",
         ]
+
         explicit_length_request = any(
             re.search(pattern, normalized_length_request)
             for pattern in explicit_length_patterns
@@ -15717,13 +15868,14 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         enhanced_question_chars = len(enhanced_question or "")
 
         logger.info(
-            "PROMPT_BUDGET plan_code=%s deity=%s input_mode=%s memory_intent=%s interaction_style=%s explicit_length_request=%s response_word_cap=%s response_min_words=%s response_max_tokens=%s recent_memory_chars=%s limited_memories_count=%s limited_memories_chars=%s memory_block_chars=%s context_block_chars=%s instruction_block_chars=%s enhanced_question_chars=%s passages=%s",
+            "PROMPT_BUDGET plan_code=%s deity=%s input_mode=%s memory_intent=%s interaction_style=%s explicit_length_request=%s requested_sentence_count=%s response_word_cap=%s response_min_words=%s response_max_tokens=%s recent_memory_chars=%s limited_memories_count=%s limited_memories_chars=%s memory_block_chars=%s context_block_chars=%s instruction_block_chars=%s enhanced_question_chars=%s passages=%s",
             plan_code,
             deity,
             input_mode,
             memory_intent,
             oracle_interaction_style,
             explicit_length_request,
+            requested_sentence_count,
             response_word_cap,
             response_min_words,
             response_max_tokens,
@@ -15783,6 +15935,7 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             "memory_intent": memory_intent,
             "oracle_interaction_style": oracle_interaction_style,
             "response_word_cap": response_word_cap,
+            "requested_sentence_count": requested_sentence_count,
             "enhanced_question_chars": len(enhanced_question or ""),
             "prepared_input_chars": prepared_input_chars,
             "memory_has_content": bool(memory_block.strip()),
