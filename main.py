@@ -15625,11 +15625,28 @@ async def ask_oracle(request: Request, payload: QuestionInput):
             response_word_cap = min(response_word_cap, 90 if normalized_input_mode == "text" else 50)
 
         response_max_tokens = words_to_max_tokens(response_word_cap)
+
+        normalized_length_request = re.sub(
+            r"\s+", " ", (question or "").lower()
+        ).strip()
+        explicit_length_patterns = [
+            r"\b(?:in|using|use|give me)\s+(?:exactly\s+)?(?:one|a single|two|three|four|five|\d+)\s+(?:short\s+)?sentences?\b",
+            r"\b(?:exactly|about|around|under|within|at most|no more than|in)\s+\d+\s+words?\b",
+            r"\bbriefly\s+(?:answer|explain|describe|summarize|respond)\b",
+            r"\b(?:answer|explain|describe|summarize|respond)\s+(?:briefly|concisely)\b",
+            r"\b(?:give me|provide)\s+(?:a\s+)?(?:brief|short|concise)\s+(?:answer|response|summary)\b",
+            r"\bkeep\s+(?:it|the answer|your answer|the response|your response)\s+(?:brief|short|concise)\b",
+        ]
+        explicit_length_request = any(
+            re.search(pattern, normalized_length_request)
+            for pattern in explicit_length_patterns
+        )
         response_min_words = 0
         if (
             memory_intent != "recall"
             and normalized_input_mode == "text"
             and oracle_interaction_style != "gentle_conversation"
+            and not explicit_length_request
         ):
             response_min_words = max(220, int(response_word_cap * 0.58))
 
@@ -15677,9 +15694,9 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         5. Keep responses coherent and under {response_word_cap} words.
         6. Do not exceed the word cap. Prefer a complete, bounded answer over a long essay.
         7. For higher access levels, allow a fuller reflection when the question genuinely invites it, while still avoiding rambling.
-        8. If input_mode is text and the question invites reflection, provide a complete written reflection with useful structure, synthesis, and continuity. Unless the seeker asks for brevity, aim for at least {response_min_words} words while staying under {response_word_cap} words.
+        8. Explicit seeker brevity or length request detected: {explicit_length_request}. Honor the seeker's requested sentence count, word count, or brevity without exceeding {response_word_cap} words. An explicit request overrides the normal minimum-length and paragraph guidance; do not add material outside the requested format. Otherwise, for substantive text reflections without an explicit length request, aim for at least {response_min_words} words while staying under the maximum.
         9. If input_mode is voice, keep the answer naturally speakable and concise.
-        10. For text mode, prefer 3 to 6 coherent paragraphs or short sections only when that helps the answer breathe.
+        10. For text mode without an explicit brevity or length request, prefer 3 to 6 coherent paragraphs or short sections only when that helps the answer breathe.
         """
         enhanced_question = f"""{instruction_block}
 
@@ -15700,12 +15717,13 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         enhanced_question_chars = len(enhanced_question or "")
 
         logger.info(
-            "PROMPT_BUDGET plan_code=%s deity=%s input_mode=%s memory_intent=%s interaction_style=%s response_word_cap=%s response_min_words=%s response_max_tokens=%s recent_memory_chars=%s limited_memories_count=%s limited_memories_chars=%s memory_block_chars=%s context_block_chars=%s instruction_block_chars=%s enhanced_question_chars=%s passages=%s",
+            "PROMPT_BUDGET plan_code=%s deity=%s input_mode=%s memory_intent=%s interaction_style=%s explicit_length_request=%s response_word_cap=%s response_min_words=%s response_max_tokens=%s recent_memory_chars=%s limited_memories_count=%s limited_memories_chars=%s memory_block_chars=%s context_block_chars=%s instruction_block_chars=%s enhanced_question_chars=%s passages=%s",
             plan_code,
             deity,
             input_mode,
             memory_intent,
             oracle_interaction_style,
+            explicit_length_request,
             response_word_cap,
             response_min_words,
             response_max_tokens,
