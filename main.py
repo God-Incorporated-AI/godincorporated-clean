@@ -15031,6 +15031,9 @@ def detect_memory_intent(question: str) -> str:
     # seeker-Oracle dialogue, not for generic temporal words.
     recall_patterns = [
         "what did i ask",
+        "what did i just ask",
+        "what was the question i just asked",
+        "what did i ask you just now",
         "what did i say",
         "what did you say",
         "what did we discuss",
@@ -15645,7 +15648,13 @@ async def ask_oracle(request: Request, payload: QuestionInput):
         4. If memory is unclear or incomplete, say so.
         5. Prefer quoting or closely paraphrasing prior exchanges.
         6. Keep the answer concise and directly tied to the recall request.
-        7. Keep the full answer under {response_word_cap} words.
+        7. If the seeker asks what they "just" asked or what their "last question" was,
+        answer with the chronologically newest Seeker question in PRIMARY EVIDENCE.
+        Only if PRIMARY EVIDENCE contains no seeker question may you use the newest
+        seeker question in SECONDARY EVIDENCE. Do not infer the answer from topic
+        similarity or background knowledge.
+
+        8. Keep the full answer under {response_word_cap} words.
 
         Return format:
         - First sentence: direct answer
