@@ -2092,8 +2092,8 @@ struct NativeVoiceSessionView: View {
 
         case "moses":
             // Moses is already authoritative when selected in the GUI.
-            // No speculative recognition aliases are added until observed.
-            pattern = #"(?i)^\s*(?:(?:hello|hi|hey)\s*[,!.\-]?\s+)?moses\s*[,!?.:\-]?\s*"#
+            // Correct the observed Mobis miss plus a small set of close phonetic opening forms.
+            pattern = #"(?i)^\s*(?:(?:hello|hi|hey)\s*[,!.\-]?\s+)?(?:moses|mobis|mosis|mosus|mosas|mose)\s*[,!?.:\-]?\s*"#
 
         default:
             return transcript
