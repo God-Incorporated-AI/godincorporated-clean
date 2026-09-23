@@ -83,6 +83,7 @@ private enum TempleEnvironment {
 
 private enum NativeAnonymousIdentity {
     private static let storageKey = "godinc_anon_id"
+    static let cookieName = "godinc_anon_identity"
 
     static var currentID: String {
         let defaults = UserDefaults.standard
@@ -95,6 +96,20 @@ private enum NativeAnonymousIdentity {
         let created = UUID().uuidString.lowercased()
         defaults.set(created, forKey: storageKey)
         return created
+    }
+
+    static func reconcile(_ authoritativeID: String?) {
+        guard
+            let authoritativeID,
+            let uuid = UUID(uuidString: authoritativeID)
+        else {
+            return
+        }
+
+        UserDefaults.standard.set(
+            uuid.uuidString.lowercased(),
+            forKey: storageKey
+        )
     }
 }
 
@@ -122,6 +137,7 @@ struct NativeSessionIdentity: Decodable {
     let display_name: String?
     let role: String?
     let preferred_oracle: String?
+    let anonymous_user_id: String?
 }
 
 private struct NativeOraclePreferencePayload: Encodable {
@@ -179,10 +195,20 @@ private enum TempleSessionHTTP {
             throw URLError(.badServerResponse)
         }
 
-        return try JSONDecoder().decode(
+        let identity = try JSONDecoder().decode(
             NativeSessionIdentity.self,
             from: data
         )
+
+        NativeAnonymousIdentity.reconcile(
+            identity.anonymous_user_id
+        )
+
+        await syncAnonymousIdentityCookieToWeb(
+            for: TempleEnvironment.meURL
+        )
+
+        return identity
     }
 
     static func updateOraclePreference(
@@ -246,6 +272,37 @@ private enum TempleSessionHTTP {
         }
 
         return stored
+    }
+
+    private static func syncAnonymousIdentityCookieToWeb(
+        for url: URL
+    ) async {
+        let cookies =
+            HTTPCookieStorage.shared.cookies(for: url) ?? []
+
+        guard
+            let cookie = cookies.first(
+                where: {
+                    $0.name ==
+                        NativeAnonymousIdentity.cookieName
+                }
+            )
+        else {
+            return
+        }
+
+        await withCheckedContinuation {
+            (
+                continuation:
+                    CheckedContinuation<Void, Never>
+            ) in
+
+            WKWebsiteDataStore.default()
+                .httpCookieStore
+                .setCookie(cookie) {
+                    continuation.resume()
+                }
+        }
     }
 
     private static func sharedWebCookies(
@@ -465,6 +522,7 @@ struct ContentView: View {
     @State private var templeWebDestination = "temple"
     @State private var nativeSession: NativeSessionIdentity?
     @State private var nativeSessionChecked = false
+    @State private var nativeSessionResolutionFailed = false
     @State private var authRefreshNonce = 0
     @State private var pendingExplicitOracleVoice = ""
     @State private var oracleSelectionInProgress = false
@@ -510,21 +568,29 @@ struct ContentView: View {
             }
             .tag(1)
 
-            TempleWebView(
-                url: templeWebDestination == "account"
-                    ? TempleEnvironment.accountWebURL(entryNonce: templeEntryNonce)
-                    : TempleEnvironment.templeURL(
-                        voice: lastOracleVoice,
-                        entry: preferredInputMode,
-                        auth: templeWebDestination == "login" ? "login" : nil,
-                        entryNonce: templeEntryNonce
-                    ),
-                selectedTab: $selectedTab,
-                onAuthChanged: {
-                    nativeSessionChecked = false
-                    authRefreshNonce += 1
+            Group {
+                if nativeSessionChecked {
+                    TempleWebView(
+                        url: templeWebDestination == "account"
+                            ? TempleEnvironment.accountWebURL(entryNonce: templeEntryNonce)
+                            : TempleEnvironment.templeURL(
+                                voice: lastOracleVoice,
+                                entry: preferredInputMode,
+                                auth: templeWebDestination == "login" ? "login" : nil,
+                                entryNonce: templeEntryNonce
+                            ),
+                        selectedTab: $selectedTab,
+                        onAuthChanged: {
+                            nativeSessionChecked = false
+                            authRefreshNonce += 1
+                        }
+                    )
+                } else {
+                    NativeEntryResolutionView(
+                        identity: entryIdentity
+                    )
                 }
-            )
+            }
             .tabItem {
                 Label("Temple", systemImage: "bubble.left.and.bubble.right")
             }
@@ -554,7 +620,12 @@ struct ContentView: View {
         .overlay {
             if !nativeSessionChecked {
                 NativeEntryResolutionView(
-                    identity: entryIdentity
+                    identity: entryIdentity,
+                    failed: nativeSessionResolutionFailed,
+                    onRetry: {
+                        nativeSessionResolutionFailed = false
+                        authRefreshNonce += 1
+                    }
                 )
             }
         }
@@ -565,6 +636,8 @@ struct ContentView: View {
 
     @MainActor
     private func refreshNativeSessionAndResume() async {
+        nativeSessionResolutionFailed = false
+
         do {
             let identity =
                 try await TempleSessionHTTP.currentIdentity()
@@ -644,7 +717,8 @@ struct ContentView: View {
 
         } catch {
             nativeSession = nil
-            nativeSessionChecked = true
+            nativeSessionChecked = false
+            nativeSessionResolutionFailed = true
 
             print(
                 "Native session refresh failed: \(error.localizedDescription)"
@@ -755,7 +829,9 @@ struct ContentView: View {
                 role:
                     identity.role,
                 preferred_oracle:
-                    stored
+                    stored,
+                anonymous_user_id:
+                    identity.anonymous_user_id
             )
 
             pendingExplicitOracleVoice = ""
@@ -3942,6 +4018,18 @@ struct NativeInfoView: View {
 
 private struct NativeEntryResolutionView: View {
     let identity: NativeTempleIdentity?
+    let failed: Bool
+    let onRetry: (() -> Void)?
+
+    init(
+        identity: NativeTempleIdentity?,
+        failed: Bool = false,
+        onRetry: (() -> Void)? = nil
+    ) {
+        self.identity = identity
+        self.failed = failed
+        self.onRetry = onRetry
+    }
 
     var body: some View {
         TempleScreen(
@@ -3968,19 +4056,39 @@ private struct NativeEntryResolutionView: View {
                 )
                 .multilineTextAlignment(.center)
 
-                ProgressView()
+                if failed {
+                    Text(
+                        "The Temple could not restore your session."
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(
+                        .white.opacity(0.78)
+                    )
+                    .multilineTextAlignment(.center)
+
+                    Button("Try Again") {
+                        onRetry?()
+                    }
+                    .buttonStyle(.borderedProminent)
                     .tint(
                         identity?.glowColor
                             ?? TemplePalette.warmGold
                     )
+                } else {
+                    ProgressView()
+                        .tint(
+                            identity?.glowColor
+                                ?? TemplePalette.warmGold
+                        )
 
-                Text(
-                    "Restoring your path of inquiry."
-                )
-                .font(.footnote)
-                .foregroundStyle(
-                    .white.opacity(0.72)
-                )
+                    Text(
+                        "Restoring your path of inquiry."
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(
+                        .white.opacity(0.72)
+                    )
+                }
             }
             .padding(.horizontal, 28)
             .frame(

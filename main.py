@@ -4,6 +4,7 @@ from datetime import timezone
 import hashlib
 import json
 import logging
+import hmac
 import os
 import shutil
 import subprocess
@@ -96,8 +97,119 @@ PGVECTOR_RETRIEVAL_LIMIT = int(os.getenv("PGVECTOR_RETRIEVAL_LIMIT", "5"))
 VALID_RETRIEVAL_BACKENDS = {"legacy_embeddings", "pgvector", "fts"}
 
 BROWSER_TOKEN_HEADER = "x-anonymous-user-id"
+ANONYMOUS_IDENTITY_COOKIE_NAME = "godinc_anon_identity"
+ANONYMOUS_IDENTITY_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365
 ANONYMOUS_UPLOAD_COOLDOWN_SECONDS = 5
 ANONYMOUS_UPLOAD_LIMIT = 3
+
+
+DEV_SESSION_SECRET = "dev-secret-key-change-in-prod"
+
+
+def _is_deployed_environment() -> bool:
+    env = (
+        os.getenv("APP_ENV")
+        or os.getenv("ENVIRONMENT")
+        or "development"
+    ).strip().lower()
+
+    running_on_render = (
+        os.getenv("RENDER") or ""
+    ).strip().lower() == "true"
+
+    return (
+        running_on_render
+        or env in {
+            "production",
+            "prod",
+            "staging",
+            "stage",
+        }
+    )
+
+
+def _session_secret() -> str:
+    secret = (os.getenv("SESSION_SECRET") or "").strip()
+
+    if _is_deployed_environment():
+        if not secret or secret == DEV_SESSION_SECRET:
+            raise RuntimeError(
+                "A non-development SESSION_SECRET is required "
+                "outside local development."
+            )
+
+        return secret
+
+    return secret or DEV_SESSION_SECRET
+
+
+def _session_cookie_https_only() -> bool:
+    return _is_deployed_environment()
+
+
+def _anonymous_identity_cookie_secret() -> bytes:
+    secret = (
+        os.getenv("ANON_IDENTITY_COOKIE_SECRET")
+        or _session_secret()
+    )
+
+    return secret.encode("utf-8")
+
+
+def _anonymous_identity_cookie_value(
+    anonymous_user_id: str,
+) -> str:
+    signature = hmac.new(
+        _anonymous_identity_cookie_secret(),
+        anonymous_user_id.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    return f"{anonymous_user_id}.{signature}"
+
+
+def get_anonymous_identity_cookie_from_request(
+    request: Request,
+) -> Optional[str]:
+    raw = (
+        request.cookies.get(ANONYMOUS_IDENTITY_COOKIE_NAME)
+        or ""
+    ).strip()
+
+    if not raw or "." not in raw:
+        return None
+
+    candidate, signature = raw.rsplit(".", 1)
+
+    try:
+        anonymous_user_id = str(
+            uuid.UUID(candidate.strip())
+        )
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+    expected_signature = hmac.new(
+        _anonymous_identity_cookie_secret(),
+        anonymous_user_id.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+    if not hmac.compare_digest(
+        signature,
+        expected_signature,
+    ):
+        return None
+
+    return anonymous_user_id
+
+
+def _anonymous_identity_cookie_secure(
+    request: Request,
+) -> bool:
+    return (
+        _is_deployed_environment()
+        or request.url.scheme.lower() == "https"
+    )
 
 def get_ip_hash(request: Request) -> str:
     ip = request.client.host if request.client else "unknown"
@@ -175,8 +287,41 @@ templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.getenv("SESSION_SECRET", "dev-secret-key-change-in-prod")
+    secret_key=_session_secret(),
+    https_only=_session_cookie_https_only(),
+    same_site="lax",
 )
+
+
+@app.middleware("http")
+async def persist_anonymous_identity_cookie(
+    request: Request,
+    call_next,
+):
+    response = await call_next(request)
+
+    anonymous_user_id = getattr(
+        request.state,
+        "anonymous_user_id",
+        None,
+    )
+
+    if anonymous_user_id:
+        response.set_cookie(
+            key=ANONYMOUS_IDENTITY_COOKIE_NAME,
+            value=_anonymous_identity_cookie_value(
+                anonymous_user_id
+            ),
+            max_age=ANONYMOUS_IDENTITY_COOKIE_MAX_AGE_SECONDS,
+            path="/",
+            secure=_anonymous_identity_cookie_secure(
+                request
+            ),
+            httponly=True,
+            samesite="lax",
+        )
+
+    return response
 
 
 
@@ -8333,6 +8478,38 @@ def _canonical_identity_uuid(value) -> Optional[str]:
         return None
 
 
+def anonymous_user_exists(anonymous_user_id: str) -> bool:
+    """
+    Return whether an economic anonymous identity already exists.
+
+    Unsigned client UUIDs may reclaim an existing legacy identity,
+    but they may not manufacture a new economic identity.
+    """
+    anonymous_user_id = _canonical_identity_uuid(
+        anonymous_user_id
+    )
+
+    if not anonymous_user_id:
+        return False
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1
+                FROM anonymous_users
+                WHERE id = %s
+                """,
+                (anonymous_user_id,),
+            )
+            return cur.fetchone() is not None
+
+    finally:
+        conn.close()
+
+
 def get_or_create_anonymous_user_id(
     request: Request,
     provided_id: Optional[str] = None,
@@ -8343,6 +8520,9 @@ def get_or_create_anonymous_user_id(
     This identity owns anonymous continuity, quotas, upload provenance,
     and claimability. It is not an Oracle conversation id.
     """
+    cookie_id = get_anonymous_identity_cookie_from_request(
+        request
+    )
     header_id = _canonical_identity_uuid(
         get_browser_token_from_request(request)
     )
@@ -8351,10 +8531,31 @@ def get_or_create_anonymous_user_id(
         request.session.get("anonymous_user_id")
     )
 
+    # Signed cookie/session values are trusted authorities.
+    # Header/body UUIDs are legacy continuity hints only: they may
+    # reclaim an existing economic identity, but may not create one.
+    trusted_id = cookie_id or stored_id
+    legacy_id = None
+
+    if not trusted_id:
+        seen_candidates = set()
+
+        for candidate in (header_id, provided_id):
+            if (
+                not candidate
+                or candidate in seen_candidates
+            ):
+                continue
+
+            seen_candidates.add(candidate)
+
+            if anonymous_user_exists(candidate):
+                legacy_id = candidate
+                break
+
     anonymous_user_id = (
-        header_id
-        or provided_id
-        or stored_id
+        trusted_id
+        or legacy_id
         or str(uuid.uuid4())
     )
 
@@ -8372,6 +8573,7 @@ def get_or_create_anonymous_user_id(
         request.session.pop("session_id", None)
 
     request.session["anonymous_user_id"] = anonymous_user_id
+    request.state.anonymous_user_id = anonymous_user_id
     ensure_anonymous_user(anonymous_user_id)
 
     return anonymous_user_id
