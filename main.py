@@ -7336,18 +7336,151 @@ def reset_scroll_system():
 
 
 def ensure_anonymous_user(anonymous_user_id: str):
-    """Ensure the anonymous user exists in the database and update last_seen."""
+    """
+    Ensure the durable anonymous identity exists and update last_seen.
+
+    New identities begin on the current free-economic policy with zero usage.
+    Existing identities are never initialized or reinterpreted here; legacy
+    NULL economic state must be reconciled separately before cutover.
+    """
+    now = datetime.datetime.now(timezone.utc)
     conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("SELECT id FROM anonymous_users WHERE id = %s", (anonymous_user_id,))
-        if not cur.fetchone():
-            cur.execute("INSERT INTO anonymous_users (id, created_at, last_seen) VALUES (%s, %s, %s)",
-                        (anonymous_user_id, datetime.datetime.utcnow(), datetime.datetime.utcnow()))
-        else:
-            cur.execute("UPDATE anonymous_users SET last_seen = %s WHERE id = %s",
-                        (datetime.datetime.utcnow(), anonymous_user_id))
-    conn.commit()
-    conn.close()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM anonymous_users WHERE id = %s",
+                (anonymous_user_id,),
+            )
+
+            if not cur.fetchone():
+                cur.execute(
+                    """
+                    INSERT INTO anonymous_users (
+                        id,
+                        created_at,
+                        last_seen,
+                        intro_queries_used,
+                        registered_intro_queries_used,
+                        free_window_queries_used,
+                        eligibility_policy_version
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        anonymous_user_id,
+                        now,
+                        now,
+                        0,
+                        0,
+                        0,
+                        FREE_ECONOMIC_POLICY_VERSION,
+                    ),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE anonymous_users
+                    SET last_seen = %s
+                    WHERE id = %s
+                    """,
+                    (now, anonymous_user_id),
+                )
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def get_free_economic_state(
+    anonymous_user_id: str,
+) -> dict:
+    """
+    Read durable free-access economic state without initializing legacy rows.
+
+    eligibility_policy_version is the initialization authority. A NULL policy
+    version means this identity still requires explicit historical
+    reconciliation before the new economic policy can become authoritative.
+    """
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    intro_queries_used,
+                    intro_grant_completed_at,
+                    registered_intro_queries_used,
+                    registered_intro_grant_completed_at,
+                    free_window_started_at,
+                    free_window_queries_used,
+                    eligibility_policy_version
+                FROM anonymous_users
+                WHERE id = %s
+                """,
+                (anonymous_user_id,),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        return {
+            "exists": False,
+            "initialized": False,
+            "eligibility_policy_version": None,
+            "intro_queries_used": None,
+            "intro_grant_completed_at": None,
+            "registered_intro_queries_used": None,
+            "registered_intro_grant_completed_at": None,
+            "free_window_started_at": None,
+            "free_window_queries_used": None,
+        }
+
+    policy_version = (
+        str(row.get("eligibility_policy_version") or "").strip()
+        or None
+    )
+    initialized = policy_version is not None
+
+    if initialized and any(
+        row.get(column) is None
+        for column in (
+            "intro_queries_used",
+            "registered_intro_queries_used",
+            "free_window_queries_used",
+        )
+    ):
+        raise RuntimeError(
+            "Initialized free-economic identity has incomplete counters"
+        )
+
+    return {
+        "exists": True,
+        "initialized": initialized,
+        "eligibility_policy_version": policy_version,
+        "intro_queries_used": row.get("intro_queries_used"),
+        "intro_grant_completed_at": row.get(
+            "intro_grant_completed_at"
+        ),
+        "registered_intro_queries_used": row.get(
+            "registered_intro_queries_used"
+        ),
+        "registered_intro_grant_completed_at": row.get(
+            "registered_intro_grant_completed_at"
+        ),
+        "free_window_started_at": row.get(
+            "free_window_started_at"
+        ),
+        "free_window_queries_used": row.get(
+            "free_window_queries_used"
+        ),
+    }
+
 
 def resolve_seeker_id(anonymous_user_id: str, provided_seeker_id: Optional[str] = None) -> Optional[str]:
     """Resolve seeker_id with precedence: provided > None (since no claims)"""
@@ -7456,6 +7589,21 @@ from services.voice_access_policy import (
 PLAN_LIMITS = dict(WEB_PLAN_QUERY_LIMITS)
 PLAN_MEMORY_DEPTH = dict(WEB_PLAN_MEMORY_DEPTH)
 PLAN_RECALL_MEMORY_DEPTH = dict(WEB_PLAN_RECALL_MEMORY_DEPTH)
+
+# Durable free-access economic policy.
+#
+# Anonymous:
+#   9 lifetime questions before verified registration.
+#
+# Pilgrim:
+#   9 additional one-time questions after verified account activation,
+#   then 1 free question per UTC day.
+#
+# These values intentionally do not replace paid-plan PLAN_LIMITS.
+FREE_ECONOMIC_POLICY_VERSION = "anon9_pilgrim9_daily1_v1"
+ANONYMOUS_INTRO_QUERY_LIMIT = 9
+PILGRIM_INTRO_QUERY_LIMIT = 9
+PILGRIM_DAILY_QUERY_LIMIT = 1
 
 
 PLAN_REFLECTION_WORD_CAPS = {
