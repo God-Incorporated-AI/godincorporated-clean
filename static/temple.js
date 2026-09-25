@@ -129,8 +129,8 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function makeUploadStatusUnavailablePayload(
-    message = "Final upload status could not be loaded. Refresh your Library shortly.",
-    title = "Upload status unavailable"
+    message = "We couldn't confirm the upload. You may try the same scroll again.",
+    title = "Upload status uncertain"
   ) {
     return {
       upload_state: "status_unavailable",
@@ -173,6 +173,15 @@ document.addEventListener("DOMContentLoaded", function () {
     const uploadState = String(data?.upload_state || "").toLowerCase();
     const adminStatus = String(data?.admin_status || "").toLowerCase();
 
+    if (isCanonicalUploadFeedback(data)) {
+      return buildUploadNotice(
+        data.seeker_title,
+        data.seeker_message,
+        data,
+        { canonical: true }
+      );
+    }
+
     if (context === "upload") {
       if (
         uploadState === "rejected_cap" ||
@@ -181,8 +190,8 @@ document.addEventListener("DOMContentLoaded", function () {
         status === 403
       ) {
         return buildUploadNotice(
-          "Create account",
-          "Create an account to keep uploading and preserve your Library.",
+          "Free uploads used",
+          "Register for free to continue uploading scrolls.",
           data,
           {
             uploadState: "rejected_cap",
@@ -199,8 +208,8 @@ document.addEventListener("DOMContentLoaded", function () {
         status === 429
       ) {
         return buildUploadNotice(
-          "Please wait",
-          "Please wait a few seconds before uploading another scroll.",
+          "Please wait a moment",
+          "Try uploading your next scroll in a few seconds.",
           data,
           {
             uploadState: "rejected_cooldown",
@@ -217,8 +226,8 @@ document.addEventListener("DOMContentLoaded", function () {
         status === 422
       ) {
         return buildUploadNotice(
-          "Needs OCR",
-          "Saved to Library. Needs OCR.",
+          "We couldn't read this scroll",
+          "Please upload a version with readable text, such as a text-based PDF, TXT, DOCX, MD, or RTF.",
           data,
           {
             uploadState: "needs_ocr",
@@ -235,8 +244,8 @@ document.addEventListener("DOMContentLoaded", function () {
         [400, 415].includes(status)
       ) {
         return buildUploadNotice(
-          "File could not be read",
-          "This file could not be read. Try a text PDF, TXT, DOCX, MD, or RTF.",
+          "We couldn't read this scroll",
+          "Please upload a version with readable text, such as a text-based PDF, TXT, DOCX, MD, or RTF.",
           data,
           {
             uploadState: "rejected_invalid_file",
@@ -255,7 +264,7 @@ document.addEventListener("DOMContentLoaded", function () {
       ) {
         return buildUploadNotice(
           "Upload failed",
-          "Upload could not be saved. Please try again.",
+          "Your scroll was not saved. Please try again.",
           data,
           {
             uploadState: "storage_failed",
@@ -270,8 +279,8 @@ document.addEventListener("DOMContentLoaded", function () {
     if (context === "poll" && !response?.ok) {
       if (status === 401 || status === 403) {
         return buildUploadNotice(
-          "Status unavailable",
-          "This browser could not view the final upload status. Refresh your Library or sign in to continue.",
+          "Upload status uncertain",
+          "We couldn't confirm the upload. You may try the same scroll again.",
           data,
           {
             uploadState: "status_unavailable",
@@ -283,8 +292,8 @@ document.addEventListener("DOMContentLoaded", function () {
 
       if (status === 404) {
         return buildUploadNotice(
-          "Status unavailable",
-          "Upload status could not be found. Refresh your Library shortly.",
+          "Upload status uncertain",
+          "We couldn't confirm the upload. You may try the same scroll again.",
           data,
           {
             uploadState: "not_found",
@@ -295,8 +304,8 @@ document.addEventListener("DOMContentLoaded", function () {
       }
 
       return buildUploadNotice(
-        "Upload status unavailable",
-        "Final upload status could not be loaded. Refresh your Library shortly.",
+        "Upload status uncertain",
+        "We couldn't confirm the upload. You may try the same scroll again.",
         data,
         {
           uploadState: "status_unavailable",
@@ -306,19 +315,10 @@ document.addEventListener("DOMContentLoaded", function () {
       );
     }
 
-    if (isCanonicalUploadFeedback(data)) {
-      return buildUploadNotice(
-        data.seeker_title,
-        data.seeker_message,
-        data,
-        { canonical: true }
-      );
-    }
-
     if (context === "upload") {
       return buildUploadNotice(
-        "Upload response unavailable",
-        "The upload response could not be read. Please try again.",
+        "Upload status uncertain",
+        "We couldn't confirm the upload. You may try the same scroll again.",
         data,
         {
           uploadState: "status_unavailable",
@@ -329,8 +329,8 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     return buildUploadNotice(
-      "Upload status unavailable",
-      "Final upload status could not be loaded. Refresh your Library shortly.",
+      "Upload status uncertain",
+      "We couldn't confirm the upload. You may try the same scroll again.",
       data,
       {
         uploadState: "status_unavailable",
@@ -414,15 +414,15 @@ document.addEventListener("DOMContentLoaded", function () {
       try {
         return JSON.parse(text);
       } catch (e) {
-        return makeUploadStatusUnavailablePayload("The upload response could not be read. Please try again.", "Upload response unavailable");
+        return makeUploadStatusUnavailablePayload("We couldn't confirm the upload. You may try the same scroll again.", "Upload status uncertain");
       }
     }
 
     if (looksLikeHtmlResponse(text)) {
-      return makeUploadStatusUnavailablePayload("Final upload status could not be loaded. Refresh your Library shortly.", "Upload status unavailable");
+      return makeUploadStatusUnavailablePayload("We couldn't confirm the upload. You may try the same scroll again.", "Upload status uncertain");
     }
 
-    return makeUploadStatusUnavailablePayload("Final upload status could not be loaded. Refresh your Library shortly.", "Upload status unavailable");
+    return makeUploadStatusUnavailablePayload("We couldn't confirm the upload. You may try the same scroll again.", "Upload status uncertain");
   }
 
   function delay(ms) {
@@ -430,7 +430,7 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function uploadStatusTitle(data) {
-    return isCanonicalUploadFeedback(data) ? data.seeker_title : "Status unavailable";
+    return isCanonicalUploadFeedback(data) ? data.seeker_title : "Upload status uncertain";
   }
 
   async function refreshScrollCount() {
@@ -491,9 +491,9 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     showFeedbackModal(
-      "Still reading. Check your Library shortly.",
+      "The Temple is still reading your scroll. You may continue.",
       [],
-      "Upload status",
+      "Scroll received",
       { showCreateAccount: Boolean(options.showCreateAccount) }
     );
 
@@ -1039,9 +1039,9 @@ if (scrollInput && scrollForm) {
       }
     } catch (err) {
       showFeedbackModal(
-        "Upload status could not be loaded. Refresh your Library shortly.",
+        "We couldn't confirm the upload. You may try the same scroll again.",
         [],
-        "Status unavailable"
+        "Upload status uncertain"
       );
     } finally {
       if (submitBtn) {

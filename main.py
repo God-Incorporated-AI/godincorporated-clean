@@ -2632,7 +2632,7 @@ def fetch_scroll_chunk_candidates(
                                   )
                               )
                           )
-                          OR s.corpus_layer IN ('canonical', 'community')
+                          OR s.corpus_layer = 'canonical'
                       )
                     ORDER BY s.created_at DESC NULLS LAST, c.id DESC
                     LIMIT %s OFFSET %s
@@ -2646,7 +2646,7 @@ def fetch_scroll_chunk_candidates(
                     FROM scroll_chunks c
                     JOIN scrolls s ON c.scroll_id = s.id
                     WHERE COALESCE(s.status, 'active') = 'active'
-                      AND s.corpus_layer IN ('canonical', 'community')
+                      AND s.corpus_layer = 'canonical'
                     ORDER BY s.created_at DESC NULLS LAST, c.id DESC
                     LIMIT %s OFFSET %s
                     """,
@@ -3299,6 +3299,7 @@ UPLOAD_STATE_SAVED = "saved"
 UPLOAD_STATE_QUEUED = "queued"
 UPLOAD_STATE_PROCESSING = "processing"
 UPLOAD_STATE_READY = "ready"
+UPLOAD_STATE_ALREADY_RECEIVED = "already_received"
 UPLOAD_STATE_NEEDS_OCR = "needs_ocr"
 UPLOAD_STATE_FAILED = "failed"
 UPLOAD_STATE_REJECTED_COOLDOWN = "rejected_cooldown"
@@ -3315,6 +3316,7 @@ UPLOAD_STATES = {
     UPLOAD_STATE_QUEUED,
     UPLOAD_STATE_PROCESSING,
     UPLOAD_STATE_READY,
+    UPLOAD_STATE_ALREADY_RECEIVED,
     UPLOAD_STATE_NEEDS_OCR,
     UPLOAD_STATE_FAILED,
     UPLOAD_STATE_REJECTED_COOLDOWN,
@@ -3356,6 +3358,7 @@ LIBRARY_STATES = {
 
 SEEKER_TITLE_UPLOAD_SAVED = "upload.saved"
 SEEKER_TITLE_UPLOAD_READY = "upload.ready"
+SEEKER_TITLE_UPLOAD_ALREADY_RECEIVED = "upload.already_received"
 SEEKER_TITLE_UPLOAD_NEEDS_OCR = "upload.needs_ocr"
 SEEKER_TITLE_UPLOAD_FAILED = "upload.failed"
 SEEKER_TITLE_UPLOAD_PAUSED = "upload.paused"
@@ -3366,6 +3369,7 @@ SEEKER_TITLE_UPLOAD_STATUS_UNAVAILABLE = "upload.status_unavailable"
 SEEKER_TITLE_KEYS = {
     SEEKER_TITLE_UPLOAD_SAVED,
     SEEKER_TITLE_UPLOAD_READY,
+    SEEKER_TITLE_UPLOAD_ALREADY_RECEIVED,
     SEEKER_TITLE_UPLOAD_NEEDS_OCR,
     SEEKER_TITLE_UPLOAD_FAILED,
     SEEKER_TITLE_UPLOAD_PAUSED,
@@ -3376,6 +3380,7 @@ SEEKER_TITLE_KEYS = {
 
 SEEKER_MESSAGE_UPLOAD_SAVED_READING = "upload.saved_reading"
 SEEKER_MESSAGE_UPLOAD_READY = "upload.ready"
+SEEKER_MESSAGE_UPLOAD_ALREADY_RECEIVED = "upload.already_received"
 SEEKER_MESSAGE_UPLOAD_NEEDS_OCR = "upload.needs_ocr"
 SEEKER_MESSAGE_UPLOAD_FAILED = "upload.failed"
 SEEKER_MESSAGE_UPLOAD_STORAGE_FAILED = "upload.storage_failed"
@@ -3390,6 +3395,7 @@ SEEKER_MESSAGE_UPLOAD_INVALID_FILE = "upload.invalid_file"
 SEEKER_MESSAGE_KEYS = {
     SEEKER_MESSAGE_UPLOAD_SAVED_READING,
     SEEKER_MESSAGE_UPLOAD_READY,
+    SEEKER_MESSAGE_UPLOAD_ALREADY_RECEIVED,
     SEEKER_MESSAGE_UPLOAD_NEEDS_OCR,
     SEEKER_MESSAGE_UPLOAD_FAILED,
     SEEKER_MESSAGE_UPLOAD_STORAGE_FAILED,
@@ -3459,29 +3465,31 @@ UPLOAD_DEDUPE_KINDS = {
 }
 
 UPLOAD_SEEKER_TITLE_TEXT = {
-    SEEKER_TITLE_UPLOAD_SAVED: "Saved to Library",
-    SEEKER_TITLE_UPLOAD_READY: "Ready in your Library",
-    SEEKER_TITLE_UPLOAD_NEEDS_OCR: "Needs OCR",
+    SEEKER_TITLE_UPLOAD_SAVED: "Scroll received",
+    SEEKER_TITLE_UPLOAD_READY: "Scroll received",
+    SEEKER_TITLE_UPLOAD_ALREADY_RECEIVED: "Scroll already received",
+    SEEKER_TITLE_UPLOAD_NEEDS_OCR: "We couldn't read this scroll",
     SEEKER_TITLE_UPLOAD_FAILED: "Upload failed",
-    SEEKER_TITLE_UPLOAD_PAUSED: "Please wait",
-    SEEKER_TITLE_UPLOAD_STATUS: "Upload status",
-    SEEKER_TITLE_UPLOAD_CREATE_ACCOUNT: "Create account",
-    SEEKER_TITLE_UPLOAD_STATUS_UNAVAILABLE: "Status unavailable",
+    SEEKER_TITLE_UPLOAD_PAUSED: "Please wait a moment",
+    SEEKER_TITLE_UPLOAD_STATUS: "Scroll received",
+    SEEKER_TITLE_UPLOAD_CREATE_ACCOUNT: "Free uploads used",
+    SEEKER_TITLE_UPLOAD_STATUS_UNAVAILABLE: "Upload status uncertain",
 }
 
 UPLOAD_SEEKER_MESSAGE_TEXT = {
-    SEEKER_MESSAGE_UPLOAD_SAVED_READING: "Saved to Library. Reading in the background.",
-    SEEKER_MESSAGE_UPLOAD_READY: "Ready in your Library.",
-    SEEKER_MESSAGE_UPLOAD_NEEDS_OCR: "Saved to Library. Needs OCR.",
-    SEEKER_MESSAGE_UPLOAD_FAILED: "Saved to Library, but processing failed. Please try again later.",
-    SEEKER_MESSAGE_UPLOAD_STORAGE_FAILED: "Upload could not be saved. Please try again.",
-    SEEKER_MESSAGE_UPLOAD_COOLDOWN: "Please wait a few seconds before uploading another scroll.",
-    SEEKER_MESSAGE_UPLOAD_CAP: "Create an account to keep uploading and preserve your Library.",
-    SEEKER_MESSAGE_UPLOAD_KEEP_LIBRARY: "Create an account to keep your Library.",
-    SEEKER_MESSAGE_UPLOAD_KEEP_UPLOADING: "Create an account to keep uploading and preserve your Library.",
-    SEEKER_MESSAGE_UPLOAD_STATUS_STILL_PROCESSING: "Still reading. Check your Library shortly.",
-    SEEKER_MESSAGE_UPLOAD_STATUS_UNAVAILABLE: "Upload status could not be loaded. Refresh your Library shortly.",
-    SEEKER_MESSAGE_UPLOAD_INVALID_FILE: "This file could not be read. Try a text PDF, TXT, DOCX, MD, or RTF.",
+    SEEKER_MESSAGE_UPLOAD_SAVED_READING: "The Temple is still reading your scroll. You may continue.",
+    SEEKER_MESSAGE_UPLOAD_READY: "",
+    SEEKER_MESSAGE_UPLOAD_ALREADY_RECEIVED: "No new copy was created.",
+    SEEKER_MESSAGE_UPLOAD_NEEDS_OCR: "Please upload a version with readable text, such as a text-based PDF, TXT, DOCX, MD, or RTF.",
+    SEEKER_MESSAGE_UPLOAD_FAILED: "We couldn't complete this upload. Please try again.",
+    SEEKER_MESSAGE_UPLOAD_STORAGE_FAILED: "Your scroll was not saved. Please try again.",
+    SEEKER_MESSAGE_UPLOAD_COOLDOWN: "Try uploading your next scroll in a few seconds.",
+    SEEKER_MESSAGE_UPLOAD_CAP: "Register for free to continue uploading scrolls.",
+    SEEKER_MESSAGE_UPLOAD_KEEP_LIBRARY: "Register for free to continue uploading scrolls.",
+    SEEKER_MESSAGE_UPLOAD_KEEP_UPLOADING: "Register for free to continue uploading scrolls.",
+    SEEKER_MESSAGE_UPLOAD_STATUS_STILL_PROCESSING: "The Temple is still reading your scroll. You may continue.",
+    SEEKER_MESSAGE_UPLOAD_STATUS_UNAVAILABLE: "We couldn't confirm the upload. You may try the same scroll again.",
+    SEEKER_MESSAGE_UPLOAD_INVALID_FILE: "Please upload a version with readable text, such as a text-based PDF, TXT, DOCX, MD, or RTF.",
 }
 
 
@@ -3643,7 +3651,7 @@ def create_library_upload(
 
     This helper does not replace scrolls or ingestion_jobs:
     - library_uploads tracks the user's uploaded artifact.
-    - scrolls remains the deduped retrieval/corpus record.
+    - scrolls remains the owned retrieval/corpus source record.
     - ingestion_jobs remains the background processing record.
     """
     filename = (original_filename or "").strip() or "uploaded_scroll"
@@ -4168,22 +4176,71 @@ def build_ingestion_job_result_payload(
 
     if status_key == "ready":
         payload["ready"] = True
-        payload.setdefault("seeker_status", "ready")
-        payload.setdefault("seeker_title_key", SEEKER_TITLE_UPLOAD_READY)
-        payload.setdefault("seeker_message_key", SEEKER_MESSAGE_UPLOAD_READY)
+
         if payload.get("duplicate"):
-            payload.setdefault("dedupe_kind", UPLOAD_DEDUPE_KIND_CONTENT_HASH)
-            payload.setdefault("admin_status", UPLOAD_ADMIN_STATUS_CONTENT_HASH_DUPLICATE)
+            payload["seeker_status"] = "already_saved"
+            payload["seeker_title_key"] = (
+                SEEKER_TITLE_UPLOAD_ALREADY_RECEIVED
+            )
+            payload["seeker_message_key"] = (
+                SEEKER_MESSAGE_UPLOAD_ALREADY_RECEIVED
+            )
+            payload["dedupe_kind"] = (
+                UPLOAD_DEDUPE_KIND_CONTENT_HASH
+            )
+            payload["admin_status"] = (
+                UPLOAD_ADMIN_STATUS_CONTENT_HASH_DUPLICATE
+            )
             payload.setdefault(
                 "admin_message",
-                "Content hash matched an existing scroll; corpus was not expanded.",
+                "Content hash matched an existing personal scroll "
+                "owned by the same seeker; no new personal source "
+                "was created.",
             )
-        else:
-            payload.setdefault("dedupe_kind", UPLOAD_DEDUPE_KIND_NONE)
-            payload.setdefault("admin_status", UPLOAD_ADMIN_STATUS_READY)
 
-        payload["message"] = UPLOAD_SEEKER_MESSAGE_TEXT[SEEKER_MESSAGE_UPLOAD_READY]
-        payload.setdefault("seeker_message", payload["message"])
+            existing_library_upload_id = payload.get(
+                "existing_library_upload_id"
+            )
+
+            if existing_library_upload_id:
+                payload["upload_id"] = str(
+                    existing_library_upload_id
+                )
+                payload["library_upload_id"] = str(
+                    existing_library_upload_id
+                )
+
+            payload["message"] = UPLOAD_SEEKER_MESSAGE_TEXT[
+                SEEKER_MESSAGE_UPLOAD_ALREADY_RECEIVED
+            ]
+            payload["seeker_message"] = payload["message"]
+
+        else:
+            payload.setdefault("seeker_status", "ready")
+            payload.setdefault(
+                "seeker_title_key",
+                SEEKER_TITLE_UPLOAD_READY,
+            )
+            payload.setdefault(
+                "seeker_message_key",
+                SEEKER_MESSAGE_UPLOAD_READY,
+            )
+            payload.setdefault(
+                "dedupe_kind",
+                UPLOAD_DEDUPE_KIND_NONE,
+            )
+            payload.setdefault(
+                "admin_status",
+                UPLOAD_ADMIN_STATUS_READY,
+            )
+
+            payload["message"] = UPLOAD_SEEKER_MESSAGE_TEXT[
+                SEEKER_MESSAGE_UPLOAD_READY
+            ]
+            payload.setdefault(
+                "seeker_message",
+                payload["message"],
+            )
 
     elif status_key == "needs_ocr":
         payload["needs_ocr"] = True
@@ -4323,6 +4380,14 @@ def serialize_ingestion_job_status(job: dict) -> dict:
         or (UPLOAD_DEDUPE_KIND_CONTENT_HASH if duplicate else UPLOAD_DEDUPE_KIND_NONE)
     )
 
+    if (
+        duplicate
+        and result_json.get("existing_library_upload_id")
+    ):
+        library_upload_id_text = str(
+            result_json["existing_library_upload_id"]
+        )
+
     message = result_json.get("message")
     if not message:
         message = build_ingestion_job_result_payload(
@@ -4368,6 +4433,60 @@ def serialize_ingestion_job_status(job: dict) -> dict:
         "failed": UPLOAD_ADMIN_STATUS_INGESTION_FAILED,
     }
 
+    resolved_upload_state = upload_state_by_status.get(
+        status,
+        UPLOAD_STATE_STATUS_UNAVAILABLE,
+    )
+    resolved_library_state = library_state_by_status.get(
+        status,
+        LIBRARY_STATE_UNKNOWN,
+    )
+    resolved_seeker_title_key = seeker_title_by_status.get(
+        status,
+        SEEKER_TITLE_UPLOAD_STATUS_UNAVAILABLE,
+    )
+    resolved_seeker_message_key = seeker_message_by_status.get(
+        status,
+        SEEKER_MESSAGE_UPLOAD_STATUS_UNAVAILABLE,
+    )
+
+    if duplicate and status == "ready":
+        resolved_upload_state = UPLOAD_STATE_ALREADY_RECEIVED
+        resolved_library_state = (
+            LIBRARY_STATE_ALREADY_SAVED
+            if result_json.get("existing_library_upload_id")
+            else LIBRARY_STATE_NONE
+        )
+        resolved_seeker_title_key = (
+            SEEKER_TITLE_UPLOAD_ALREADY_RECEIVED
+        )
+        resolved_seeker_message_key = (
+            SEEKER_MESSAGE_UPLOAD_ALREADY_RECEIVED
+        )
+
+    if duplicate and status == "ready":
+        existing_storage_ref = result_json.get(
+            "existing_storage_ref"
+        )
+
+        if existing_storage_ref:
+            storage_ref = existing_storage_ref
+            storage_backend = (
+                result_json.get(
+                    "existing_storage_backend"
+                )
+                or (
+                    "r2"
+                    if str(existing_storage_ref).startswith(
+                        "r2://"
+                    )
+                    else "local"
+                )
+            )
+        else:
+            storage_ref = None
+            storage_backend = None
+
     extra = {
         "status": status,
         "queued": status == "queued",
@@ -4391,10 +4510,10 @@ def serialize_ingestion_job_status(job: dict) -> dict:
         accepted=True,
         rejected=False,
         terminal=status in {"ready", "needs_ocr", "failed"},
-        upload_state=upload_state_by_status.get(status, UPLOAD_STATE_STATUS_UNAVAILABLE),
-        library_state=library_state_by_status.get(status, LIBRARY_STATE_UNKNOWN),
-        seeker_title_key=seeker_title_by_status.get(status, SEEKER_TITLE_UPLOAD_STATUS_UNAVAILABLE),
-        seeker_message_key=seeker_message_by_status.get(status, SEEKER_MESSAGE_UPLOAD_STATUS_UNAVAILABLE),
+        upload_state=resolved_upload_state,
+        library_state=resolved_library_state,
+        seeker_title_key=resolved_seeker_title_key,
+        seeker_message_key=resolved_seeker_message_key,
         admin_status=(
             result_json.get("admin_status")
             or (library_upload.get("admin_status") if library_upload else None)
@@ -6865,23 +6984,168 @@ def cleanup_materialized_scroll_file(file_path: Optional[str], temporary: bool) 
             logger.warning("SCROLL_STORAGE_TEMP_CLEANUP_FAILED path=%s", file_path)
 
 
-def delete_scroll_storage_ref(storage_ref: Optional[str]) -> None:
+def delete_scroll_storage_ref(
+    storage_ref: Optional[str],
+) -> bool:
     """
-    Delete an uploaded original from durable storage only for explicit cleanup.
+    Delete one durable uploaded-original artifact.
 
-    Library-preserved queued uploads should not call this just because content
-    matches an existing scroll. Corpus dedupe and artifact preservation are
-    separate concerns.
+    This helper is used only when the current upload artifact is
+    explicitly redundant. It must never be given the storage_ref
+    belonging to the seeker's already-owned personal scroll.
     """
-    if not is_r2_storage_ref(storage_ref):
-        return
+    if not storage_ref:
+        return True
 
     try:
-        bucket, key = parse_r2_storage_ref(storage_ref)
-        get_r2_client().delete_object(Bucket=bucket, Key=key)
-        logger.info("SCROLL_STORAGE_DELETED backend=r2 bucket=%s key=%s", bucket, key)
+        if is_r2_storage_ref(storage_ref):
+            bucket, key = parse_r2_storage_ref(storage_ref)
+            get_r2_client().delete_object(
+                Bucket=bucket,
+                Key=key,
+            )
+            logger.info(
+                "SCROLL_STORAGE_DELETED backend=r2 "
+                "bucket=%s key=%s",
+                bucket,
+                key,
+            )
+            return True
+
+        upload_root = os.path.realpath(UPLOAD_DIR)
+        local_path = os.path.realpath(
+            os.path.join(
+                UPLOAD_DIR,
+                str(storage_ref),
+            )
+        )
+
+        if os.path.commonpath(
+            [upload_root, local_path]
+        ) != upload_root:
+            raise ValueError(
+                "Local storage_ref escapes UPLOAD_DIR"
+            )
+
+        if os.path.exists(local_path):
+            os.remove(local_path)
+
+        logger.info(
+            "SCROLL_STORAGE_DELETED backend=local "
+            "storage_ref=%s",
+            storage_ref,
+        )
+        return True
+
+    except Exception as exc:
+        logger.warning(
+            "SCROLL_STORAGE_DELETE_FAILED "
+            "storage_ref=%s error=%s",
+            storage_ref,
+            exc,
+        )
+        return False
+
+
+def finalize_duplicate_queued_ingestion_job(
+    job_id: str,
+    *,
+    scroll_id: str,
+    storage_ref: Optional[str],
+    result_json: dict,
+) -> dict:
+    """
+    Finalize one same-owner queued retry.
+
+    The transient queued Library row and redundant upload
+    artifact belong only to this retry. Remove both while the
+    ingestion-job finalization transaction is still open.
+
+    If durable artifact deletion fails, roll back the database
+    changes so the retry remains diagnosable with its original
+    storage reference intact.
+    """
+    if not job_id:
+        raise ValueError("job_id is required")
+
+    if not scroll_id:
+        raise ValueError("scroll_id is required")
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM library_uploads
+                WHERE ingestion_job_id = %s
+                RETURNING id;
+                """,
+                (job_id,),
+            )
+            deleted_library_rows = cur.fetchall()
+
+            cur.execute(
+                """
+                UPDATE ingestion_jobs
+                SET
+                    status = 'ready',
+                    scroll_id = %s,
+                    storage_ref = NULL,
+                    error_message = NULL,
+                    result_json = %s::jsonb,
+                    finished_at = COALESCE(
+                        finished_at,
+                        NOW()
+                    ),
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING *;
+                """,
+                (
+                    scroll_id,
+                    _safe_json_payload(result_json),
+                    job_id,
+                ),
+            )
+
+            row = cur.fetchone()
+
+            if not row:
+                raise RuntimeError(
+                    "Queued duplicate ingestion job "
+                    "disappeared during finalization"
+                )
+
+            artifact_deleted = delete_scroll_storage_ref(
+                storage_ref
+            )
+
+            if not artifact_deleted:
+                raise RuntimeError(
+                    "Could not remove redundant queued "
+                    "upload artifact"
+                )
+
+        conn.commit()
+
+        logger.info(
+            "INGESTION_JOB_DUPLICATE_FINALIZED "
+            "job_id=%s scroll_id=%s "
+            "removed_library_rows=%s",
+            job_id,
+            scroll_id,
+            len(deleted_library_rows),
+        )
+
+        return row
+
     except Exception:
-        logger.warning("SCROLL_STORAGE_DELETE_FAILED storage_ref=%s", storage_ref)
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
 
 
 def process_one_queued_scroll_ingestion_job() -> dict:
@@ -7039,26 +7303,66 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             anonymous_user_id=anonymous_user_id,
             authenticated_user_id=user_id,
             preserve_unreadable_file=True,
-            preserve_duplicate_file=True,
         )
 
         result_payload = normalize_ingestion_result_payload(result)
         scroll_id = str(result_payload.get("scroll_id")) if result_payload.get("scroll_id") else None
-        is_content_duplicate = bool(result_payload.get("duplicate"))
+        is_content_duplicate = bool(
+            result_payload.get("duplicate")
+        )
+
+        final_result_payload = (
+            build_ingestion_job_result_payload(
+                "ready",
+                original_filename=original_filename,
+                scroll_id=scroll_id,
+                result_payload=result_payload,
+            )
+        )
 
         if is_content_duplicate:
-            logger.info(
-                "SCROLL_UPLOAD_DUPLICATE_ARTIFACT_PRESERVED job_id=%s storage_ref_present=%s",
+            if not scroll_id:
+                raise RuntimeError(
+                    "Same-owner queued retry completed "
+                    "without an existing scroll_id"
+                )
+
+            finalize_duplicate_queued_ingestion_job(
                 job_id,
-                bool(storage_ref),
+                scroll_id=scroll_id,
+                storage_ref=storage_ref,
+                result_json=final_result_payload,
             )
 
-        final_result_payload = build_ingestion_job_result_payload(
-            "ready",
-            original_filename=original_filename,
-            scroll_id=scroll_id,
-            result_payload=result_payload,
-        )
+            cleanup_materialized_scroll_file(
+                materialized_file_path,
+                materialized_is_temporary,
+            )
+
+            materialized_file_path = None
+            materialized_is_temporary = False
+
+            logger.info(
+                "SCROLL_UPLOAD_DUPLICATE_ARTIFACT_REMOVED "
+                "job_id=%s scroll_id=%s "
+                "existing_library_upload_present=%s",
+                job_id,
+                scroll_id,
+                bool(
+                    result_payload.get(
+                        "existing_library_upload_id"
+                    )
+                ),
+            )
+
+            return {
+                "ok": True,
+                "processed": True,
+                "job_id": job_id,
+                "status": "ready",
+                "scroll_id": scroll_id,
+                "result": final_result_payload,
+            }
 
         update_ingestion_job_status(
             job_id,
@@ -7072,20 +7376,31 @@ def process_one_queued_scroll_ingestion_job() -> dict:
             job_id,
             scroll_id=scroll_id,
             seeker_status="ready",
-            admin_status="content_hash_duplicate" if is_content_duplicate else "ready",
-            dedupe_kind="content_hash" if is_content_duplicate else "none",
+            admin_status="ready",
+            dedupe_kind="none",
             storage_ref=storage_ref,
-            storage_backend="r2" if is_r2_storage_ref(storage_ref) else "local",
-            content_hash=result_payload.get("content_hash"),
+            storage_backend=(
+                "r2"
+                if is_r2_storage_ref(storage_ref)
+                else "local"
+            ),
+            content_hash=result_payload.get(
+                "content_hash"
+            ),
             metadata_json={
                 "ingestion_status": "ready",
-                "duplicate": is_content_duplicate,
+                "duplicate": False,
                 "artifact_preserved": True,
-                "result_status": final_result_payload.get("status"),
+                "result_status": (
+                    final_result_payload.get("status")
+                ),
             },
         )
 
-        cleanup_materialized_scroll_file(materialized_file_path, materialized_is_temporary)
+        cleanup_materialized_scroll_file(
+            materialized_file_path,
+            materialized_is_temporary,
+        )
 
         return {
             "ok": True,
@@ -9106,23 +9421,11 @@ def get_anonymous_upload_stats(anonymous_user_id: str) -> dict:
 
 def build_claim_nudges(upload_count: int) -> list[str]:
     """
-    Keep anonymous upload nudges brief and calm.
+    Routine successful uploads do not carry account or Library marketing.
 
-    The claim path matters, but successful upload feedback should feel like
-    continuity guidance, not a repeated sales pitch.
+    Registration is invited when the anonymous upload cap is actually reached.
     """
-    try:
-        count = int(upload_count or 0)
-    except Exception:
-        count = 0
-
-    if count <= 0:
-        return []
-
-    if count >= max(1, ANONYMOUS_UPLOAD_LIMIT - 1):
-        return ["Create an account to keep uploading and preserve your Library."]
-
-    return ["Create an account to keep your Library."]
+    return []
 
 
 def refresh_user_fallback_state(user_id: str) -> dict:
@@ -13798,7 +14101,6 @@ def ingest_saved_scroll_file(
     anonymous_user_id: Optional[str],
     authenticated_user_id: Optional[str],
     preserve_unreadable_file: bool = False,
-    preserve_duplicate_file: bool = False,
 ):
     """
     Ingest an already-saved scroll using explicit ownership identities.
@@ -13871,14 +14173,198 @@ def ingest_saved_scroll_file(
     text_hash = hashlib.sha256(extracted_text.encode("utf-8")).hexdigest()
 
     # Determine corpus layer
-    corpus_layer = "personal" if authenticated_user_id else "community"
+    corpus_layer = "personal"
 
-    # Insert scroll into database
+    # Insert a distinct personal source row for this ownership lineage.
+    # content_hash remains metadata; it is not a cross-seeker ownership key.
     word_count = len(extracted_text.split())
 
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
+            owner_identity = (
+                f"user:{authenticated_user_id}"
+                if authenticated_user_id
+                else f"anon:{anonymous_user_id}"
+            )
+
+            owner_hash_key = hashlib.sha256(
+                f"{owner_identity}:{text_hash}".encode("utf-8")
+            ).digest()[:8]
+
+            advisory_lock_key = int.from_bytes(
+                owner_hash_key,
+                byteorder="big",
+                signed=True,
+            )
+
+            cur.execute(
+                "SELECT pg_advisory_xact_lock(%s)",
+                (advisory_lock_key,),
+            )
+
+            if authenticated_user_id:
+                cur.execute(
+                    """
+                    SELECT
+                        s.id,
+                        s.session_id,
+                        s.user_id,
+                        s.anonymous_user_id,
+                        s.original_filename,
+                        s.mime_type,
+                        s.storage_ref,
+                        lu.id AS library_upload_id,
+                        lu.storage_ref AS library_storage_ref,
+                        lu.storage_backend AS library_storage_backend
+                    FROM scrolls s
+                    LEFT JOIN LATERAL (
+                        SELECT
+                            id,
+                            storage_ref,
+                            storage_backend
+                        FROM library_uploads
+                        WHERE scroll_id = s.id
+                          AND user_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    ) lu ON TRUE
+                    WHERE s.corpus_layer = 'personal'
+                      AND s.user_id = %s
+                      AND s.content_hash = %s
+                    ORDER BY s.created_at DESC
+                    LIMIT 1
+                    """,
+                    (
+                        authenticated_user_id,
+                        authenticated_user_id,
+                        text_hash,
+                    ),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT
+                        s.id,
+                        s.session_id,
+                        s.user_id,
+                        s.anonymous_user_id,
+                        s.original_filename,
+                        s.mime_type,
+                        s.storage_ref,
+                        lu.id AS library_upload_id,
+                        lu.storage_ref AS library_storage_ref,
+                        lu.storage_backend AS library_storage_backend
+                    FROM scrolls s
+                    LEFT JOIN LATERAL (
+                        SELECT
+                            id,
+                            storage_ref,
+                            storage_backend
+                        FROM library_uploads
+                        WHERE scroll_id = s.id
+                          AND user_id IS NULL
+                          AND anonymous_user_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    ) lu ON TRUE
+                    WHERE s.corpus_layer = 'personal'
+                      AND s.user_id IS NULL
+                      AND s.anonymous_user_id = %s
+                      AND s.content_hash = %s
+                    ORDER BY s.created_at DESC
+                    LIMIT 1
+                    """,
+                    (
+                        anonymous_user_id,
+                        anonymous_user_id,
+                        text_hash,
+                    ),
+                )
+
+            existing_scroll = cur.fetchone()
+
+            if existing_scroll:
+                conn.rollback()
+
+                existing_storage_ref = (
+                    existing_scroll.get("library_storage_ref")
+                    or existing_scroll.get("storage_ref")
+                )
+
+                existing_storage_backend = (
+                    existing_scroll.get("library_storage_backend")
+                    or (
+                        "r2"
+                        if isinstance(existing_storage_ref, str)
+                        and existing_storage_ref.startswith("r2://")
+                        else (
+                            "local"
+                            if existing_storage_ref
+                            else None
+                        )
+                    )
+                )
+
+                duplicate_payload = {
+                    "message": UPLOAD_SEEKER_MESSAGE_TEXT[
+                        SEEKER_MESSAGE_UPLOAD_ALREADY_RECEIVED
+                    ],
+                    "scroll_id": str(existing_scroll["id"]),
+                    "content_hash": text_hash,
+                    "duplicate": True,
+                    "dedupe_kind": UPLOAD_DEDUPE_KIND_CONTENT_HASH,
+                    "admin_status": (
+                        UPLOAD_ADMIN_STATUS_CONTENT_HASH_DUPLICATE
+                    ),
+                    "admin_message": (
+                        "Content hash matched an existing personal "
+                        "scroll owned by the same seeker; no new "
+                        "personal source was created."
+                    ),
+                    "existing_library_upload_id": (
+                        str(existing_scroll["library_upload_id"])
+                        if existing_scroll.get("library_upload_id")
+                        else None
+                    ),
+                    "existing_storage_ref": existing_storage_ref,
+                    "existing_storage_backend": (
+                        existing_storage_backend
+                    ),
+                    "existing_original_filename": (
+                        existing_scroll.get("original_filename")
+                    ),
+                    "existing_mime_type": (
+                        existing_scroll.get("mime_type")
+                    ),
+                    "existing_session_id": (
+                        str(existing_scroll["session_id"])
+                        if existing_scroll.get("session_id")
+                        else None
+                    ),
+                }
+
+                if not authenticated_user_id:
+                    stats = get_anonymous_upload_stats(
+                        anonymous_user_id
+                    )
+                    duplicate_payload[
+                        "upload_count_for_browser"
+                    ] = stats["upload_count"]
+                    duplicate_payload[
+                        "continuity_nudges"
+                    ] = build_claim_nudges(
+                        stats["upload_count"]
+                    )
+                    duplicate_payload[
+                        "claim_recommended"
+                    ] = stats["upload_count"] >= 1
+                    duplicate_payload[
+                        "anonymous_upload_limit"
+                    ] = ANONYMOUS_UPLOAD_LIMIT
+
+                return duplicate_payload
+
             cur.execute(
                 """
                 INSERT INTO scrolls (
@@ -13933,92 +14419,8 @@ def ingest_saved_scroll_file(
             )
 
         conn.commit()
+    finally:
         conn.close()
-
-    except psycopg2.errors.UniqueViolation:
-        conn.rollback()
-        conn.close()
-
-        conn = get_db_connection()
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT id
-                FROM scrolls
-                WHERE content_hash = %s
-                LIMIT 1
-                """,
-                (text_hash,)
-            )
-            existing_scroll = cur.fetchone()
-
-            if not existing_scroll:
-                conn.close()
-
-                if not preserve_duplicate_file and os.path.exists(file_path):
-                    os.remove(file_path)
-
-                if authenticated_user_id:
-                    refresh_user_scroll_count(authenticated_user_id)
-
-                return JSONResponse(
-                    content={
-                        "duplicate": True,
-                        "message": "This scroll is already present in the Temple, but the existing record could not be linked."
-                    },
-                    status_code=409
-                )
-
-            scroll_id = existing_scroll["id"]
-
-            cur.execute(
-                """
-                INSERT INTO scroll_associations (
-                    scroll_id,
-                    user_id,
-                    session_id,
-                    anonymous_user_id
-                )
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT DO NOTHING
-                """,
-                (
-                    scroll_id,
-                    authenticated_user_id,
-                    session_id,
-                    anonymous_user_id,
-                )
-            )
-
-        conn.commit()
-        conn.close()
-
-        if not preserve_duplicate_file and os.path.exists(file_path):
-            os.remove(file_path)
-
-        if authenticated_user_id:
-            refresh_user_scroll_count(authenticated_user_id)
-
-        duplicate_payload = {
-            "duplicate": True,
-            "scroll_id": str(scroll_id),
-            "seeker_status": "ready",
-            "dedupe_kind": "content_hash",
-            "admin_status": "content_hash_duplicate",
-            "message": "Ready in your Library.",
-            "admin_message": "Content hash matched an existing scroll; corpus was not expanded."
-        }
-
-        if not authenticated_user_id:
-            duplicate_payload["message"] = "Ready in your Library."
-            stats = get_anonymous_upload_stats(anonymous_user_id)
-            duplicate_payload["upload_count_for_browser"] = stats["upload_count"]
-            duplicate_payload["continuity_nudges"] = build_claim_nudges(stats["upload_count"])
-
-        return JSONResponse(
-            content=duplicate_payload,
-            status_code=409
-        )
 
     # --- Chunk the uploaded scroll ---
     CHUNK_SIZE = 1000
@@ -14075,8 +14477,13 @@ def ingest_saved_scroll_file(
         refresh_user_scroll_count(authenticated_user_id)
 
     response_payload = {
-        "message": "📜 Your scroll has been uploaded.",
-        "scroll_id": scroll_id
+        "message": UPLOAD_SEEKER_MESSAGE_TEXT[
+            SEEKER_MESSAGE_UPLOAD_READY
+        ],
+        "scroll_id": scroll_id,
+        "content_hash": text_hash,
+        "duplicate": False,
+        "dedupe_kind": UPLOAD_DEDUPE_KIND_NONE,
     }
 
     if not authenticated_user_id:
@@ -14230,7 +14637,7 @@ async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scr
         )
         storage_backend = "r2" if is_r2_storage_ref(storage_ref) else "local"
 
-        corpus_layer = "personal" if authenticated_user_id else "community"
+        corpus_layer = "personal"
         job_id = create_ingestion_job(
             session_id=session_id,
             anonymous_user_id=anonymous_user_id,
@@ -14260,7 +14667,7 @@ async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scr
         library_upload_id = None
         try:
             library_upload_id = create_library_upload(
-                session_id=None,
+                session_id=session_id,
                 anonymous_user_id=anonymous_user_id,
                 user_id=authenticated_user_id,
                 ingestion_job_id=str(job_id) if job_id else None,
@@ -14341,7 +14748,7 @@ async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scr
             status_code=202
         )
 
-    return ingest_saved_scroll_file(
+    result = ingest_saved_scroll_file(
         file_path=file_path,
         safe_name=safe_name,
         original_filename=scroll.filename,
@@ -14349,6 +14756,237 @@ async def upload_scroll(request: Request, background_tasks: BackgroundTasks, scr
         session_id=session_id,
         anonymous_user_id=anonymous_user_id,
         authenticated_user_id=authenticated_user_id,
+    )
+
+    result_payload = normalize_ingestion_result_payload(result)
+    scroll_id = (
+        str(result_payload.get("scroll_id"))
+        if result_payload.get("scroll_id")
+        else None
+    )
+
+    if not scroll_id:
+        raise RuntimeError(
+            "Synchronous scroll ingestion completed without a scroll_id"
+        )
+
+    is_content_duplicate = bool(
+        result_payload.get("duplicate")
+    )
+
+    if is_content_duplicate:
+        existing_storage_ref = result_payload.get(
+            "existing_storage_ref"
+        )
+
+        existing_storage_backend = result_payload.get(
+            "existing_storage_backend"
+        )
+
+        if not existing_storage_backend and existing_storage_ref:
+            existing_storage_backend = (
+                "r2"
+                if str(existing_storage_ref).startswith("r2://")
+                else "local"
+            )
+
+        # This synchronous request saved a new local upload only so
+        # it could be examined. The owned source already exists.
+        remove_uploaded_file(file_path)
+
+        library_upload_id = result_payload.get(
+            "existing_library_upload_id"
+        )
+
+        # Do not silently reconstruct historical Library state here.
+        # The retry is idempotent at the personal-scroll layer whether
+        # or not an older source predates Library artifact tracking.
+        upload_count = result_payload.get(
+            "upload_count_for_browser"
+        )
+        continuity_nudges = (
+            result_payload.get("continuity_nudges") or []
+        )
+        claim_recommended = bool(
+            result_payload.get("claim_recommended")
+        )
+
+        anonymous_uploads_remaining = None
+        if (
+            not authenticated_user_id
+            and upload_count is not None
+        ):
+            anonymous_uploads_remaining = max(
+                ANONYMOUS_UPLOAD_LIMIT - int(upload_count),
+                0,
+            )
+
+        duplicate_message = UPLOAD_SEEKER_MESSAGE_TEXT[
+            SEEKER_MESSAGE_UPLOAD_ALREADY_RECEIVED
+        ]
+
+        return JSONResponse(
+            content=build_upload_status_payload(
+                ok=True,
+                accepted=True,
+                rejected=False,
+                terminal=True,
+                upload_state=UPLOAD_STATE_ALREADY_RECEIVED,
+                library_state=(
+                    LIBRARY_STATE_ALREADY_SAVED
+                    if library_upload_id
+                    else LIBRARY_STATE_NONE
+                ),
+                seeker_title_key=(
+                    SEEKER_TITLE_UPLOAD_ALREADY_RECEIVED
+                ),
+                seeker_message_key=(
+                    SEEKER_MESSAGE_UPLOAD_ALREADY_RECEIVED
+                ),
+                admin_status=(
+                    UPLOAD_ADMIN_STATUS_CONTENT_HASH_DUPLICATE
+                ),
+                admin_message=result_payload.get(
+                    "admin_message"
+                ),
+                claim_required=False,
+                claim_recommended=claim_recommended,
+                anonymous_uploads_remaining=(
+                    anonymous_uploads_remaining
+                ),
+                upload_id=(
+                    str(library_upload_id)
+                    if library_upload_id
+                    else None
+                ),
+                library_upload_id=(
+                    str(library_upload_id)
+                    if library_upload_id
+                    else None
+                ),
+                scroll_id=scroll_id,
+                artifact_preserved=bool(existing_storage_ref),
+                storage_backend=existing_storage_backend,
+                duplicate=True,
+                dedupe_kind=UPLOAD_DEDUPE_KIND_CONTENT_HASH,
+                needs_ocr=False,
+                extra={
+                    "message": duplicate_message,
+                    "status": "already_received",
+                    "ready": True,
+                    "filename": scroll.filename,
+                    "file_size_bytes": file_size_bytes,
+                    "upload_count_for_browser": upload_count,
+                    "continuity_nudges": continuity_nudges,
+                    "anonymous_upload_limit": (
+                        ANONYMOUS_UPLOAD_LIMIT
+                        if not authenticated_user_id
+                        else None
+                    ),
+                },
+            ),
+            status_code=200,
+        )
+
+    try:
+        library_upload_id = create_library_upload(
+            session_id=session_id,
+            anonymous_user_id=anonymous_user_id,
+            user_id=authenticated_user_id,
+            scroll_id=scroll_id,
+            original_filename=scroll.filename,
+            mime_type=scroll.content_type,
+            file_size_bytes=file_size_bytes,
+            storage_ref=safe_name,
+            storage_backend="local",
+            content_hash=result_payload.get("content_hash"),
+            seeker_status="ready",
+            admin_status=UPLOAD_ADMIN_STATUS_READY,
+            dedupe_kind=UPLOAD_DEDUPE_KIND_NONE,
+            metadata_json={
+                "corpus_layer": "personal",
+                "processing_mode": "synchronous",
+            },
+        )
+    except Exception:
+        # Do not leave a successfully ingested personal source without its
+        # corresponding Library artifact. The new ownership model guarantees
+        # this scroll belongs only to this upload lineage, so it is safe to
+        # remove the just-created source and its cascading chunks here.
+        cleanup_conn = get_db_connection()
+        try:
+            with cleanup_conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM scrolls WHERE id = %s",
+                    (scroll_id,),
+                )
+            cleanup_conn.commit()
+        finally:
+            cleanup_conn.close()
+
+        remove_uploaded_file(file_path)
+        raise
+
+    upload_count = result_payload.get("upload_count_for_browser")
+    continuity_nudges = result_payload.get("continuity_nudges") or []
+    claim_recommended = bool(
+        result_payload.get("claim_recommended")
+    )
+
+    anonymous_uploads_remaining = None
+    if not authenticated_user_id and upload_count is not None:
+        anonymous_uploads_remaining = max(
+            ANONYMOUS_UPLOAD_LIMIT - int(upload_count),
+            0,
+        )
+
+    ready_message = UPLOAD_SEEKER_MESSAGE_TEXT[
+        SEEKER_MESSAGE_UPLOAD_READY
+    ]
+
+    return JSONResponse(
+        content=build_upload_status_payload(
+            ok=True,
+            accepted=True,
+            rejected=False,
+            terminal=True,
+            upload_state=UPLOAD_STATE_READY,
+            library_state=LIBRARY_STATE_READY,
+            seeker_title_key=SEEKER_TITLE_UPLOAD_READY,
+            seeker_message_key=SEEKER_MESSAGE_UPLOAD_READY,
+            admin_status=UPLOAD_ADMIN_STATUS_READY,
+            admin_message="Synchronous upload ingested and ready.",
+            claim_required=False,
+            claim_recommended=claim_recommended,
+            anonymous_uploads_remaining=anonymous_uploads_remaining,
+            upload_id=str(library_upload_id) if library_upload_id else None,
+            library_upload_id=(
+                str(library_upload_id)
+                if library_upload_id
+                else None
+            ),
+            scroll_id=scroll_id,
+            artifact_preserved=True,
+            storage_backend="local",
+            duplicate=False,
+            dedupe_kind=UPLOAD_DEDUPE_KIND_NONE,
+            needs_ocr=False,
+            extra={
+                "message": ready_message,
+                "status": "ready",
+                "ready": True,
+                "filename": scroll.filename,
+                "file_size_bytes": file_size_bytes,
+                "upload_count_for_browser": upload_count,
+                "continuity_nudges": continuity_nudges,
+                "anonymous_upload_limit": (
+                    ANONYMOUS_UPLOAD_LIMIT
+                    if not authenticated_user_id
+                    else None
+                ),
+            },
+        ),
+        status_code=200,
     )
 
 class AdminEntitlementOverrideInput(BaseModel):
