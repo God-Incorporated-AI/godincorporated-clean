@@ -1876,6 +1876,51 @@ def finalize_oracle_inference(
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
+            question_quota = None
+
+            if interaction_id:
+                cur.execute(
+                    """
+                    SELECT prepared_state
+                    FROM oracle_pending_inferences
+                    WHERE id = %s::uuid
+                      AND session_id = %s::uuid
+                      AND anonymous_user_id
+                          IS NOT DISTINCT FROM %s
+                      AND user_id
+                          IS NOT DISTINCT FROM %s::uuid
+                    FOR UPDATE
+                    """,
+                    (
+                        interaction_id,
+                        session_id,
+                        anonymous_user_id,
+                        user_id,
+                    ),
+                )
+                quota_pending = cur.fetchone()
+
+                if quota_pending:
+                    quota_state = (
+                        quota_pending.get(
+                            "prepared_state"
+                        )
+                        or {}
+                    )
+                    if isinstance(
+                        quota_state,
+                        str,
+                    ):
+                        quota_state = json.loads(
+                            quota_state
+                        )
+
+                    question_quota = (
+                        quota_state.get(
+                            "question_quota"
+                        )
+                    )
+
             if interaction_id:
                 cur.execute(
                     """
@@ -1912,6 +1957,15 @@ def finalize_oracle_inference(
                     ),
                 )
                 inserted_row = cur.fetchone()
+
+                if inserted_row:
+                    _consume_reserved_free_question_locked(
+                        cur,
+                        question_quota,
+                        user_id=user_id,
+                        anonymous_user_id=
+                            anonymous_user_id,
+                    )
 
                 if not inserted_row:
                     cur.execute(
@@ -4667,112 +4721,643 @@ def expire_stale_pending_oracle_inferences() -> int:
         conn.close()
 
 
-def create_pending_oracle_inference(
+def _count_active_question_reservations_locked(
+    cur,
     *,
-    session_id: str,
-    user_id: Optional[str],
-    deity: str,
-    input_mode: str,
-    prepared_state: dict,
-) -> Optional[str]:
+    owner_kind: str,
+    owner_id: str,
+    quota_bucket: str,
+    quota_window_started_at: Optional[str] = None,
+) -> int:
     """
-    Create short-lived server-owned state for split-phase inference.
+    Count active quota-bearing Oracle reservations for one allowance bucket.
+
+    The caller must already hold the corresponding economic-owner row lock.
+
+    Reservations created before the universal quota snapshot existed have no
+    question_quota bucket/window. Those legacy rows are counted
+    conservatively so rollout cannot accidentally over-grant questions.
     """
-    if not session_id:
-        raise ValueError("session_id is required")
+    if owner_kind == "user":
+        owner_clause = "user_id = %s::uuid"
+    elif owner_kind == "anonymous":
+        owner_clause = "anonymous_user_id = %s"
+    else:
+        raise ValueError(
+            "owner_kind must be user or anonymous"
+        )
 
-    deity_key = (deity or "").strip()
-    if deity_key not in {"Hathor", "Moses"}:
-        raise ValueError("deity must be Hathor or Moses")
+    where = [
+        owner_clause,
+        """
+        reservation_kind IN (
+            'browser_realtime',
+            'device_inference',
+            'server_inference'
+        )
+        """,
+        "status IN ('prepared', 'completing')",
+        "expires_at > NOW()",
+        """
+        (
+            prepared_state->'question_quota'->>'bucket' IS NULL
+            OR
+            prepared_state->'question_quota'->>'bucket' = %s
+        )
+        """,
+    ]
 
-    input_mode_key = (input_mode or "").strip().lower()
-    if input_mode_key not in {"text", "voice"}:
-        raise ValueError("input_mode must be text or voice")
+    params = [
+        owner_id,
+        quota_bucket,
+    ]
 
-    expire_stale_pending_oracle_inferences()
-
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO oracle_pending_inferences (
-                    session_id,
-                    user_id,
-                    deity,
-                    input_mode,
-                    prepared_state
-                )
-                VALUES (%s, %s, %s, %s, %s::jsonb)
-                RETURNING id;
-                """,
-                (
-                    session_id,
-                    user_id,
-                    deity_key,
-                    input_mode_key,
-                    _safe_json_payload(prepared_state or {}),
-                ),
+    if quota_window_started_at:
+        where.append(
+            """
+            (
+                prepared_state->'question_quota'->>'window_started_at'
+                    IS NULL
+                OR
+                prepared_state->'question_quota'->>'window_started_at'
+                    = %s
             )
-            row = cur.fetchone()
+            """
+        )
+        params.append(quota_window_started_at)
 
-        conn.commit()
+    cur.execute(
+        """
+        SELECT COUNT(*) AS total
+        FROM oracle_pending_inferences
+        WHERE
+        """
+        + " AND ".join(where),
+        tuple(params),
+    )
 
-        pending_id = str(row["id"]) if row and row.get("id") else None
+    row = cur.fetchone() or {}
+    return int(row.get("total") or 0)
 
-        logger.info(
-            "ORACLE_PENDING_INFERENCE_CREATED pending_id=%s deity=%s input_mode=%s user_id_present=%s",
-            pending_id,
-            deity_key,
-            input_mode_key,
-            bool(user_id),
+
+def _count_completed_plan_questions_locked(
+    cur,
+    *,
+    user_id: str,
+    window_start: Optional[datetime.datetime],
+) -> int:
+    """
+    Count durable questions for an existing paid/support-plan window.
+
+    Free Anonymous/Pilgrim economics do not use this helper once their
+    durable economic state is initialized.
+    """
+    if window_start:
+        cur.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM oracle_interactions
+            WHERE user_id = %s::uuid
+              AND created_at >= %s
+            """,
+            (user_id, window_start),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM oracle_interactions
+            WHERE user_id = %s::uuid
+            """,
+            (user_id,),
         )
 
-        return pending_id
+    row = cur.fetchone() or {}
+    return int(row.get("total") or 0)
 
-    except Exception as exc:
-        conn.rollback()
-        logger.error(
-            "ORACLE_PENDING_INFERENCE_CREATE_FAILED error=%s",
-            exc,
+
+def _lock_free_economic_state_row(
+    cur,
+    anonymous_user_id: str,
+) -> dict:
+    """
+    Lock and return one durable free-economic identity.
+
+    NULL eligibility_policy_version is deliberately not interpreted as a
+    fresh grant. Historical identities must be reconciled explicitly.
+    """
+    cur.execute(
+        """
+        SELECT
+            id,
+            intro_queries_used,
+            intro_grant_completed_at,
+            registered_intro_queries_used,
+            registered_intro_grant_completed_at,
+            free_window_started_at,
+            free_window_queries_used,
+            eligibility_policy_version
+        FROM anonymous_users
+        WHERE id = %s
+        FOR UPDATE
+        """,
+        (anonymous_user_id,),
+    )
+
+    row = cur.fetchone()
+
+    if not row:
+        raise RuntimeError(
+            "Free-economic identity could not be locked"
         )
-        raise
 
-    finally:
-        conn.close()
+    return row
 
 
+def _derive_free_question_quota(
+    economic_row: dict,
+    *,
+    authenticated: bool,
+    now: Optional[datetime.datetime] = None,
+) -> dict:
+    """
+    Resolve the current Anonymous/Pilgrim quota bucket from durable state.
 
-def create_or_reuse_realtime_oracle_reservation(
+    This function performs no writes.
+    """
+    policy_version = str(
+        economic_row.get("eligibility_policy_version")
+        or ""
+    ).strip() or None
+
+    if policy_version is None:
+        return {
+            "initialized": False,
+            "policy_version": None,
+            "bucket": None,
+            "question_limit": None,
+            "questions_used": None,
+            "window_started_at": None,
+        }
+
+    if policy_version != FREE_ECONOMIC_POLICY_VERSION:
+        raise RuntimeError(
+            "Unsupported free-economic policy version: "
+            f"{policy_version}"
+        )
+
+    required_counters = (
+        "intro_queries_used",
+        "registered_intro_queries_used",
+        "free_window_queries_used",
+    )
+
+    if any(
+        economic_row.get(column) is None
+        for column in required_counters
+    ):
+        raise RuntimeError(
+            "Initialized free-economic identity has incomplete counters"
+        )
+
+    anonymous_used = int(
+        economic_row.get("intro_queries_used") or 0
+    )
+    registered_used = int(
+        economic_row.get("registered_intro_queries_used")
+        or 0
+    )
+
+    if not authenticated:
+        return {
+            "initialized": True,
+            "policy_version": policy_version,
+            "bucket": "anonymous_intro",
+            "question_limit": ANONYMOUS_INTRO_QUERY_LIMIT,
+            "questions_used": anonymous_used,
+            "window_started_at": None,
+        }
+
+    if registered_used < PILGRIM_INTRO_QUERY_LIMIT:
+        return {
+            "initialized": True,
+            "policy_version": policy_version,
+            "bucket": "pilgrim_intro",
+            "question_limit": PILGRIM_INTRO_QUERY_LIMIT,
+            "questions_used": registered_used,
+            "window_started_at": None,
+        }
+
+    now = (
+        now.astimezone(timezone.utc)
+        if now
+        else datetime.datetime.now(timezone.utc)
+    )
+    current_window_start = start_of_utc_day(now)
+
+    stored_window_start = economic_row.get(
+        "free_window_started_at"
+    )
+
+    same_window = False
+
+    if stored_window_start:
+        stored_window_start = stored_window_start.astimezone(
+            timezone.utc
+        )
+        same_window = (
+            start_of_utc_day(stored_window_start)
+            == current_window_start
+        )
+
+    daily_used = (
+        int(economic_row.get("free_window_queries_used") or 0)
+        if same_window
+        else 0
+    )
+
+    return {
+        "initialized": True,
+        "policy_version": policy_version,
+        "bucket": "pilgrim_daily",
+        "question_limit": PILGRIM_DAILY_QUERY_LIMIT,
+        "questions_used": daily_used,
+        "window_started_at": current_window_start,
+    }
+
+
+
+def _consume_reserved_free_question_locked(
+    cur,
+    question_quota: Optional[dict],
+    *,
+    user_id: Optional[str],
+    anonymous_user_id: Optional[str],
+) -> None:
+    """
+    Consume one successfully completed free question.
+
+    The caller must already be inside the same transaction that inserted the
+    durable oracle_interactions row. No counter is consumed for a replay whose
+    durable interaction was not newly inserted.
+    """
+    quota = dict(question_quota or {})
+    bucket = str(
+        quota.get("bucket") or ""
+    ).strip()
+
+    free_buckets = {
+        "anonymous_intro",
+        "pilgrim_intro",
+        "pilgrim_daily",
+    }
+
+    if bucket not in free_buckets:
+        return
+
+    if quota.get("schema") != "oracle_question_quota.v1":
+        raise RuntimeError(
+            "Free question completion has an unsupported quota schema"
+        )
+
+    policy_version = str(
+        quota.get("policy_version") or ""
+    ).strip()
+
+    if policy_version != FREE_ECONOMIC_POLICY_VERSION:
+        raise RuntimeError(
+            "Free question completion has an unsupported policy version"
+        )
+
+    economic_identity_id = str(
+        quota.get("economic_identity_id") or ""
+    ).strip()
+
+    if not economic_identity_id:
+        raise RuntimeError(
+            "Free question completion has no economic identity"
+        )
+
+    normalized_user_id = (
+        str(user_id).strip()
+        if user_id
+        else None
+    )
+    normalized_anonymous_id = str(
+        anonymous_user_id or ""
+    ).strip()
+
+    if normalized_user_id:
+        if bucket == "anonymous_intro":
+            raise RuntimeError(
+                "Authenticated completion cannot consume anonymous intro"
+            )
+
+        cur.execute(
+            """
+            SELECT free_economic_identity_id
+            FROM users
+            WHERE id = %s::uuid
+            FOR UPDATE
+            """,
+            (normalized_user_id,),
+        )
+        owner = cur.fetchone()
+
+        if not owner:
+            raise RuntimeError(
+                "Free question account owner could not be locked"
+            )
+
+        account_economic_identity_id = str(
+            owner.get("free_economic_identity_id") or ""
+        ).strip()
+
+        if (
+            not account_economic_identity_id
+            or account_economic_identity_id
+            != economic_identity_id
+        ):
+            raise RuntimeError(
+                "Free question economic identity no longer matches account"
+            )
+    else:
+        if bucket != "anonymous_intro":
+            raise RuntimeError(
+                "Anonymous completion cannot consume Pilgrim quota"
+            )
+
+        if normalized_anonymous_id != economic_identity_id:
+            raise RuntimeError(
+                "Anonymous completion economic identity mismatch"
+            )
+
+    economic_row = _lock_free_economic_state_row(
+        cur,
+        economic_identity_id,
+    )
+
+    current_policy = str(
+        economic_row.get("eligibility_policy_version")
+        or ""
+    ).strip()
+
+    if current_policy != FREE_ECONOMIC_POLICY_VERSION:
+        raise RuntimeError(
+            "Free economic identity is not initialized "
+            "on the authoritative policy"
+        )
+
+    if bucket == "anonymous_intro":
+        expected_limit = ANONYMOUS_INTRO_QUERY_LIMIT
+        reserved_limit = int(
+            quota.get("question_limit") or 0
+        )
+
+        if reserved_limit != expected_limit:
+            raise RuntimeError(
+                "Anonymous intro reservation limit mismatch"
+            )
+
+        used = int(
+            economic_row.get("intro_queries_used")
+            or 0
+        )
+
+        if used >= expected_limit:
+            raise RuntimeError(
+                "Anonymous intro grant is already exhausted"
+            )
+
+        new_used = used + 1
+
+        cur.execute(
+            """
+            UPDATE anonymous_users
+            SET
+                intro_queries_used = %s,
+                intro_grant_completed_at =
+                    CASE
+                        WHEN %s >= %s
+                        THEN COALESCE(
+                            intro_grant_completed_at,
+                            NOW()
+                        )
+                        ELSE intro_grant_completed_at
+                    END
+            WHERE id = %s
+            """,
+            (
+                new_used,
+                new_used,
+                expected_limit,
+                economic_identity_id,
+            ),
+        )
+        return
+
+    if bucket == "pilgrim_intro":
+        expected_limit = PILGRIM_INTRO_QUERY_LIMIT
+        reserved_limit = int(
+            quota.get("question_limit") or 0
+        )
+
+        if reserved_limit != expected_limit:
+            raise RuntimeError(
+                "Pilgrim intro reservation limit mismatch"
+            )
+
+        used = int(
+            economic_row.get(
+                "registered_intro_queries_used"
+            )
+            or 0
+        )
+
+        if used >= expected_limit:
+            raise RuntimeError(
+                "Pilgrim intro grant is already exhausted"
+            )
+
+        new_used = used + 1
+
+        cur.execute(
+            """
+            UPDATE anonymous_users
+            SET
+                registered_intro_queries_used = %s,
+                registered_intro_grant_completed_at =
+                    CASE
+                        WHEN %s >= %s
+                        THEN COALESCE(
+                            registered_intro_grant_completed_at,
+                            NOW()
+                        )
+                        ELSE registered_intro_grant_completed_at
+                    END
+            WHERE id = %s
+            """,
+            (
+                new_used,
+                new_used,
+                expected_limit,
+                economic_identity_id,
+            ),
+        )
+        return
+
+    expected_limit = PILGRIM_DAILY_QUERY_LIMIT
+    reserved_limit = int(
+        quota.get("question_limit") or 0
+    )
+
+    if reserved_limit != expected_limit:
+        raise RuntimeError(
+            "Pilgrim daily reservation limit mismatch"
+        )
+
+    raw_window = quota.get("window_started_at")
+    if not raw_window:
+        raise RuntimeError(
+            "Pilgrim daily completion has no reserved window"
+        )
+
+    if isinstance(raw_window, datetime.datetime):
+        reserved_window = raw_window
+    else:
+        try:
+            reserved_window = datetime.datetime.fromisoformat(
+                str(raw_window).replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise RuntimeError(
+                "Pilgrim daily completion has invalid reserved window"
+            ) from exc
+
+    if reserved_window.tzinfo is None:
+        raise RuntimeError(
+            "Pilgrim daily reserved window is not timezone-aware"
+        )
+
+    reserved_day = start_of_utc_day(
+        reserved_window.astimezone(timezone.utc)
+    )
+
+    stored_window = economic_row.get(
+        "free_window_started_at"
+    )
+
+    stored_day = None
+    if stored_window:
+        if stored_window.tzinfo is None:
+            stored_window = stored_window.replace(
+                tzinfo=timezone.utc
+            )
+        stored_day = start_of_utc_day(
+            stored_window.astimezone(timezone.utc)
+        )
+
+    # A reservation from an older UTC day may finish after the durable state
+    # has already advanced to a newer day. It belongs to its original day and
+    # must not overwrite the newer daily counter.
+    if stored_day and stored_day > reserved_day:
+        return
+
+    daily_used = (
+        int(
+            economic_row.get(
+                "free_window_queries_used"
+            )
+            or 0
+        )
+        if stored_day == reserved_day
+        else 0
+    )
+
+    if daily_used >= expected_limit:
+        raise RuntimeError(
+            "Pilgrim daily grant is already exhausted"
+        )
+
+    cur.execute(
+        """
+        UPDATE anonymous_users
+        SET
+            free_window_started_at = %s,
+            free_window_queries_used = %s
+        WHERE id = %s
+        """,
+        (
+            reserved_day,
+            daily_used + 1,
+            economic_identity_id,
+        ),
+    )
+
+def create_oracle_question_reservation(
     *,
     session_id: str,
     anonymous_user_id: str,
     user_id: Optional[str],
     deity: str,
-    client_interaction_id: str,
+    input_mode: str,
+    reservation_kind: str,
     prepared_state: dict,
+    client_interaction_id: Optional[str] = None,
     quota_unrestricted: bool = False,
 ) -> dict:
     """
-    Atomically reserve one ordinary Oracle question for browser realtime.
+    Atomically reserve one ordinary Oracle question.
 
-    Authenticated reservations serialize on the user row.
-    Anonymous reservations serialize on the persistent browser owner row.
+    This is the universal admission primitive for browser realtime,
+    split-phase device inference, and ordinary server inference.
+
+    This function does not perform inference and does not consume a completed
+    free-economic counter. Successful completion will do that separately and
+    atomically with durable Oracle persistence.
     """
-    client_interaction_id = str(
-        client_interaction_id or ""
+    session_id = str(session_id or "").strip()
+    anonymous_user_id = str(
+        anonymous_user_id or ""
     ).strip()
+    user_id = str(user_id).strip() if user_id else None
+    deity = str(deity or "").strip()
+    input_mode = str(input_mode or "").strip().lower()
+    reservation_kind = str(
+        reservation_kind or ""
+    ).strip()
+    client_interaction_id = (
+        str(client_interaction_id).strip()
+        if client_interaction_id
+        else None
+    )
 
     if not session_id:
         raise ValueError("session_id is required")
+
     if not anonymous_user_id:
         raise ValueError("anonymous_user_id is required")
-    if not client_interaction_id:
-        raise ValueError("client_interaction_id is required")
-    if len(client_interaction_id) > 160:
-        raise ValueError("client_interaction_id is too long")
+
     if deity not in {"Hathor", "Moses"}:
         raise ValueError("deity must be Hathor or Moses")
+
+    if input_mode not in {"text", "voice"}:
+        raise ValueError(
+            "input_mode must be text or voice"
+        )
+
+    if reservation_kind not in QUESTION_RESERVATION_KINDS:
+        raise ValueError(
+            "unsupported question reservation kind"
+        )
+
+    if (
+        client_interaction_id
+        and len(client_interaction_id) > 160
+    ):
+        raise ValueError(
+            "client_interaction_id is too long"
+        )
 
     finalization_state = dict(
         (prepared_state or {}).get("finalization_state")
@@ -4784,354 +5369,474 @@ def create_or_reuse_realtime_oracle_reservation(
 
     if not question:
         raise ValueError(
-            "prepared realtime reservation requires a question"
+            "prepared reservation requires a question"
         )
 
     expire_stale_pending_oracle_inferences()
 
+    entitlement = None
+    effective_plan = "anon"
+    plan_window_start = None
+
     if user_id:
-        entitlement = get_user_entitlement_snapshot(user_id)
+        entitlement = get_user_entitlement_snapshot(
+            user_id
+        )
         effective_plan = normalize_plan_code(
             entitlement["effective_plan_code"]
         )
-        unlimited = (
-            quota_unrestricted
-            or plan_has_unlimited_questions(
+
+        if effective_plan not in {"anon", "pilgrim"}:
+            plan_window_start = (
+                get_effective_usage_window_start(
+                    entitlement
+                )
+            )
+
+    authenticated_free = bool(
+        user_id
+        and effective_plan in {"anon", "pilgrim"}
+    )
+    free_economic = (
+        not user_id
+        or authenticated_free
+    )
+
+    unlimited = bool(
+        quota_unrestricted
+        or (
+            user_id
+            and plan_has_unlimited_questions(
                 effective_plan
             )
         )
-        question_limit = PLAN_LIMITS.get(
-            effective_plan,
-            PLAN_LIMITS["anon"],
+    )
+
+    if unlimited:
+        owner_kind = (
+            "user" if user_id else "anonymous"
         )
-        window_start = (
-            get_effective_usage_window_start(
-                entitlement
-            )
+        owner_id = (
+            user_id if user_id else anonymous_user_id
+        )
+    elif free_economic:
+        owner_kind = (
+            "user" if user_id else "anonymous"
+        )
+        owner_id = (
+            user_id if user_id else anonymous_user_id
         )
     else:
-        effective_plan = "anon"
-        unlimited = bool(quota_unrestricted)
-        question_limit = PLAN_LIMITS["anon"]
-        window_start = None
-
-    def same_value(left, right):
-        left_value = (
-            str(left)
-            if left is not None
-            else None
-        )
-        right_value = (
-            str(right)
-            if right is not None
-            else None
-        )
-        return left_value == right_value
+        owner_kind = "user"
+        owner_id = user_id
 
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
-            if user_id:
+            economic_row = None
+            economic_identity_id = None
+
+            if owner_kind == "anonymous":
+                if free_economic and not unlimited:
+                    economic_identity_id = (
+                        anonymous_user_id
+                    )
+                    economic_row = (
+                        _lock_free_economic_state_row(
+                            cur,
+                            economic_identity_id,
+                        )
+                    )
+                else:
+                    cur.execute(
+                        """
+                        SELECT id
+                        FROM anonymous_users
+                        WHERE id = %s
+                        FOR UPDATE
+                        """,
+                        (anonymous_user_id,),
+                    )
+                    if not cur.fetchone():
+                        raise RuntimeError(
+                            "Anonymous quota owner "
+                            "could not be locked"
+                        )
+            else:
                 cur.execute(
                     """
-                    SELECT id
+                    SELECT
+                        id,
+                        free_economic_identity_id
                     FROM users
                     WHERE id = %s::uuid
                     FOR UPDATE
                     """,
                     (user_id,),
                 )
-            else:
+                user_owner = cur.fetchone()
+
+                if not user_owner:
+                    raise RuntimeError(
+                        "User quota owner could not be locked"
+                    )
+
+                if free_economic and not unlimited:
+                    economic_identity_id = str(
+                        user_owner.get(
+                            "free_economic_identity_id"
+                        )
+                        or ""
+                    ).strip() or None
+
+                    if economic_identity_id:
+                        economic_row = (
+                            _lock_free_economic_state_row(
+                                cur,
+                                economic_identity_id,
+                            )
+                        )
+                    else:
+                        # Existing accounts remain fail-closed until their
+                        # durable economic authority is reconciled.
+                        economic_row = {
+                            "eligibility_policy_version":
+                                None,
+                        }
+
+            # Completed client retry wins before new quota admission.
+            if client_interaction_id:
                 cur.execute(
                     """
-                    SELECT id
-                    FROM anonymous_users
-                    WHERE id = %s
-                    FOR UPDATE
+                    SELECT
+                        id,
+                        session_id,
+                        anonymous_user_id,
+                        user_id,
+                        question_text,
+                        mode
+                    FROM oracle_interactions
+                    WHERE client_interaction_id = %s
+                    LIMIT 1
                     """,
-                    (anonymous_user_id,),
+                    (client_interaction_id,),
                 )
+                completed = cur.fetchone()
 
-            owner = cur.fetchone()
-            if not owner:
-                raise RuntimeError(
-                    "Realtime quota owner could not be locked"
-                )
+                if completed:
+                    if not (
+                        str(completed.get("session_id"))
+                        == session_id
+                        and str(
+                            completed.get(
+                                "anonymous_user_id"
+                            )
+                        )
+                        == anonymous_user_id
+                        and (
+                            str(completed.get("user_id"))
+                            if completed.get("user_id")
+                            else None
+                        )
+                        == user_id
+                        and completed.get(
+                            "question_text"
+                        )
+                        == question
+                        and completed.get("mode")
+                        == deity
+                    ):
+                        raise RuntimeError(
+                            "Client interaction id already "
+                            "belongs to a different "
+                            "authoritative interaction"
+                        )
 
-            # Completed retry wins.
-            cur.execute(
-                """
-                SELECT
-                    id,
-                    session_id,
-                    anonymous_user_id,
-                    user_id,
-                    question_text,
-                    mode
-                FROM oracle_interactions
-                WHERE client_interaction_id = %s
-                LIMIT 1
-                """,
-                (client_interaction_id,),
-            )
-            completed = cur.fetchone()
-
-            if completed:
-                if not (
-                    same_value(
-                        completed.get("session_id"),
-                        session_id,
-                    )
-                    and same_value(
-                        completed.get(
-                            "anonymous_user_id"
-                        ),
-                        anonymous_user_id,
-                    )
-                    and same_value(
-                        completed.get("user_id"),
-                        user_id,
-                    )
-                    and completed.get("question_text")
-                    == question
-                    and completed.get("mode") == deity
-                ):
-                    raise RuntimeError(
-                        "Realtime client interaction id "
-                        "already belongs to a different "
-                        "authoritative interaction"
-                    )
-
-                conn.commit()
-                return {
-                    "status": "completed",
-                    "interaction_id":
-                        str(completed["id"]),
-                    "reused": True,
-                    "plan_code": effective_plan,
-                }
-
-            # Prepared retry reuses the same reservation.
-            cur.execute(
-                """
-                SELECT
-                    id,
-                    session_id,
-                    anonymous_user_id,
-                    user_id,
-                    deity,
-                    status,
-                    reservation_kind,
-                    prepared_state,
-                    (expires_at > NOW()) AS active
-                FROM oracle_pending_inferences
-                WHERE client_interaction_id = %s
-                LIMIT 1
-                """,
-                (client_interaction_id,),
-            )
-            existing = cur.fetchone()
-
-            if existing:
-                if (
-                    existing.get("reservation_kind")
-                    != "browser_realtime"
-                ):
-                    raise RuntimeError(
-                        "Realtime client interaction id "
-                        "belongs to a different reservation kind"
-                    )
-
-                if not (
-                    same_value(
-                        existing.get("session_id"),
-                        session_id,
-                    )
-                    and same_value(
-                        existing.get(
-                            "anonymous_user_id"
-                        ),
-                        anonymous_user_id,
-                    )
-                    and same_value(
-                        existing.get("user_id"),
-                        user_id,
-                    )
-                    and existing.get("deity") == deity
-                ):
-                    raise RuntimeError(
-                        "Realtime client interaction id "
-                        "already belongs to a different "
-                        "reservation"
-                    )
-
-                status = existing.get("status")
-
-                if (
-                    status != "prepared"
-                    or not bool(existing.get("active"))
-                ):
                     conn.commit()
+
                     return {
-                        "status": status or "expired",
-                        "interaction_id":
-                            str(existing["id"]),
+                        "status": "completed",
+                        "interaction_id": str(
+                            completed["id"]
+                        ),
                         "reused": True,
                         "plan_code": effective_plan,
                     }
 
-                existing_state = (
-                    existing.get("prepared_state")
-                    or {}
+                # Prepared client retry reuses the same reservation.
+                cur.execute(
+                    """
+                    SELECT
+                        id,
+                        session_id,
+                        anonymous_user_id,
+                        user_id,
+                        deity,
+                        input_mode,
+                        status,
+                        reservation_kind,
+                        prepared_state,
+                        (expires_at > NOW()) AS active
+                    FROM oracle_pending_inferences
+                    WHERE client_interaction_id = %s
+                    LIMIT 1
+                    """,
+                    (client_interaction_id,),
                 )
-                if isinstance(existing_state, str):
-                    existing_state = json.loads(
-                        existing_state
+                existing = cur.fetchone()
+
+                if existing:
+                    if (
+                        existing.get(
+                            "reservation_kind"
+                        )
+                        != reservation_kind
+                    ):
+                        raise RuntimeError(
+                            "Client interaction id belongs "
+                            "to a different reservation kind"
+                        )
+
+                    existing_user_id = (
+                        str(existing.get("user_id"))
+                        if existing.get("user_id")
+                        else None
                     )
 
-                existing_finalization = dict(
-                    existing_state.get(
-                        "finalization_state"
-                    )
-                    or {}
-                )
+                    if not (
+                        str(existing.get("session_id"))
+                        == session_id
+                        and str(
+                            existing.get(
+                                "anonymous_user_id"
+                            )
+                        )
+                        == anonymous_user_id
+                        and existing_user_id == user_id
+                        and existing.get("deity")
+                        == deity
+                        and existing.get(
+                            "input_mode"
+                        )
+                        == input_mode
+                    ):
+                        raise RuntimeError(
+                            "Client interaction id already "
+                            "belongs to a different "
+                            "reservation"
+                        )
 
-                if (
-                    existing_finalization.get(
-                        "question"
-                    )
-                    != question
-                ):
-                    raise RuntimeError(
-                        "Realtime reservation retry question "
-                        "does not match authoritative state"
+                    status = str(
+                        existing.get("status")
+                        or ""
                     )
 
-                conn.commit()
-                return {
-                    "status": "prepared",
-                    "interaction_id":
-                        str(existing["id"]),
-                    "reused": True,
-                    "plan_code": effective_plan,
-                }
+                    if (
+                        status != "prepared"
+                        or not bool(
+                            existing.get("active")
+                        )
+                    ):
+                        conn.commit()
+
+                        return {
+                            "status": (
+                                status or "expired"
+                            ),
+                            "interaction_id": str(
+                                existing["id"]
+                            ),
+                            "reused": True,
+                            "plan_code":
+                                effective_plan,
+                        }
+
+                    existing_state = (
+                        existing.get(
+                            "prepared_state"
+                        )
+                        or {}
+                    )
+
+                    if isinstance(
+                        existing_state,
+                        str,
+                    ):
+                        existing_state = json.loads(
+                            existing_state
+                        )
+
+                    existing_finalization = dict(
+                        existing_state.get(
+                            "finalization_state"
+                        )
+                        or {}
+                    )
+
+                    if (
+                        existing_finalization.get(
+                            "question"
+                        )
+                        != question
+                    ):
+                        raise RuntimeError(
+                            "Reservation retry question "
+                            "does not match "
+                            "authoritative state"
+                        )
+
+                    conn.commit()
+
+                    return {
+                        "status": "prepared",
+                        "interaction_id": str(
+                            existing["id"]
+                        ),
+                        "reused": True,
+                        "plan_code": effective_plan,
+                    }
+
+            quota_bucket = "unrestricted"
+            question_limit = None
+            questions_used = 0
+            questions_reserved = 0
+            quota_policy_version = None
+            quota_window_started_at = None
 
             if not unlimited:
-                if user_id:
-                    if window_start:
-                        cur.execute(
-                            """
-                            SELECT COUNT(*) AS total
-                            FROM oracle_interactions
-                            WHERE user_id = %s::uuid
-                              AND created_at >= %s
-                            """,
-                            (user_id, window_start),
+                if free_economic:
+                    free_quota = (
+                        _derive_free_question_quota(
+                            economic_row,
+                            authenticated=bool(
+                                user_id
+                            ),
                         )
-                    else:
-                        cur.execute(
-                            """
-                            SELECT COUNT(*) AS total
-                            FROM oracle_interactions
-                            WHERE user_id = %s::uuid
-                            """,
-                            (user_id,),
+                    )
+
+                    if not free_quota[
+                        "initialized"
+                    ]:
+                        conn.commit()
+
+                        return {
+                            "status": "denied",
+                            "interaction_id": None,
+                            "reused": False,
+                            "plan_code": effective_plan,
+                            "reason":
+                                "economic_state_uninitialized",
+                            "question_limit": None,
+                            "questions_used": None,
+                            "questions_reserved": 0,
+                        }
+
+                    quota_bucket = free_quota[
+                        "bucket"
+                    ]
+                    question_limit = int(
+                        free_quota[
+                            "question_limit"
+                        ]
+                    )
+                    questions_used = int(
+                        free_quota[
+                            "questions_used"
+                        ]
+                    )
+                    quota_policy_version = (
+                        free_quota[
+                            "policy_version"
+                        ]
+                    )
+
+                    if free_quota.get(
+                        "window_started_at"
+                    ):
+                        quota_window_started_at = (
+                            free_quota[
+                                "window_started_at"
+                            ].isoformat()
                         )
                 else:
-                    cur.execute(
-                        """
-                        SELECT COUNT(*) AS total
-                        FROM oracle_interactions
-                        WHERE anonymous_user_id = %s
-                        """,
-                        (anonymous_user_id,),
-                    )
-
-                completed_row = cur.fetchone()
-                completed_count = int(
-                    (completed_row or {}).get(
-                        "total"
-                    )
-                    or 0
-                )
-
-                if user_id:
-                    if window_start:
-                        cur.execute(
-                            """
-                            SELECT COUNT(*) AS total
-                            FROM oracle_pending_inferences
-                            WHERE user_id = %s::uuid
-                              AND reservation_kind =
-                                  'browser_realtime'
-                              AND status IN (
-                                  'prepared',
-                                  'completing'
-                              )
-                              AND expires_at > NOW()
-                              AND created_at >= %s
-                            """,
-                            (user_id, window_start),
+                    quota_bucket = "plan_window"
+                    question_limit = int(
+                        PLAN_LIMITS.get(
+                            effective_plan,
+                            PLAN_LIMITS["anon"],
                         )
-                    else:
-                        cur.execute(
-                            """
-                            SELECT COUNT(*) AS total
-                            FROM oracle_pending_inferences
-                            WHERE user_id = %s::uuid
-                              AND reservation_kind =
-                                  'browser_realtime'
-                              AND status IN (
-                                  'prepared',
-                                  'completing'
-                              )
-                              AND expires_at > NOW()
-                            """,
-                            (user_id,),
+                    )
+                    questions_used = (
+                        _count_completed_plan_questions_locked(
+                            cur,
+                            user_id=user_id,
+                            window_start=
+                                plan_window_start,
                         )
-                else:
-                    cur.execute(
-                        """
-                        SELECT COUNT(*) AS total
-                        FROM oracle_pending_inferences
-                        WHERE anonymous_user_id = %s
-                          AND reservation_kind =
-                              'browser_realtime'
-                          AND status IN (
-                              'prepared',
-                              'completing'
-                          )
-                          AND expires_at > NOW()
-                        """,
-                        (anonymous_user_id,),
                     )
 
-                pending_row = cur.fetchone()
-                pending_count = int(
-                    (pending_row or {}).get(
-                        "total"
+                    if plan_window_start:
+                        quota_window_started_at = (
+                            plan_window_start.isoformat()
+                        )
+
+                questions_reserved = (
+                    _count_active_question_reservations_locked(
+                        cur,
+                        owner_kind=owner_kind,
+                        owner_id=owner_id,
+                        quota_bucket=quota_bucket,
+                        quota_window_started_at=
+                            quota_window_started_at,
                     )
-                    or 0
                 )
 
                 if (
-                    completed_count + pending_count
+                    questions_used
+                    + questions_reserved
                     >= question_limit
                 ):
                     conn.commit()
+
                     return {
                         "status": "denied",
                         "interaction_id": None,
                         "reused": False,
                         "plan_code": effective_plan,
+                        "reason":
+                            "question_limit_reached",
+                        "quota_bucket":
+                            quota_bucket,
                         "question_limit":
                             question_limit,
                         "questions_used":
-                            completed_count,
+                            questions_used,
                         "questions_reserved":
-                            pending_count,
+                            questions_reserved,
                     }
+
+            reservation_state = dict(
+                prepared_state or {}
+            )
+            reservation_state[
+                "question_quota"
+            ] = {
+                "schema":
+                    "oracle_question_quota.v1",
+                "policy_version":
+                    quota_policy_version,
+                "bucket":
+                    quota_bucket,
+                "plan_code":
+                    effective_plan,
+                "question_limit":
+                    question_limit,
+                "window_started_at":
+                    quota_window_started_at,
+                "economic_identity_id":
+                    economic_identity_id,
+            }
 
             cur.execute(
                 """
@@ -5152,12 +5857,12 @@ def create_or_reuse_realtime_oracle_reservation(
                     %s::uuid,
                     %s,
                     %s,
-                    'voice',
+                    %s,
                     'prepared',
                     %s::jsonb,
                     NOW() + INTERVAL '15 minutes',
                     %s,
-                    'browser_realtime'
+                    %s
                 )
                 RETURNING id
                 """,
@@ -5166,19 +5871,22 @@ def create_or_reuse_realtime_oracle_reservation(
                     user_id,
                     anonymous_user_id,
                     deity,
+                    input_mode,
                     _safe_json_payload(
-                        prepared_state or {}
+                        reservation_state
                     ),
                     client_interaction_id,
+                    reservation_kind,
                 ),
             )
+
             row = cur.fetchone()
 
         conn.commit()
 
         if not row or not row.get("id"):
             raise RuntimeError(
-                "Realtime reservation insert "
+                "Question reservation insert "
                 "returned no id"
             )
 
@@ -5187,7 +5895,96 @@ def create_or_reuse_realtime_oracle_reservation(
             "interaction_id": str(row["id"]),
             "reused": False,
             "plan_code": effective_plan,
+            "quota_bucket": quota_bucket,
+            "question_limit": question_limit,
+            "questions_used": questions_used,
+            "questions_reserved":
+                questions_reserved,
         }
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        conn.close()
+
+
+def _abandon_server_question_reservation(
+    *,
+    interaction_id: str,
+    session_id: str,
+    anonymous_user_id: str,
+    user_id: Optional[str],
+) -> bool:
+    """
+    Release a prepared ordinary server-inference reservation when provider
+    execution fails before durable Oracle finalization begins.
+
+    Only a still-prepared server reservation may be expired here.
+    """
+    interaction_id = str(
+        uuid.UUID(str(interaction_id))
+    )
+    session_id = str(
+        uuid.UUID(str(session_id))
+    )
+    anonymous_user_id = str(
+        anonymous_user_id or ""
+    ).strip()
+    user_id = (
+        str(uuid.UUID(str(user_id)))
+        if user_id
+        else None
+    )
+
+    if not anonymous_user_id:
+        raise ValueError(
+            "anonymous_user_id is required"
+        )
+
+    conn = get_db_connection()
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE oracle_pending_inferences
+                SET
+                    status = 'expired',
+                    expires_at = NOW(),
+                    prepared_state =
+                        jsonb_build_object(
+                            'abandoned',
+                            true,
+                            'reservation_kind',
+                            'server_inference',
+                            'reason',
+                            'provider_execution_failed'
+                        )
+                WHERE id = %s::uuid
+                  AND session_id = %s::uuid
+                  AND anonymous_user_id
+                      IS NOT DISTINCT FROM %s
+                  AND user_id
+                      IS NOT DISTINCT FROM %s::uuid
+                  AND reservation_kind =
+                      'server_inference'
+                  AND status = 'prepared'
+                RETURNING id
+                """,
+                (
+                    interaction_id,
+                    session_id,
+                    anonymous_user_id,
+                    user_id,
+                ),
+            )
+
+            abandoned = bool(cur.fetchone())
+
+        conn.commit()
+        return abandoned
 
     except Exception:
         conn.rollback()
@@ -5773,6 +6570,16 @@ def finalize_realtime_oracle_reservation(
             duplicate = False
 
             if inserted:
+                _consume_reserved_free_question_locked(
+                    cur,
+                    prepared_state.get(
+                        "question_quota"
+                    ),
+                    user_id=user_id,
+                    anonymous_user_id=
+                        anonymous_user_id,
+                )
+
                 oracle_interaction_id = str(
                     inserted["id"]
                 )
@@ -7712,41 +8519,85 @@ def ensure_anonymous_user(anonymous_user_id: str):
 
 def get_free_economic_state(
     anonymous_user_id: str,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Read durable free-access economic state without initializing legacy rows.
+
+    Anonymous access reads the current anonymous economic identity.
+    Authenticated free access reads the account's durable economic anchor.
 
     eligibility_policy_version is the initialization authority. A NULL policy
     version means this identity still requires explicit historical
     reconciliation before the new economic policy can become authoritative.
     """
+    anonymous_user_id = str(
+        anonymous_user_id or ""
+    ).strip()
+    user_id = (
+        str(user_id).strip()
+        if user_id
+        else None
+    )
+
     conn = get_db_connection()
 
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    intro_queries_used,
-                    intro_grant_completed_at,
-                    registered_intro_queries_used,
-                    registered_intro_grant_completed_at,
-                    free_window_started_at,
-                    free_window_queries_used,
-                    eligibility_policy_version
-                FROM anonymous_users
-                WHERE id = %s
-                """,
-                (anonymous_user_id,),
-            )
+            if user_id:
+                cur.execute(
+                    """
+                    SELECT
+                        u.free_economic_identity_id
+                            AS economic_identity_id,
+                        au.intro_queries_used,
+                        au.intro_grant_completed_at,
+                        au.registered_intro_queries_used,
+                        au.registered_intro_grant_completed_at,
+                        au.free_window_started_at,
+                        au.free_window_queries_used,
+                        au.eligibility_policy_version
+                    FROM users u
+                    LEFT JOIN anonymous_users au
+                      ON au.id =
+                         u.free_economic_identity_id
+                    WHERE u.id = %s::uuid
+                    """,
+                    (user_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT
+                        id AS economic_identity_id,
+                        intro_queries_used,
+                        intro_grant_completed_at,
+                        registered_intro_queries_used,
+                        registered_intro_grant_completed_at,
+                        free_window_started_at,
+                        free_window_queries_used,
+                        eligibility_policy_version
+                    FROM anonymous_users
+                    WHERE id = %s
+                    """,
+                    (anonymous_user_id,),
+                )
+
             row = cur.fetchone()
     finally:
         conn.close()
 
-    if not row:
+    if (
+        not row
+        or not str(
+            row.get("economic_identity_id")
+            or ""
+        ).strip()
+    ):
         return {
             "exists": False,
             "initialized": False,
+            "economic_identity_id": None,
             "eligibility_policy_version": None,
             "intro_queries_used": None,
             "intro_grant_completed_at": None,
@@ -7757,7 +8608,10 @@ def get_free_economic_state(
         }
 
     policy_version = (
-        str(row.get("eligibility_policy_version") or "").strip()
+        str(
+            row.get("eligibility_policy_version")
+            or ""
+        ).strip()
         or None
     )
     initialized = policy_version is not None
@@ -7777,23 +8631,27 @@ def get_free_economic_state(
     return {
         "exists": True,
         "initialized": initialized,
-        "eligibility_policy_version": policy_version,
-        "intro_queries_used": row.get("intro_queries_used"),
-        "intro_grant_completed_at": row.get(
-            "intro_grant_completed_at"
+        "economic_identity_id": str(
+            row["economic_identity_id"]
         ),
-        "registered_intro_queries_used": row.get(
-            "registered_intro_queries_used"
-        ),
-        "registered_intro_grant_completed_at": row.get(
-            "registered_intro_grant_completed_at"
-        ),
-        "free_window_started_at": row.get(
-            "free_window_started_at"
-        ),
-        "free_window_queries_used": row.get(
-            "free_window_queries_used"
-        ),
+        "eligibility_policy_version":
+            policy_version,
+        "intro_queries_used":
+            row.get("intro_queries_used"),
+        "intro_grant_completed_at":
+            row.get("intro_grant_completed_at"),
+        "registered_intro_queries_used":
+            row.get(
+                "registered_intro_queries_used"
+            ),
+        "registered_intro_grant_completed_at":
+            row.get(
+                "registered_intro_grant_completed_at"
+            ),
+        "free_window_started_at":
+            row.get("free_window_started_at"),
+        "free_window_queries_used":
+            row.get("free_window_queries_used"),
     }
 
 
@@ -7919,6 +8777,12 @@ FREE_ECONOMIC_POLICY_VERSION = "anon9_pilgrim9_daily1_v1"
 ANONYMOUS_INTRO_QUERY_LIMIT = 9
 PILGRIM_INTRO_QUERY_LIMIT = 9
 PILGRIM_DAILY_QUERY_LIMIT = 1
+
+QUESTION_RESERVATION_KINDS = (
+    "browser_realtime",
+    "device_inference",
+    "server_inference",
+)
 
 
 PLAN_REFLECTION_WORD_CAPS = {
@@ -9324,26 +10188,90 @@ def can_user_ask(
     user_id: Optional[str] = None,
     exclude_realtime_client_interaction_id: Optional[str] = None,
 ) -> bool:
+    """
+    Informational quota check.
+
+    Authoritative admission is create_oracle_question_reservation().
+    This helper mirrors free-economic state closely enough for UI/preflight
+    decisions but must not replace the transactional reservation primitive.
+    """
     if user_id:
-        entitlement = get_user_entitlement_snapshot(user_id)
-        usage_window_start = get_effective_usage_window_start(
-            entitlement
+        entitlement = get_user_entitlement_snapshot(
+            user_id
+        )
+        effective_plan = normalize_plan_code(
+            entitlement["effective_plan_code"]
+        )
+
+        if plan_has_unlimited_questions(
+            effective_plan
+        ):
+            return True
+
+        if effective_plan in {
+            "anon",
+            "pilgrim",
+        }:
+            economic_state = (
+                get_free_economic_state(
+                    anonymous_user_id,
+                    user_id=user_id,
+                )
+            )
+
+            if not economic_state.get(
+                "initialized"
+            ):
+                return False
+
+            quota = _derive_free_question_quota(
+                economic_state,
+                authenticated=True,
+            )
+
+            if not quota.get("initialized"):
+                return False
+
+            reserved = (
+                get_active_realtime_question_reservation_count(
+                    anonymous_user_id,
+                    user_id=user_id,
+                    window_start=quota.get(
+                        "window_started_at"
+                    ),
+                    exclude_client_interaction_id=
+                        exclude_realtime_client_interaction_id,
+                )
+            )
+
+            return (
+                int(
+                    quota.get(
+                        "questions_used"
+                    )
+                    or 0
+                )
+                + reserved
+            ) < int(
+                quota.get(
+                    "question_limit"
+                )
+                or 0
+            )
+
+        usage_window_start = (
+            get_effective_usage_window_start(
+                entitlement
+            )
         )
         usage = get_oracle_usage_counts(
             user_id=user_id,
             window_start=usage_window_start,
         )
-
-        if plan_has_unlimited_questions(
-            entitlement["effective_plan_code"]
-        ):
-            return True
-
         limit = PLAN_LIMITS.get(
-            entitlement["effective_plan_code"],
+            effective_plan,
             PLAN_LIMITS["anon"],
         )
-
         reserved = (
             get_active_realtime_question_reservation_count(
                 anonymous_user_id,
@@ -9355,12 +10283,25 @@ def can_user_ask(
         )
 
         return (
-            usage["questions_used"] + reserved
+            usage["questions_used"]
+            + reserved
         ) < limit
 
-    usage = get_anonymous_oracle_usage_counts(
+    economic_state = get_free_economic_state(
         anonymous_user_id
     )
+
+    if not economic_state.get("initialized"):
+        return False
+
+    quota = _derive_free_question_quota(
+        economic_state,
+        authenticated=False,
+    )
+
+    if not quota.get("initialized"):
+        return False
+
     reserved = (
         get_active_realtime_question_reservation_count(
             anonymous_user_id,
@@ -9370,8 +10311,15 @@ def can_user_ask(
     )
 
     return (
-        usage["questions_used"] + reserved
-    ) < PLAN_LIMITS["anon"]
+        int(
+            quota.get("questions_used")
+            or 0
+        )
+        + reserved
+    ) < int(
+        quota.get("question_limit")
+        or 0
+    )
 
 
 def get_or_create_session_id(request: Request) -> str:
@@ -13163,6 +14111,12 @@ def auth_register(payload: AuthRegisterInput, request: Request):
             status_code=400
         )
 
+    anonymous_user_id = (
+        get_or_create_anonymous_user_id(
+            request
+        )
+    )
+
     conn = get_db_connection()
 
     # Check if email already exists
@@ -13207,9 +14161,10 @@ def auth_register(payload: AuthRegisterInput, request: Request):
                 donation_total,
                 influence_state,
                 eligibility_flags,
+                free_economic_identity_id,
                 role
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             user_id,
             email,
@@ -13226,12 +14181,12 @@ def auth_register(payload: AuthRegisterInput, request: Request):
             0,
             "disabled",
             [],
+            anonymous_user_id,
             "user"
         ))
     conn.commit()
     conn.close()
 
-    anonymous_user_id = get_or_create_anonymous_user_id(request)
     claim_anonymous_history_into_user(
         anonymous_user_id,
         user_id,
@@ -17000,7 +17955,7 @@ Interaction style:
             }
 
             reservation = (
-                create_or_reuse_realtime_oracle_reservation(
+                create_oracle_question_reservation(
                     session_id=str(session_id),
                     anonymous_user_id=str(
                         anonymous_user_id
@@ -17011,6 +17966,9 @@ Interaction style:
                         else None
                     ),
                     deity=deity,
+                    input_mode="voice",
+                    reservation_kind=
+                        "browser_realtime",
                     client_interaction_id=
                         client_interaction_id,
                     prepared_state=pending_state,
@@ -17110,17 +18068,74 @@ Interaction style:
                 "finalization_state": finalization_state,
             }
 
-            pending_id = create_pending_oracle_inference(
-                session_id=str(session_id),
-                user_id=str(user_id) if user_id else None,
-                deity=deity,
-                input_mode=input_mode,
-                prepared_state=pending_state,
+            reservation = (
+                create_oracle_question_reservation(
+                    session_id=str(session_id),
+                    anonymous_user_id=str(
+                        anonymous_user_id
+                    ),
+                    user_id=(
+                        str(user_id)
+                        if user_id
+                        else None
+                    ),
+                    deity=deity,
+                    input_mode=input_mode,
+                    reservation_kind=
+                        "device_inference",
+                    prepared_state=pending_state,
+                )
+            )
+
+            if (
+                reservation.get("status")
+                == "denied"
+            ):
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "oracle_message":
+                            "The Oracle grows quiet. "
+                            "Your question allowance "
+                            "is complete for this "
+                            "access period.",
+                        "reason":
+                            reservation.get("reason")
+                            or
+                            "question_limit_reached",
+                    },
+                )
+
+            if (
+                reservation.get("status")
+                != "prepared"
+            ):
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "error":
+                            "This Oracle turn is no "
+                            "longer available for "
+                            "generation.",
+                        "reason":
+                            "device_reservation_"
+                            + str(
+                                reservation.get(
+                                    "status"
+                                )
+                                or "invalid"
+                            ),
+                    },
+                )
+
+            pending_id = reservation.get(
+                "interaction_id"
             )
 
             if not pending_id:
                 raise RuntimeError(
-                    "Could not create pending Oracle inference"
+                    "Device reservation produced "
+                    "no interaction id"
                 )
 
             return {
@@ -17131,22 +18146,196 @@ Interaction style:
                 ),
             }
 
-        result = await execute_oracle_inference(prepared_inference)
-        final_model_finished_at = datetime.datetime.now()
+        server_pending_state = {
+            "schema":
+                "oracle_pending_inference_state.v3",
+            "reservation_kind":
+                "server_inference",
+            "finalization_state":
+                finalization_state,
+        }
+
+        server_reservation = (
+            create_oracle_question_reservation(
+                session_id=str(session_id),
+                anonymous_user_id=str(
+                    anonymous_user_id
+                ),
+                user_id=(
+                    str(user_id)
+                    if user_id
+                    else None
+                ),
+                deity=deity,
+                input_mode=input_mode,
+                reservation_kind=
+                    "server_inference",
+                prepared_state=
+                    server_pending_state,
+            )
+        )
+
+        if (
+            server_reservation.get("status")
+            == "denied"
+        ):
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "oracle_message":
+                        "The Oracle grows quiet. "
+                        "Your question allowance "
+                        "is complete for this "
+                        "access period.",
+                    "reason":
+                        server_reservation.get(
+                            "reason"
+                        )
+                        or
+                        "question_limit_reached",
+                },
+            )
+
+        if (
+            server_reservation.get("status")
+            != "prepared"
+        ):
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error":
+                        "This Oracle turn is no "
+                        "longer available for "
+                        "generation.",
+                    "reason":
+                        "server_reservation_"
+                        + str(
+                            server_reservation.get(
+                                "status"
+                            )
+                            or "invalid"
+                        ),
+                },
+            )
+
+        server_interaction_id = (
+            server_reservation.get(
+                "interaction_id"
+            )
+        )
+
+        if not server_interaction_id:
+            raise RuntimeError(
+                "Server reservation produced "
+                "no interaction id"
+            )
+
+        try:
+            result = await execute_oracle_inference(
+                prepared_inference
+            )
+        except Exception:
+            try:
+                _abandon_server_question_reservation(
+                    interaction_id=
+                        server_interaction_id,
+                    session_id=str(session_id),
+                    anonymous_user_id=str(
+                        anonymous_user_id
+                    ),
+                    user_id=(
+                        str(user_id)
+                        if user_id
+                        else None
+                    ),
+                )
+            except Exception as abandon_exc:
+                logger.warning(
+                    "SERVER_QUESTION_RESERVATION_"
+                    "ABANDON_FAILED "
+                    "interaction_id=%s error=%s",
+                    server_interaction_id,
+                    abandon_exc,
+                )
+            raise
+
+        final_model_finished_at = (
+            datetime.datetime.now()
+        )
+
+        claimed = claim_pending_oracle_inference(
+            server_interaction_id,
+            session_id=str(session_id),
+            user_id=(
+                str(user_id)
+                if user_id
+                else None
+            ),
+        )
+
+        if not claimed:
+            raise RuntimeError(
+                "Server question reservation "
+                "could not be claimed"
+            )
+
+        finalization_state["interaction_id"] = (
+            server_interaction_id
+        )
 
         timing_state = {
             "ask_started_at": ask_started_at,
-            "retrieval_started_at": retrieval_started_at,
-            "retrieval_finished_at": retrieval_finished_at,
-            "final_model_started_at": final_model_started_at,
-            "final_model_finished_at": final_model_finished_at,
+            "retrieval_started_at":
+                retrieval_started_at,
+            "retrieval_finished_at":
+                retrieval_finished_at,
+            "final_model_started_at":
+                final_model_started_at,
+            "final_model_finished_at":
+                final_model_finished_at,
         }
 
-        return finalize_oracle_inference(
-            finalization_state=finalization_state,
+        finalized = finalize_oracle_inference(
+            finalization_state=
+                finalization_state,
             inference_result=result,
             timing_state=timing_state,
         )
+
+        try:
+            completed = (
+                complete_pending_oracle_inference(
+                    server_interaction_id,
+                    session_id=str(session_id),
+                    user_id=(
+                        str(user_id)
+                        if user_id
+                        else None
+                    ),
+                )
+            )
+
+            if not completed:
+                logger.warning(
+                    "SERVER_QUESTION_RESERVATION_"
+                    "COMPLETE_MISSING "
+                    "interaction_id=%s",
+                    server_interaction_id,
+                )
+
+        except Exception as completion_exc:
+            # The durable Oracle interaction and quota consumption already
+            # committed together. Pending-state cleanup must not turn that
+            # successful answer into a client-visible retry opportunity.
+            logger.warning(
+                "SERVER_QUESTION_RESERVATION_"
+                "COMPLETE_FAILED "
+                "interaction_id=%s error=%s",
+                server_interaction_id,
+                completion_exc,
+            )
+
+        return finalized
 
     except Exception as e:
         logger.error(f"Oracle endpoint error: {e}")
