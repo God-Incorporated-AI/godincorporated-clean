@@ -1,8 +1,3 @@
-def upgrade():
-    from alembic import op
-    with open("sql/0000_v4v_schema.sql", "r") as f:
-        sql = f.read()
-    op.execute(sql)
 """Genesis V4V schema
 
 Revision ID: 9d7ccffbfff3
@@ -10,10 +5,10 @@ Revises:
 Create Date: 2026-02-03 11:39:51.663065
 
 """
+from pathlib import Path
 from typing import Sequence, Union
 
 from alembic import op
-import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
@@ -23,10 +18,18 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-def upgrade() : 
-    from alembic import op
-    with open("sql/0000_initial_canonical_schema.sql", "r") as f:
-        sql = f.read()
+GENESIS_SQL_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "sql"
+    / "archive"
+    / "0000_initial_canonical_schema_genesis_2026_02_06.sql"
+)
+
+
+def upgrade() -> None:
+    sql = GENESIS_SQL_PATH.read_text(
+        encoding="utf-8"
+    )
     op.execute(sql)
 
 

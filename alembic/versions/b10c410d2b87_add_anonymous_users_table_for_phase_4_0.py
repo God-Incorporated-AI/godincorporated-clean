@@ -1,7 +1,7 @@
 """Add anonymous_users table for Phase 4.0
 
 Revision ID: b10c410d2b87
-Revises: cb9790d80b48
+Revises: 9d7ccffbfff3
 Create Date: 2026-02-06 13:38:26.413611
 
 """
