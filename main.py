@@ -7181,13 +7181,6 @@ def remove_uploaded_file(file_path: str):
     except Exception as e:
         logger.warning(f"Failed to remove uploaded file {file_path}: {e}")
 
-def reset_scroll_system():
-    """Clears uploaded scroll files from disk only; does not reset database scroll records."""
-    # Clear all files in scrolls_uploads/
-    for filename in os.listdir(UPLOAD_DIR):
-        file_path = os.path.join(UPLOAD_DIR, filename)
-        if os.path.isfile(file_path):
-            os.remove(file_path)
 
 
 def ensure_anonymous_user(anonymous_user_id: str):
@@ -12460,10 +12453,6 @@ def account_page(request: Request):
 def about_page(request: Request):
     return templates.TemplateResponse("about.html", {"request": request})
 
-@app.post("/reset_scrolls")
-def reset_scrolls():
-    reset_scroll_system()
-    return {"message": "Scroll system reset successfully."}
 
 @app.get("/scrolls")
 def get_scroll_count():
