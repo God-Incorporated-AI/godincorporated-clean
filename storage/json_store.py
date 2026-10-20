@@ -6,7 +6,6 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 UPLOAD_DIR = os.path.join(BASE_DIR, "scrolls_uploads")
 AUDIO_DIR = os.getenv("AUDIO_DIR", os.path.join(UPLOAD_DIR, "audio"))
-TRANSCRIPT_LOG = os.path.join(BASE_DIR, "oracle_log.json")
 SCROLL_DB = os.path.join(BASE_DIR, "scroll_data.json")
 SEEKERS_DB = os.path.join(BASE_DIR, "seekers.json")
 VISITORS_DB = os.path.join(BASE_DIR, "visitors.json")
@@ -15,18 +14,6 @@ USERS_DB = os.path.join(BASE_DIR, "users.json")
 VERIFICATION_TOKENS_DB = os.path.join(BASE_DIR, "verification_tokens.json")
 RESET_TOKENS_DB = os.path.join(BASE_DIR, "reset_tokens.json")
 
-def save_log(entry):
-    try:
-        logs = []
-        if os.path.exists(TRANSCRIPT_LOG):
-            with open(TRANSCRIPT_LOG, "r") as f:
-                content = f.read().strip()
-                logs = json.loads(content) if content else []
-        logs.append(entry)
-        with open(TRANSCRIPT_LOG, "w") as f:
-            json.dump(logs, f, indent=2)
-    except Exception as e:
-        print("⚠️ Logging failed:", e)
 
 def load_scroll_data():
     """Load scroll data from JSON, return list of scrolls."""
