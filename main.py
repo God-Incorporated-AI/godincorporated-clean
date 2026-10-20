@@ -3271,7 +3271,7 @@ def replace_temple_context_shadow_snapshot(
                 or candidate_computed != normalized_rows[0]["last_computed_at"]):
             raise ValueError("R6D preview timestamps differ from rows")
 
-    conn = get_db_connection()
+    conn = _local_r6d_publisher_connection()
 
     try:
         with conn.cursor() as cur:
@@ -4829,6 +4829,8 @@ def _local_r6d_restricted_connection(*, login, passfile_env):
     if (login, passfile_env) not in (
         ("godinc_r6d_reader_login", "TEMPLE_CONTEXT_LOCAL_READER_PASSFILE"),
         ("godinc_r6d_cache_writer_login", "TEMPLE_CONTEXT_LOCAL_WRITER_PASSFILE"),
+        ("godinc_r6d_publisher_login", "TEMPLE_CONTEXT_LOCAL_PUBLISHER_PASSFILE"),
+        ("godinc_r6d_aggregate_reader_login", "TEMPLE_CONTEXT_LOCAL_AGGREGATE_READER_PASSFILE"),
     ):
         raise PermissionError("STOP: R6D restricted login mismatch")
     name = (
@@ -4867,6 +4869,20 @@ def _local_r6d_writer_connection():
     return _local_r6d_restricted_connection(
         login="godinc_r6d_cache_writer_login",
         passfile_env="TEMPLE_CONTEXT_LOCAL_WRITER_PASSFILE",
+    )
+
+
+def _local_r6d_publisher_connection():
+    return _local_r6d_restricted_connection(
+        login="godinc_r6d_publisher_login",
+        passfile_env="TEMPLE_CONTEXT_LOCAL_PUBLISHER_PASSFILE",
+    )
+
+
+def _local_r6d_aggregate_reader_connection():
+    return _local_r6d_restricted_connection(
+        login="godinc_r6d_aggregate_reader_login",
+        passfile_env="TEMPLE_CONTEXT_LOCAL_AGGREGATE_READER_PASSFILE",
     )
 
 
@@ -4924,6 +4940,13 @@ def run_local_temple_context_shadow_window(
         raise PermissionError(
             "STOP: R6D original Local aggregate writes lack separate authorization"
         )
+    return _prepare_local_temple_context_shadow_preview(
+        window_ended_at=window_ended_at
+    ).public_summary()
+
+
+def _prepare_local_temple_context_shadow_preview(*, window_ended_at):
+    """Reuse the one verified cached shadow preview without publication."""
     _require_local_temple_context_db_target(allow_missing_reader_url=True)
 
     from datetime import datetime as _datetime, timezone as _timezone
@@ -4962,7 +4985,25 @@ def run_local_temple_context_shadow_window(
         evaluate_waves=evaluate_temple_momentum_waves,
         capture_source_revision=True,
     )
-    return result.public_summary()
+    return result
+
+
+def run_local_temple_context_shadow_publication(
+    *, window_ended_at, authorize_publication=False,
+):
+    """Manual Local publication entry point; never scheduled or routed."""
+    if type(authorize_publication) is not bool:
+        raise ValueError("R6D publication switch must be boolean")
+    if not authorize_publication:
+        raise PermissionError("STOP: R6D manual publication not authorized")
+    preview = _prepare_local_temple_context_shadow_preview(
+        window_ended_at=window_ended_at
+    )
+    return replace_temple_context_shadow_snapshot(
+        preview,
+        contract_fingerprint=preview.publication_contract_fingerprint,
+        authorize_publication=True,
+    )
 
 
 def read_local_temple_context_shadow_snapshot(*, expected_window_ended_at):
@@ -4985,7 +5026,7 @@ def read_local_temple_context_shadow_snapshot(*, expected_window_ended_at):
     if end > now:
         raise ValueError("R6D consumer cannot request future window")
 
-    _require_local_temple_context_db_target()
+    _require_local_temple_context_db_target(allow_missing_reader_url=True)
     sanitizer = (
         (os.getenv("TEMPLE_CONTEXT_SANITIZER_MODEL") or "").strip()
         or DEFAULT_TEMPLE_CONTEXT_SANITIZER_MODEL
@@ -5000,7 +5041,7 @@ def read_local_temple_context_shadow_snapshot(*, expected_window_ended_at):
     )
     withheld = {"status": "withheld", "themes": []}
 
-    connection = get_db_connection()
+    connection = _local_r6d_aggregate_reader_connection()
     try:
         connection.set_session(readonly=True, isolation_level="REPEATABLE READ")
         with connection.cursor() as cur:

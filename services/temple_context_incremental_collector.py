@@ -79,8 +79,8 @@ def collect_private_temple_review_increment(
     authorize_cache_writes=False, get_writer_connection=None,
 ):
     """One bounded pass; each authorized cache write commits independently."""
-    if authorize_cache_writes:
-        raise ValueError("STOP: direct R6D collector persistence disabled")
+    if authorize_cache_writes and not callable(get_writer_connection):
+        raise ValueError("STOP: R6D restricted cache writer required")
 
     if (expected_database != 'godinc_dev' or not callable(get_connection)
             or not callable(verify_database)):
