@@ -6794,7 +6794,7 @@ if (seekerInput && oracleForm) {
   function resetPendingAppleStoreKitButton() {
     if (pendingAppleStoreKitButton) {
       pendingAppleStoreKitButton.disabled = false;
-      pendingAppleStoreKitButton.textContent = pendingAppleStoreKitOriginalText || "Subscribe with Apple - $0.99/month";
+      pendingAppleStoreKitButton.textContent = pendingAppleStoreKitOriginalText || "Subscribe with Apple";
     }
     pendingAppleStoreKitButton = null;
     pendingAppleStoreKitOriginalText = "";
@@ -6990,7 +6990,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
         button.hidden = false;
         button.style.display = "";
         button.disabled = !authenticated;
-        button.textContent = "Subscribe with Apple - $0.99/month";
+        button.textContent = "Subscribe with Apple";
         button.dataset.storekitProductId = APPLE_SEEKER_MONTHLY_PRODUCT_ID;
 
         if (card) {
@@ -7049,7 +7049,249 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     return selectedButton;
   }
 
+  // A7C5G5: Web-only, quote-derived early renewal review. Both server
+  // purchase switches remain the sole feature activation authority.
+  const stripeReupOfferPanel = document.getElementById("stripeReupOfferPanel");
+  const stripeReupOfferCopy = document.getElementById("stripeReupOfferCopy");
+  const stripeReupReviewBtn = document.getElementById("stripeReupReviewBtn");
+  const stripeReupConfirmPanel = document.getElementById("stripeReupConfirmPanel");
+  const stripeReupConfirmCopy = document.getElementById("stripeReupConfirmCopy");
+  const stripeReupAcknowledge = document.getElementById("stripeReupAcknowledge");
+  const stripeReupChargeBtn = document.getElementById("stripeReupChargeBtn");
+  const stripeReupCancelBtn = document.getElementById("stripeReupCancelBtn");
+  let stripeReupQuote = null;
+  let stripeReupGeneration = 0;
+  let stripeReupBusy = false;
+  let stripeReupAttempted = false;
+
+  function setStripeReupVisible(node, visible) {
+    if (!node) return;
+    node.hidden = !visible;
+    node.style.display = visible ? "" : "none";
+  }
+
+  function formatStripeReupPrice(cents) {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency", currency: "USD"
+    }).format(cents / 100);
+  }
+
+  function stripeReupLocalCandidate(identity) {
+    const usage = identity && identity.usage;
+    return Boolean(
+      !isNativeIOSApp() &&
+      identity && identity.authenticated === true &&
+      identity.plan_code === "seeker" &&
+      identity.entitlement && identity.entitlement.status === "active" &&
+      usage && usage.is_unlimited_questions === false &&
+      Number.isInteger(usage.question_limit) && usage.question_limit > 0 &&
+      Number.isInteger(usage.questions_remaining) &&
+      usage.questions_remaining === 0
+    );
+  }
+
+  function validateStripeReupQuote(data, identity) {
+    if (!stripeReupLocalCandidate(identity) || !data ||
+        data.eligible !== true || data.quote_only !== true ||
+        data.plan_code !== "seeker" ||
+        data.support_mode !== "monthly_recurring" ||
+        data.currency !== "usd" ||
+        !Number.isInteger(data.amount_cents) || data.amount_cents <= 0 ||
+        !Number.isInteger(data.new_period_question_limit) ||
+        data.new_period_question_limit !== identity.usage.question_limit ||
+        !Number.isInteger(data.questions_used) ||
+        data.questions_used < data.new_period_question_limit ||
+        data.requires_explicit_charge_confirmation !== true ||
+        data.payment_confirmed !== false ||
+        data.questions_replenished !== false ||
+        typeof data.existing_period_ends_at !== "string" ||
+        !Number.isFinite(Date.parse(data.existing_period_ends_at)) ||
+        Date.parse(data.existing_period_ends_at) <= Date.now()) {
+      return null;
+    }
+    return {
+      amount_cents: data.amount_cents,
+      new_period_question_limit: data.new_period_question_limit,
+      existing_period_ends_at: data.existing_period_ends_at,
+      currency: data.currency
+    };
+  }
+
+  function stripeReupQuoteMatches(a, b) {
+    return Boolean(a && b &&
+      a.amount_cents === b.amount_cents &&
+      a.currency === b.currency &&
+      a.new_period_question_limit === b.new_period_question_limit &&
+      a.existing_period_ends_at === b.existing_period_ends_at);
+  }
+
+  async function requestStripeReupQuote(identity) {
+    const response = await identityFetch("/billing/stripe/early-reup/quote", {
+      method: "GET", headers: { "Accept": "application/json" }
+    });
+    if (!response.ok) return null;
+    return validateStripeReupQuote(await safeReadJson(response), identity);
+  }
+
+  async function refreshStripeReupQuote() {
+    const generation = ++stripeReupGeneration;
+    stripeReupQuote = null;
+    setStripeReupVisible(stripeReupOfferPanel, false);
+    setStripeReupVisible(stripeReupConfirmPanel, false);
+    if (stripeReupAcknowledge) stripeReupAcknowledge.checked = false;
+    if (stripeReupChargeBtn) stripeReupChargeBtn.disabled = true;
+    const identity = currentIdentity;
+    if (!stripeReupOfferPanel || stripeReupBusy || stripeReupAttempted ||
+        !stripeReupLocalCandidate(identity)) return;
+    try {
+      const quote = await requestStripeReupQuote(identity);
+      if (!quote || generation !== stripeReupGeneration ||
+          currentIdentity !== identity || !stripeReupLocalCandidate(currentIdentity) ||
+          stripeReupAttempted) return;
+      stripeReupQuote = quote;
+      stripeReupOfferCopy.textContent =
+        "Your current Seeker question allowance is complete. " +
+        "Review an optional additional " + formatStripeReupPrice(quote.amount_cents) +
+        " charge to renew your existing monthly Stripe subscription early.";
+      setStripeReupVisible(stripeReupOfferPanel, true);
+    } catch (_) {
+      // Optional offer is unavailable. Never fall back to ordinary checkout.
+    }
+  }
+
+  function reviewStripeReup() {
+    if (stripeReupBusy || stripeReupAttempted || !stripeReupQuote ||
+        !stripeReupLocalCandidate(currentIdentity)) return;
+    const quote = stripeReupQuote;
+    const ending = new Date(quote.existing_period_ends_at).toLocaleDateString();
+    const price = formatStripeReupPrice(quote.amount_cents);
+    stripeReupConfirmCopy.textContent =
+      "You authorize an additional " + price + " USD charge now to your existing " +
+      "recurring Seeker Monthly subscription. Your current period ends " +
+      ending + ". After Stripe verifies a new paid invoice, your allowance " +
+      "will reset to " + quote.new_period_question_limit +
+      " questions and your next recurring billing date will shift to the " +
+      "new monthly period. The existing monthly subscription continues; " +
+      "this is not a one-time top-up. No allowance changes before verified payment.";
+    stripeReupAcknowledge.checked = false;
+    stripeReupChargeBtn.disabled = true;
+    stripeReupChargeBtn.textContent = "Authorize additional " + price + " charge";
+    setStripeReupVisible(stripeReupOfferPanel, false);
+    setStripeReupVisible(stripeReupConfirmPanel, true);
+  }
+
+  async function submitStripeReup() {
+    if (stripeReupBusy || stripeReupAttempted ||
+        !stripeReupQuote || !stripeReupAcknowledge.checked ||
+        !stripeReupLocalCandidate(currentIdentity)) return;
+    stripeReupBusy = true;
+    stripeReupChargeBtn.disabled = true;
+    stripeReupCancelBtn.disabled = true;
+    const identity = currentIdentity;
+    try {
+      // Verify the terms again immediately before the one authorized POST.
+      const fresh = await requestStripeReupQuote(identity);
+      if (!fresh || currentIdentity !== identity ||
+          !stripeReupQuoteMatches(stripeReupQuote, fresh) ||
+          !stripeReupLocalCandidate(currentIdentity)) {
+        stripeReupQuote = null;
+        setStripeReupVisible(stripeReupConfirmPanel, false);
+        showFeedbackModal(
+          "The renewal quote changed or expired. No charge request was made. " +
+          "Close and reopen Support to review the current offer.",
+          [], "Temple Notice"
+        );
+        return;
+      }
+      if (!window.crypto || typeof window.crypto.randomUUID !== "function") {
+        showFeedbackModal("Secure purchase confirmation is unavailable. No charge request was made.",
+                          [], "Temple Notice");
+        return;
+      }
+      const purchaseRequestId = window.crypto.randomUUID();
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(purchaseRequestId)) {
+        throw new Error("Secure purchase ID is invalid");
+      }
+      // Once POST may have begun, never attempt automatic or button retries.
+      stripeReupAttempted = true;
+      const response = await identityFetch("/billing/stripe/early-reup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirm_charge: true,
+          purchase_request_id: purchaseRequestId,
+          // These values are the original REVIEWED terms, not values
+          // silently substituted by a newer quote after acknowledgment.
+          confirmed_amount_cents: stripeReupQuote.amount_cents,
+          confirmed_currency: stripeReupQuote.currency,
+          confirmed_question_limit: stripeReupQuote.new_period_question_limit,
+          confirmed_existing_period_ends_at: stripeReupQuote.existing_period_ends_at
+        })
+      });
+      const result = await safeReadJson(response);
+      if (response.ok && result && result.ok === true &&
+          result.status === "awaiting_verified_payment" &&
+          result.payment_confirmed === false &&
+          result.questions_replenished === false) {
+        showFeedbackModal(
+          "Early renewal requested. Payment has NOT yet been verified, and your " +
+          "questions have NOT yet refreshed. The allowance will renew only after " +
+          "the verified paid-invoice webhook. Do not submit another purchase request.",
+          [], "Renewal Awaiting Verification"
+        );
+      } else {
+        showFeedbackModal(
+          "The additional purchase was not confirmed. It may still require " +
+          "reconciliation. Do not retry the charge; contact Temple support.",
+          [], "Purchase Held"
+        );
+      }
+    } catch (_) {
+      showFeedbackModal(
+        stripeReupAttempted
+          ? "The additional payment outcome is uncertain. Do not retry the charge; contact Temple support."
+          : "Could not verify the renewal quote. No charge request was made.",
+        [], "Temple Notice"
+      );
+    } finally {
+      stripeReupBusy = false;
+      stripeReupCancelBtn.disabled = false;
+      setStripeReupVisible(stripeReupConfirmPanel, false);
+      setStripeReupVisible(stripeReupOfferPanel, false);
+      stripeReupQuote = null;
+    }
+  }
+
+  if (stripeReupReviewBtn) {
+    stripeReupReviewBtn.addEventListener("click", reviewStripeReup);
+  }
+  if (stripeReupAcknowledge) {
+    stripeReupAcknowledge.addEventListener("change", function () {
+      stripeReupChargeBtn.disabled = !stripeReupAcknowledge.checked ||
+                                     stripeReupBusy || stripeReupAttempted;
+    });
+  }
+  if (stripeReupCancelBtn) {
+    stripeReupCancelBtn.addEventListener("click", function () {
+      if (stripeReupBusy) return;
+      stripeReupAcknowledge.checked = false;
+      stripeReupChargeBtn.disabled = true;
+      setStripeReupVisible(stripeReupConfirmPanel, false);
+      if (stripeReupQuote && !stripeReupAttempted) {
+        setStripeReupVisible(stripeReupOfferPanel, true);
+      }
+    });
+  }
+  if (stripeReupChargeBtn) {
+    stripeReupChargeBtn.addEventListener("click", function () {
+      void submitStripeReup();
+    });
+  }
+  // End A7C5G5 web early-renewal review seam.
+
+
   function renderSupportModal() {
+    void refreshStripeReupQuote();
     const authenticated = Boolean(currentIdentity && currentIdentity.authenticated);
 
     if (authenticated) {

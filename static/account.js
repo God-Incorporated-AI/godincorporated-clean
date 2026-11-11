@@ -65,20 +65,7 @@ document.addEventListener("DOMContentLoaded", async function () {
 
   function formatVoiceAccess(voiceAccess) {
     if (!voiceAccess) return "-";
-
-    const parts = [];
-
-    parts.push("Live voice");
-    parts.push("Uses the standard question allowance");
-    parts.push("Regular Speak fallback");
-
-    if (voiceAccess.library_full_research) {
-      parts.push("full library/research");
-    } else if (voiceAccess.library_access) {
-      parts.push("library access begins");
-    }
-
-    return parts.join(" · ");
+    return "Voice questions use your normal Oracle question allowance";
   }
 
   try {

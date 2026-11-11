@@ -9,7 +9,7 @@ from typing import Any, Dict, Optional
 WEB_PLAN_QUERY_LIMITS: Dict[str, int] = {
     "anon": 9,
     "pilgrim": 9,
-    "seeker": 17,
+    "seeker": 33,
     "magister": 99,
     "sovereign": 144,
     "philosophus": 333,
@@ -67,6 +67,7 @@ def get_voice_policy(plan_code: Optional[str]) -> Dict[str, Any]:
         "regular_speak_voice": True,
         "browser_voice_out": True,
         "voice_uses_question_quota": True,
-        "library_access": plan in {"philosophus", "theoricus"},
-        "library_full_research": plan == "theoricus",
+        "library_access": False,
+        "library_full_research": False,
+        "library_coming_soon": plan == "theoricus",
     }

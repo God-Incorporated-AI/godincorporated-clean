@@ -1,6 +1,7 @@
 import datetime
 import time
 from datetime import timezone
+from decimal import Decimal
 import hashlib
 import json
 import logging
@@ -13,6 +14,7 @@ import uuid
 import re
 
 from typing import Optional, Literal
+from urllib.parse import urlsplit
 from docx import Document
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -35,7 +37,15 @@ from config.settings import xai_api_key
 from services.tts import generate_tts_audio, get_openai_tts_model
 from services.voice_transcription import transcribe_audio_with_metrics
 from services.mail import send_email
-from services.stripe_billing import create_checkout_session_for_user, change_existing_subscription_plan
+from services.stripe_billing import (create_checkout_session_for_user,
+                                     change_existing_subscription_plan,
+                                     validate_paid_stripe_reup_invoice,
+                                     get_stripe_livemode)
+from services.stripe_reup_settlement import (classify_stripe_reup_invoice_event,
+                                             settle_verified_paid_reup,
+                                             audit_failed_stripe_reup_invoice,
+                                             prepare_stripe_reup_intent,
+                                             transition_stripe_reup_intent)
 from storage.json_store import UPLOAD_DIR, AUDIO_DIR
 
 logging.basicConfig(
@@ -14252,6 +14262,39 @@ def compute_donor_floor_plan(highest_paid_plan_ever: Optional[str]) -> Optional[
     return None
 
 
+def compute_annual_loyalty_floor_plan(
+    last_paid_plan_code: Optional[str],
+    last_support_mode: Optional[str],
+    current_period_started_at: Optional[datetime.datetime],
+    subscription_expires_at: Optional[datetime.datetime],
+    verified_paid_annual_term: bool,
+    now: Optional[datetime.datetime] = None,
+) -> Optional[str]:
+    """Return Seeker only after one verified high-tier annual term completes."""
+    if last_support_mode != "annual_recurring" or verified_paid_annual_term is not True:
+        return None
+
+    plan = normalize_plan_code(last_paid_plan_code)
+    if plan not in {"magister", "sovereign", "philosophus", "theoricus"}:
+        return None
+
+    start = current_period_started_at
+    end = subscription_expires_at
+    clock = now or datetime.datetime.now(timezone.utc)
+    if not all(
+        isinstance(value, datetime.datetime)
+        and value.tzinfo is not None
+        and value.utcoffset() is not None
+        for value in (start, end, clock)
+    ):
+        return None
+    if not start < end or not 364 <= (end - start).total_seconds() / 86400 <= 367:
+        return None
+    if clock < end:
+        return None
+    return "seeker"
+
+
 def compute_fallback_floor_plan(
     authenticated: bool,
     donor_floor: Optional[str],
@@ -14284,8 +14327,38 @@ def get_effective_usage_window_start(entitlement: dict) -> Optional[datetime.dat
     last_support_mode = entitlement.get("last_support_mode")
     current_period_started_at = entitlement.get("current_period_started_at")
 
-    if status == "active" and last_support_mode in {"monthly_recurring", "annual_recurring"} and current_period_started_at:
-        return current_period_started_at
+    if status == "active" and last_support_mode in {"monthly_recurring", "annual_recurring"}:
+        if (
+            not isinstance(current_period_started_at, datetime.datetime)
+            or current_period_started_at.tzinfo is None
+            or current_period_started_at.utcoffset() is None
+        ):
+            return None
+        if last_support_mode == "monthly_recurring":
+            return current_period_started_at
+
+        # Annual billing does not mean annual question counting. Count one
+        # monthly allowance from each anniversary of the verified annual start.
+        # Recalculate from the original anchor so Feb 28 cannot drift Mar 31.
+        import calendar
+
+        anchor = current_period_started_at.astimezone(timezone.utc)
+        now = datetime.datetime.now(timezone.utc)
+        if anchor > now:
+            return None
+        month_index = (now.year - anchor.year) * 12 + now.month - anchor.month
+
+        def anchored_month_start(offset: int) -> datetime.datetime:
+            absolute_month = anchor.year * 12 + anchor.month - 1 + offset
+            year, zero_based_month = divmod(absolute_month, 12)
+            month = zero_based_month + 1
+            last_day = calendar.monthrange(year, month)[1]
+            return anchor.replace(year=year, month=month, day=min(anchor.day, last_day))
+
+        window = anchored_month_start(month_index)
+        if window > now:
+            window = anchored_month_start(month_index - 1)
+        return window
 
     if plan_code in {"seeker", "magister", "sovereign", "philosophus", "theoricus"}:
         return start_of_utc_month()
@@ -14317,9 +14390,50 @@ def get_user_entitlement_snapshot(user_id: str) -> dict:
                     fallback_floor_plan_code,
                     renewal_offer_plan_code,
                     last_support_mode,
-                    last_support_ended_at
-                FROM users
-                WHERE id = %s
+                    last_support_ended_at,
+                    EXISTS (
+                        SELECT 1
+                        FROM billing_transactions bt
+                        JOIN payment_events pe
+                          ON pe.provider = 'stripe'
+                         AND pe.provider_event_id = bt.stripe_event_id
+                        JOIN subscriptions s ON s.id = bt.subscription_id
+                        WHERE bt.user_id = u.id
+                          AND bt.provider = 'stripe'
+                          AND bt.status = 'succeeded'
+                          AND bt.currency = 'usd'
+                          AND bt.gross_amount_cents > 0
+                          AND bt.support_mode = 'annual_recurring'
+                          AND bt.transaction_kind IN ('annual_initial', 'annual_renewal')
+                          AND bt.plan_code = u.last_paid_plan_code
+                          AND bt.occurred_at >= u.current_period_started_at
+                          AND bt.occurred_at <= u.subscription_expires_at
+                          AND s.user_id = u.id
+                          AND s.provider = 'stripe'
+                          AND s.support_mode = 'annual_recurring'
+                          AND s.current_period_start = u.current_period_started_at
+                          AND s.current_period_end = u.subscription_expires_at
+                          AND pe.user_id = u.id
+                          AND pe.processing_status = 'processed'
+                          AND pe.livemode = bt.livemode
+                          AND (
+                              (
+                                  pe.handler_version = 'h4g17_stripe_initial_atomic_v1'
+                                  AND pe.helper_name = 'initial_cash_atomic_v1:annual_recurring'
+                                  AND pe.transaction_id = bt.id
+                              )
+                              OR (
+                                  pe.handler_version = 'h4g17_stripe_invoice_atomic_v1'
+                                  AND pe.helper_name = 'apply_subscription_renewal_success:annual_recurring'
+                              )
+                              OR (
+                                  pe.handler_version = 'phase8_webhook_v2'
+                                  AND pe.helper_name = 'apply_subscription_renewal_success:annual_recurring'
+                              )
+                          )
+                    ) AS verified_paid_annual_term
+                FROM users u
+                WHERE u.id = %s
                 """,
                 (user_id,)
             )
@@ -14349,7 +14463,7 @@ def get_user_entitlement_snapshot(user_id: str) -> dict:
         normalize_plan_code(row.get("scroll_floor_plan_code"))
         if row.get("scroll_floor_plan_code") else None
     )
-    fallback_floor_plan_code = (
+    base_fallback_floor_plan_code = (
         normalize_plan_code(row.get("fallback_floor_plan_code"))
         if row.get("fallback_floor_plan_code")
         else compute_fallback_floor_plan(
@@ -14367,17 +14481,45 @@ def get_user_entitlement_snapshot(user_id: str) -> dict:
     last_support_ended_at = row.get("last_support_ended_at")
 
     expires_at = row.get("subscription_expires_at")
+    annual_loyalty_floor_plan_code = compute_annual_loyalty_floor_plan(
+        last_paid_plan_code=last_paid_plan_code,
+        last_support_mode=last_support_mode,
+        current_period_started_at=row.get("current_period_started_at"),
+        subscription_expires_at=expires_at,
+        verified_paid_annual_term=row.get("verified_paid_annual_term") is True,
+        now=now,
+    )
+    fallback_floor_plan_code = max_plan_code(
+        base_fallback_floor_plan_code,
+        annual_loyalty_floor_plan_code,
+    )
 
+    # Recurring paid access requires a verified, timezone-aware paid-through
+    # boundary. Preserve previously accepted nonrecurring/legacy semantics.
+    valid_expiration = (
+        isinstance(expires_at, datetime.datetime)
+        and expires_at.tzinfo is not None
+        and expires_at.utcoffset() is not None
+    )
+    recurring_paid = last_support_mode in {"monthly_recurring", "annual_recurring"}
     is_active_paid = (
         entitlement_status == "active"
-        and (expires_at is None or now <= expires_at)
+        and (
+            (valid_expiration and now < expires_at)
+            if recurring_paid
+            else (expires_at is None or (valid_expiration and now < expires_at))
+        )
     )
 
     if is_active_paid:
         effective_plan_code = raw_plan_code
         is_entitled = raw_plan_code not in {"anon", "pilgrim"}
     else:
-        if entitlement_status == "active" and expires_at and now > expires_at:
+        if entitlement_status == "active" and (
+            (recurring_paid and not valid_expiration)
+            or (expires_at is not None and not valid_expiration)
+            or (valid_expiration and now >= expires_at)
+        ):
             entitlement_status = "expired"
 
         effective_plan_code = fallback_floor_plan_code
@@ -14432,16 +14574,19 @@ def apply_subscription_renewal_success(
     cycle_days: int = DEFAULT_BILLING_CYCLE_DAYS,
     period_start: Optional[datetime.datetime] = None,
     period_end: Optional[datetime.datetime] = None,
-    support_mode: str = "monthly_recurring"
+    support_mode: str = "monthly_recurring",
+    *,
+    cursor=None
 ) -> None:
     now = utc_now()
     normalized_plan = normalize_plan_code(plan_code)
     effective_period_start = period_start or now
     next_renewal = period_end or (effective_period_start + datetime.timedelta(days=cycle_days))
 
-    conn = get_db_connection()
+    from contextlib import nullcontext
+    conn = None if cursor is not None else get_db_connection()
     try:
-        with conn.cursor() as cur:
+        with (nullcontext(cursor) if cursor is not None else conn.cursor()) as cur:
             cur.execute(
                 """
                 SELECT highest_paid_plan_ever
@@ -14497,11 +14642,14 @@ def apply_subscription_renewal_success(
                     user_id
                 )
             )
-        conn.commit()
+        if conn is not None:
+            conn.commit()
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
-    refresh_user_fallback_state(user_id)
+    if cursor is None:
+        refresh_user_fallback_state(user_id)
 
 
 def apply_annual_prepaid_activation(
@@ -15618,14 +15766,15 @@ def build_claim_nudges(upload_count: int) -> list[str]:
     return []
 
 
-def refresh_user_fallback_state(user_id: str) -> dict:
+def refresh_user_fallback_state(user_id: str, *, cursor=None) -> dict:
     """
     Refresh fallback floor fields from current user history and authoritative
     scroll ownership.
     """
-    conn = get_db_connection()
+    from contextlib import nullcontext
+    conn = None if cursor is not None else get_db_connection()
     try:
-        with conn.cursor() as cur:
+        with (nullcontext(cursor) if cursor is not None else conn.cursor()) as cur:
             cur.execute(
                 """
                 SELECT
@@ -15676,7 +15825,8 @@ def refresh_user_fallback_state(user_id: str) -> dict:
                 )
             )
 
-        conn.commit()
+        if conn is not None:
+            conn.commit()
 
         return {
             "donor_floor_plan_code": donor_floor_plan_code,
@@ -15684,7 +15834,8 @@ def refresh_user_fallback_state(user_id: str) -> dict:
             "fallback_floor_plan_code": fallback_floor_plan_code,
         }
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def refresh_user_scroll_count(user_id: str) -> int:
@@ -22459,6 +22610,9 @@ def extract_stripe_subscription_id(obj: dict) -> Optional[str]:
 
 
 def stripe_obj_to_plain(value):
+    if isinstance(value, Decimal):
+        return str(value)
+
     if isinstance(value, dict):
         return {k: stripe_obj_to_plain(v) for k, v in value.items()}
 
@@ -22582,6 +22736,8 @@ def get_active_paid_rail_for_user(user_id: str) -> Optional[dict]:
                     internal_status,
                     provider_subscription_id,
                     stripe_subscription_id,
+                    stripe_price_id,
+                    livemode,
                     current_period_start,
                     current_period_end,
                     cancel_at_period_end,
@@ -22589,10 +22745,11 @@ def get_active_paid_rail_for_user(user_id: str) -> Optional[dict]:
                 FROM subscriptions
                 WHERE user_id = %s
                   AND support_mode IN ('monthly_recurring', 'annual_recurring')
+                  AND ended_at IS NULL
                   AND COALESCE(provider_status, '') IN ('active', 'trialing')
                   AND COALESCE(internal_status, '') = 'active'
-                  AND ended_at IS NULL
-                  AND (current_period_end IS NULL OR current_period_end >= NOW())
+                  AND current_period_end IS NOT NULL
+                  AND current_period_end > NOW()
                 ORDER BY updated_at DESC NULLS LAST, current_period_end DESC NULLS LAST
                 LIMIT 1
                 """,
@@ -22624,61 +22781,48 @@ def upsert_local_stripe_subscription(
 
     metadata = subscription_obj.get("metadata") or {}
     stripe_customer_id = subscription_obj.get("customer")
+    if isinstance(stripe_customer_id, dict):
+        stripe_customer_id = stripe_customer_id.get("id")
     stripe_subscription_id = subscription_obj.get("id")
+    stripe_livemode = subscription_obj.get("livemode")
+    if (not isinstance(stripe_customer_id, str)
+        or not stripe_customer_id.startswith("cus_")
+        or not isinstance(stripe_subscription_id, str)
+        or not stripe_subscription_id.startswith("sub_")
+        or type(stripe_livemode) is not bool):
+        raise ValueError("Stripe subscription identity or environment incomplete")
 
     context = resolve_user_and_subscription_context(
         stripe_customer_id=stripe_customer_id,
         stripe_subscription_id=stripe_subscription_id
     )
 
-    user_id = metadata.get("user_id") or fallback_user_id or context.get("user_id")
-    plan_code = normalize_plan_code(
-        metadata.get("plan_code") or fallback_plan_code or context.get("plan_code")
-    )
-    support_mode = (
-        (metadata.get("support_mode") or fallback_support_mode or context.get("support_mode") or "")
-        .strip()
-        .lower()
-    )
-
-    if not support_mode:
-        try:
-            interval = subscription_obj["items"]["data"][0]["price"]["recurring"]["interval"]
-            support_mode = "annual_recurring" if interval == "year" else "monthly_recurring"
-        except Exception:
-            support_mode = "monthly_recurring"
-
-    billing_customer_id = context.get("billing_customer_id")
-
-    if billing_customer_id is None and stripe_customer_id:
-        conn = get_db_connection()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT id, user_id
-                    FROM billing_customers
-                    WHERE provider = 'stripe'
-                      AND stripe_customer_id = %s
-                    LIMIT 1
-                    """,
-                    (stripe_customer_id,)
-                )
-                row = cur.fetchone()
-                if row:
-                    billing_customer_id = row["id"]
-                    if not user_id:
-                        user_id = row["user_id"]
-        finally:
-            conn.close()
-
-    price_id = None
-    product_id = None
-    try:
-        price_id = subscription_obj["items"]["data"][0]["price"]["id"]
-        product_id = subscription_obj["items"]["data"][0]["price"]["product"]
-    except Exception:
-        pass
+    # Never infer subscription plan or billing mode from Stripe metadata.
+    # The actual Price must resolve uniquely to a current Local price map.
+    item_set = subscription_obj.get("items") or {}
+    items = item_set.get("data") if isinstance(item_set, dict) else None
+    if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
+        raise ValueError("Stripe subscription requires exactly one priced item")
+    item = items[0]
+    price = item.get("price")
+    if not isinstance(price, dict):
+        raise ValueError("Stripe subscription Price object missing")
+    price_id = price.get("id")
+    product_id = price.get("product")
+    if isinstance(product_id, dict):
+        product_id = product_id.get("id")
+    recurring = price.get("recurring")
+    interval = recurring.get("interval") if isinstance(recurring, dict) else None
+    if (not isinstance(price_id, str) or not price_id.startswith("price_")
+        or not isinstance(product_id, str) or not product_id.startswith("prod_")
+        or interval not in ("month", "year")
+        or price.get("currency") not in (None, "usd")
+        or (item.get("quantity") is not None
+            and (type(item["quantity"]) is not int or item["quantity"] != 1))
+        or (recurring.get("interval_count") is not None
+            and (type(recurring["interval_count"]) is not int
+                 or recurring["interval_count"] != 1))):
+        raise ValueError("Stripe subscription Price identity or interval invalid")
 
     latest_invoice = subscription_obj.get("latest_invoice")
     if isinstance(latest_invoice, dict):
@@ -22699,20 +22843,118 @@ def upsert_local_stripe_subscription(
     else:
         internal_status = "pending"
 
+    # Periods are Stripe subscription-item fields in the installed API version.
+    # This only records the provider's schedule; it is NOT cash evidence and
+    # must never authorize or invoke an entitlement grant.
+    from services.stripe_billing import extract_stripe_single_item_period_v1
+    item_period = extract_stripe_single_item_period_v1(
+        subscription_obj, expected_price_id=price_id
+    )
+    if (item_period["subscription_id"] != stripe_subscription_id
+        or item_period["livemode"] is not stripe_livemode):
+        raise ValueError("Stripe subscription period identity/environment conflicts")
+
     started_at = (
         stripe_ts_to_dt(subscription_obj.get("start_date"))
         or stripe_ts_to_dt(subscription_obj.get("created"))
-        or stripe_ts_to_dt(subscription_obj.get("current_period_start"))
+        or stripe_ts_to_dt(item_period["period_start_unix"])
     )
 
-    current_period_start = stripe_ts_to_dt(subscription_obj.get("current_period_start"))
-    current_period_end = stripe_ts_to_dt(subscription_obj.get("current_period_end"))
+    current_period_start = stripe_ts_to_dt(item_period["period_start_unix"])
+    current_period_end = stripe_ts_to_dt(item_period["period_end_unix"])
     cancel_at_period_end = bool(subscription_obj.get("cancel_at_period_end"))
-    auto_renews = not cancel_at_period_end and support_mode in {"monthly_recurring", "annual_recurring"}
 
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
+            # Lock the authoritative customer identity in the same transaction
+            # as the subscription write. Checkout and provider metadata cannot
+            # transfer an existing subscription between seeker accounts.
+            cur.execute(
+                """
+                SELECT id, user_id::text AS user_id
+                FROM billing_customers
+                WHERE provider = 'stripe'
+                  AND stripe_customer_id = %s
+                  AND provider_customer_id = %s
+                  AND livemode = %s
+                FOR UPDATE
+                """,
+                (stripe_customer_id, stripe_customer_id, stripe_livemode)
+            )
+            owners = cur.fetchall()
+            if len(owners) != 1:
+                raise ValueError("Stripe customer ownership missing or ambiguous")
+            user_id = owners[0]["user_id"]
+            billing_customer_id = owners[0]["id"]
+            for candidate in (
+                metadata.get("user_id"), fallback_user_id,
+                context.get("user_id")
+            ):
+                if candidate is not None and str(candidate) != str(user_id):
+                    raise ValueError("Stripe subscription user binding conflicts")
+            recorded_customer = context.get("billing_customer_id")
+            if (recorded_customer is not None
+                and str(recorded_customer) != str(billing_customer_id)):
+                raise ValueError("Stripe subscription customer binding conflicts")
+
+            # Lock the map/catalog in this SAME transaction. No metadata-only
+            # plan upgrade and no duplicate or retired Price binding can write.
+            cur.execute(
+                """
+                SELECT m.plan_code, m.support_mode, m.stripe_product_id,
+                       p.active AS plan_active, p.is_free_plan,
+                       p.monthly_enabled, p.annual_enabled,
+                       p.monthly_price_cents, p.annual_prepaid_price_cents
+                FROM stripe_price_map m
+                JOIN plan_catalog p ON p.plan_code = m.plan_code
+                WHERE m.stripe_price_id = %s
+                  AND m.livemode = %s
+                  AND m.active = TRUE
+                FOR SHARE OF m, p
+                """,
+                (price_id, stripe_livemode)
+            )
+            prices = cur.fetchall()
+            if len(prices) != 1:
+                raise ValueError("Stripe subscription Price unmapped or ambiguous")
+            mapped = prices[0]
+            plan_code = mapped["plan_code"]
+            support_mode = mapped["support_mode"]
+            expected_interval = (
+                "month" if support_mode == "monthly_recurring" else
+                "year" if support_mode == "annual_recurring" else None
+            )
+            if (mapped["stripe_product_id"] != product_id
+                or mapped["plan_active"] is not True
+                or mapped["is_free_plan"] is not False
+                or expected_interval != interval
+                or (mapped["monthly_enabled"] is not True
+                    if support_mode == "monthly_recurring"
+                    else mapped["annual_enabled"] is not True)):
+                raise ValueError("Stripe subscription Price/catalog eligibility conflicts")
+            expected_amount = (
+                mapped["monthly_price_cents"] if support_mode == "monthly_recurring"
+                else mapped["annual_prepaid_price_cents"]
+            )
+            observed_amount = price.get("unit_amount")
+            if (type(expected_amount) is not int or expected_amount <= 0
+                or (observed_amount is not None
+                    and (type(observed_amount) is not int
+                         or observed_amount != expected_amount))):
+                raise ValueError("Stripe subscription Price/catalog amount conflicts")
+            for claimed in (metadata.get("plan_code"), fallback_plan_code):
+                if claimed is not None and normalize_plan_code(claimed) != plan_code:
+                    raise ValueError("Stripe subscription claimed plan conflicts with Price")
+            for claimed in (metadata.get("support_mode"), fallback_support_mode):
+                if claimed is not None and (
+                    not isinstance(claimed, str)
+                    or claimed.strip().lower() != support_mode
+                ):
+                    raise ValueError("Stripe subscription claimed billing mode conflicts with Price")
+            auto_renews = (not cancel_at_period_end
+                           and support_mode in {"monthly_recurring", "annual_recurring"})
+
             cur.execute(
                 """
                 INSERT INTO subscriptions (
@@ -22748,8 +22990,6 @@ def upsert_local_stripe_subscription(
                 )
                 ON CONFLICT (stripe_subscription_id)
                 DO UPDATE SET
-                    user_id = EXCLUDED.user_id,
-                    billing_customer_id = EXCLUDED.billing_customer_id,
                     plan_code = EXCLUDED.plan_code,
                     provider_subscription_id = EXCLUDED.provider_subscription_id,
                     provider_price_id = EXCLUDED.provider_price_id,
@@ -22768,9 +23008,12 @@ def upsert_local_stripe_subscription(
                     stripe_price_id = COALESCE(EXCLUDED.stripe_price_id, subscriptions.stripe_price_id),
                     status = EXCLUDED.status,
                     latest_invoice_id = EXCLUDED.latest_invoice_id,
-                    livemode = EXCLUDED.livemode,
                     subscription_metadata_json = EXCLUDED.subscription_metadata_json,
                     updated_at = NOW()
+                WHERE subscriptions.provider = 'stripe'
+                  AND subscriptions.user_id = EXCLUDED.user_id
+                  AND subscriptions.billing_customer_id = EXCLUDED.billing_customer_id
+                  AND subscriptions.livemode = EXCLUDED.livemode
                 RETURNING id, user_id, plan_code, support_mode, stripe_subscription_id
                 """,
                 (
@@ -22800,8 +23043,13 @@ def upsert_local_stripe_subscription(
                 )
             )
             row = cur.fetchone()
+            if row is None:
+                raise ValueError("Existing Stripe subscription ownership conflicts")
         conn.commit()
         return row
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -22873,11 +23121,146 @@ def upsert_billing_transaction_from_invoice(
     plan_code: Optional[str],
     support_mode: Optional[str],
     transaction_kind: str,
-    status: str
+    status: str,
+    *,
+    cursor=None,
+    verified_cash_bundle=None
 ) -> None:
-    conn = get_db_connection()
+    from contextlib import nullcontext
+    # Optional authenticated cash receipt path. Legacy callers remain unchanged
+    # until separately authorized atomic settlement replaces their active route.
+    cash_payment_intent_id = invoice_obj.get("payment_intent")
+    cash_charge_id = invoice_obj.get("charge")
+    cash_summary = {}
+    if verified_cash_bundle is not None:
+        def require(ok, reason):
+            if not ok:
+                raise ValueError("Stripe verified cash receipt: " + reason)
+
+        def provider_ref(value, prefix):
+            if isinstance(value, dict):
+                value = value.get("id")
+            require(isinstance(value, str) and value.startswith(prefix)
+                    and len(value) > len(prefix),
+                    "missing or malformed provider identity")
+            return value
+
+        require(isinstance(invoice_obj, dict) and isinstance(verified_cash_bundle, dict),
+                "signed invoice or authenticated bundle missing")
+        proof = verified_cash_bundle.get("proof")
+        verified = verified_cash_bundle.get("verified_invoice")
+        payment = verified_cash_bundle.get("invoice_payment")
+        intent = verified_cash_bundle.get("payment_intent")
+        require(all(isinstance(obj, dict) for obj in (proof, verified, payment, intent)),
+                "normalized proof and three authenticated Stripe objects required")
+        require(verified is not invoice_obj and invoice_obj.get("object") == "invoice",
+                "separate immutable signed invoice required")
+        require(isinstance(event_id, str) and event_id.startswith("evt_")
+                and isinstance(user_id, str) and bool(user_id)
+                and subscription_row_id is not None
+                and isinstance(plan_code, str) and bool(plan_code),
+                "signed event or trusted account/plan binding missing")
+        require(status == "succeeded" and support_mode in
+                ("monthly_recurring", "annual_recurring"),
+                "verified receipt requires successful recurring first payment")
+        expected_kind = ("monthly_initial" if support_mode == "monthly_recurring"
+                         else "annual_initial")
+        require(transaction_kind == expected_kind,
+                "first-payment receipt kind mismatches billing period")
+        require(proof.get("support_mode_from_period") == support_mode,
+                "period-derived billing mode differs")
+        require(type(proof.get("livemode")) is bool
+                and type(verified.get("livemode")) is bool
+                and type(payment.get("livemode")) is bool
+                and type(intent.get("livemode")) is bool
+                and all(x is proof["livemode"] for x in
+                        (verified["livemode"], payment["livemode"], intent["livemode"])),
+                "provider payment environment differs")
+        invoice_id = provider_ref(proof.get("invoice_id"), "in_")
+        customer_id = provider_ref(proof.get("customer_id"), "cus_")
+        payment_id = provider_ref(proof.get("invoice_payment_id"), "inpay_")
+        intent_id = provider_ref(proof.get("payment_intent_id"), "pi_")
+        require(verified.get("object") == "invoice" and
+                provider_ref(verified.get("id"), "in_") == invoice_id
+                and provider_ref(invoice_obj.get("id"), "in_") == invoice_id
+                and provider_ref(verified.get("customer"), "cus_") == customer_id
+                and provider_ref(invoice_obj.get("customer"), "cus_") == customer_id,
+                "signed/provider invoice or customer identity differs")
+        require(type(invoice_obj.get("livemode")) is bool
+                and invoice_obj["livemode"] is proof["livemode"]
+                and verified.get("billing_reason") == "subscription_create"
+                and invoice_obj.get("billing_reason") == "subscription_create",
+                "signed/provider first-payment context differs")
+        for key in ("status", "currency", "total", "amount_paid",
+                    "amount_remaining", "collection_method"):
+            if invoice_obj.get(key) is not None:
+                require(invoice_obj[key] == verified.get(key),
+                        "immutable signed invoice conflicts: " + key)
+        amount = proof.get("paid_cents")
+        require(type(amount) is int and 0 < amount <= 100000000
+                and verified.get("status") == "paid"
+                and verified.get("collection_method") == "charge_automatically"
+                and verified.get("currency") == "usd"
+                and type(verified.get("total")) is int
+                and verified["total"] == amount
+                and type(verified.get("amount_paid")) is int
+                and verified["amount_paid"] == amount
+                and verified.get("amount_remaining") == 0,
+                "positive cash total or invoice paid state differs")
+        for key in ("starting_balance", "amount_overpaid", "amount_paid_off_stripe"):
+            require(verified.get(key) in (None, 0),
+                    "credit or out-of-band settlement is not supported")
+        require(payment.get("object") == "invoice_payment"
+                and provider_ref(payment.get("id"), "inpay_") == payment_id
+                and provider_ref(payment.get("invoice"), "in_") == invoice_id
+                and payment.get("status") == "paid"
+                and payment.get("currency") == "usd"
+                and type(payment.get("amount_paid")) is int
+                and payment["amount_paid"] == amount
+                and type(payment.get("amount_requested")) is int
+                and payment["amount_requested"] == amount,
+                "InvoicePayment identity, origin or amount conflicts")
+        payment_ref = payment.get("payment")
+        require(isinstance(payment_ref, dict)
+                and payment_ref.get("type") == "payment_intent"
+                and provider_ref(payment_ref.get("payment_intent"), "pi_") == intent_id,
+                "InvoicePayment is not a single on-Stripe PaymentIntent")
+        require(intent.get("object") == "payment_intent"
+                and provider_ref(intent.get("id"), "pi_") == intent_id
+                and provider_ref(intent.get("customer"), "cus_") == customer_id
+                and intent.get("status") == "succeeded"
+                and intent.get("currency") == "usd"
+                and type(intent.get("amount_received")) is int
+                and intent["amount_received"] == amount
+                and type(intent.get("amount")) is int
+                and intent["amount"] == amount,
+                "PaymentIntent identity, amount or succeeded state conflicts")
+        if verified.get("payment_intent") is not None:
+            require(provider_ref(verified["payment_intent"], "pi_") == intent_id,
+                    "legacy provider Invoice PaymentIntent conflicts")
+        if invoice_obj.get("payment_intent") is not None:
+            require(provider_ref(invoice_obj["payment_intent"], "pi_") == intent_id,
+                    "immutable signed PaymentIntent conflicts")
+        if intent.get("invoice") is not None:
+            require(provider_ref(intent["invoice"], "in_") == invoice_id,
+                    "PaymentIntent invoice reference conflicts")
+        cash_charge_id = None
+        if intent.get("latest_charge") is not None:
+            cash_charge_id = provider_ref(intent["latest_charge"], "ch_")
+        for candidate_charge in (invoice_obj.get("charge"), verified.get("charge")):
+            if candidate_charge is not None:
+                require(provider_ref(candidate_charge, "ch_") == cash_charge_id,
+                        "invoice charge conflicts with authenticated PaymentIntent")
+        cash_payment_intent_id = intent_id
+        cash_summary = {"cash_evidence": "authenticated_invoice_payment_v1",
+                        "invoice_payment_id": payment_id,
+                        "payment_intent_id": intent_id}
+        # Only the receipt uses this separately authenticated provider snapshot.
+        # The previously stored signed event remains untouched.
+        invoice_obj = verified
+    conn = None if cursor is not None else get_db_connection()
     try:
-        with conn.cursor() as cur:
+        with (nullcontext(cursor) if cursor is not None else conn.cursor()) as cur:
             cur.execute(
                 """
                 INSERT INTO billing_transactions (
@@ -22935,8 +23318,8 @@ def upsert_billing_transaction_from_invoice(
                     plan_code,
                     transaction_kind,
                     invoice_obj.get("id"),
-                    invoice_obj.get("payment_intent"),
-                    invoice_obj.get("charge"),
+                    cash_payment_intent_id,
+                    cash_charge_id,
                     invoice_obj.get("currency") or "usd",
                     invoice_obj.get("total") or 0,
                     invoice_obj.get("subtotal") or invoice_obj.get("total") or 0,
@@ -22945,8 +23328,8 @@ def upsert_billing_transaction_from_invoice(
                     support_mode,
                     event_id,
                     invoice_obj.get("id"),
-                    invoice_obj.get("payment_intent"),
-                    invoice_obj.get("charge"),
+                    cash_payment_intent_id,
+                    cash_charge_id,
                     invoice_obj.get("subtotal"),
                     invoice_obj.get("total"),
                     bool(invoice_obj.get("livemode")),
@@ -22955,12 +23338,15 @@ def upsert_billing_transaction_from_invoice(
                         "billing_reason": invoice_obj.get("billing_reason"),
                         "subscription": invoice_obj.get("subscription"),
                         "customer": invoice_obj.get("customer"),
+                        **cash_summary,
                     }, default=str),
                 )
             )
-        conn.commit()
+        if conn is not None:
+            conn.commit()
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def send_upcoming_renewal_email(
@@ -23000,13 +23386,14 @@ def send_upcoming_renewal_email(
 
 
 
-def insert_payment_event_if_new(event: dict, user_id: Optional[str]) -> bool:
+def insert_payment_event_if_new(event: dict, user_id: Optional[str], *, cursor=None) -> bool:
     event_id = event.get("id")
     event_created_at = stripe_ts_to_dt(event.get("created"))
 
-    conn = get_db_connection()
+    from contextlib import nullcontext
+    conn = None if cursor is not None else get_db_connection()
     try:
-        with conn.cursor() as cur:
+        with (nullcontext(cursor) if cursor is not None else conn.cursor()) as cur:
             cur.execute(
                 """
                 INSERT INTO payment_events (
@@ -23056,17 +23443,20 @@ def insert_payment_event_if_new(event: dict, user_id: Optional[str]) -> bool:
                 )
             )
             row = cur.fetchone()
-        conn.commit()
+        if conn is not None:
+            conn.commit()
         return bool(row)
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 
-def mark_payment_event_processed(event_id: str, helper_name: Optional[str]) -> None:
-    conn = get_db_connection()
+def mark_payment_event_processed(event_id: str, helper_name: Optional[str], *, cursor=None) -> None:
+    from contextlib import nullcontext
+    conn = None if cursor is not None else get_db_connection()
     try:
-        with conn.cursor() as cur:
+        with (nullcontext(cursor) if cursor is not None else conn.cursor()) as cur:
             cur.execute(
                 """
                 UPDATE payment_events
@@ -23082,16 +23472,19 @@ def mark_payment_event_processed(event_id: str, helper_name: Optional[str]) -> N
                 """,
                 (helper_name, event_id, event_id)
             )
-        conn.commit()
+        if conn is not None:
+            conn.commit()
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 
-def mark_payment_event_error(event_id: str, error_text: str) -> None:
-    conn = get_db_connection()
+def mark_payment_event_error(event_id: str, error_text: str, *, cursor=None) -> None:
+    from contextlib import nullcontext
+    conn = None if cursor is not None else get_db_connection()
     try:
-        with conn.cursor() as cur:
+        with (nullcontext(cursor) if cursor is not None else conn.cursor()) as cur:
             cur.execute(
                 """
                 UPDATE payment_events
@@ -23105,13 +23498,188 @@ def mark_payment_event_error(event_id: str, error_text: str) -> None:
                 """,
                 (error_text[:2000], error_text[:2000], event_id, event_id)
             )
-        conn.commit()
+        if conn is not None:
+            conn.commit()
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
+
+
+def dispatch_verified_ordinary_invoice_atomic_v1(event: dict) -> dict:
+    """One signed ordinary Stripe invoice: durable receive then atomic settlement.
+
+    This adapter is dormant until the signed webhook's existing dispatcher
+    explicitly calls it AFTER early-re-up isolation. It cannot verify Stripe
+    signatures and must never be used on unverified request data. Legacy
+    Checkout/failure branches must be corrected before routing activation.
+    """
+    from services.stripe_billing import (
+        receive_verified_ordinary_invoice_inbox,
+        bind_signed_ordinary_invoice_to_existing_account,
+        settle_ordinary_paid_existing_path,
+    )
+
+    if not isinstance(event, dict) or event.get('type') != 'invoice.paid':
+        raise ValueError('Atomic ordinary Stripe dispatch requires invoice.paid')
+    environment = get_stripe_livemode()
+    if type(environment) is not bool or event.get('livemode') is not environment:
+        raise ValueError('Atomic ordinary Stripe dispatch environment mismatch')
+
+    inbox = receive_verified_ordinary_invoice_inbox(
+        event, connection=get_db_connection,
+        bind=bind_signed_ordinary_invoice_to_existing_account,
+        parsers={}, expected_livemode=environment,
+    )
+    if not isinstance(inbox, dict):
+        raise ValueError('Atomic ordinary Stripe inbox returned invalid result')
+    inbox_status = inbox.get('status')
+    if inbox_status in {'legacy_hold', 'manual_review'}:
+        return {'ok': True, 'duplicate': False, 'event_type': 'invoice.paid',
+                'helper_name': 'ordinary_atomic_v1', 'atomic_status': inbox_status,
+                'held_for_review': True}
+    if inbox_status not in {'received', 'already_received', 'already_processed'}:
+        raise ValueError('Atomic ordinary Stripe inbox status not recognized')
+    if not inbox.get('user_id'):
+        raise ValueError('Atomic ordinary Stripe inbox missing bound user')
+
+    result = settle_ordinary_paid_existing_path(
+        event, connection=get_db_connection,
+        bind=bind_signed_ordinary_invoice_to_existing_account,
+        parsers={},
+        writers={
+            'receipt': upsert_billing_transaction_from_invoice,
+            'renewal': apply_subscription_renewal_success,
+            'fallback': refresh_user_fallback_state,
+            'processed': mark_payment_event_processed,
+        }, expected_livemode=environment,
+    )
+    if not isinstance(result, dict):
+        raise ValueError('Atomic ordinary Stripe owner returned invalid result')
+    settlement = result.get('status')
+    allowed = {'processed', 'processed_no_regression',
+               'duplicate_event', 'duplicate_invoice',
+               'legacy_event_hold', 'manual_review'}
+    if settlement not in allowed:
+        raise ValueError('Atomic ordinary Stripe owner status not recognized')
+    return {
+        'ok': True,
+        'duplicate': settlement in {'duplicate_event', 'duplicate_invoice'},
+        'event_type': 'invoice.paid',
+        'helper_name': 'ordinary_atomic_v1',
+        'atomic_status': settlement,
+        'held_for_review': settlement in {'legacy_event_hold', 'manual_review'},
+    }
+
+
+def dispatch_verified_initial_invoice_atomic_v1(event: dict) -> dict:
+    """DORMANT: bind one already-signed initial invoice to the accepted cash owner.
+
+    Only the signed webhook may call this, after early-re-up isolation and
+    before legacy event insertion. Do not activate until all older grants,
+    retry policy, and other payment paths have been corrected and accepted.
+    """
+    from services.stripe_billing import (
+        init_stripe,
+        orchestrate_verified_initial_stripe_cash_v1,
+        receive_verified_initial_invoice_inbox_v1,
+        fetch_verified_stripe_initial_cash_bundle_v1,
+        settle_initial_stripe_cash_atomic_v1,
+    )
+    mode = get_stripe_livemode()
+    if type(mode) is not bool or not isinstance(event, dict) or event.get('livemode') is not mode:
+        raise ValueError('Initial Stripe adapter: environment mismatch')
+
+    def receive(signed):
+        return receive_verified_initial_invoice_inbox_v1(
+            signed, connection=get_db_connection, expected_livemode=mode)
+
+    def read_cash(signed):
+        init_stripe()
+        return fetch_verified_stripe_initial_cash_bundle_v1(
+            signed, provider=stripe, to_plain=stripe_obj_to_plain,
+            expected_livemode=mode)
+
+    def settle(signed, cash):
+        return settle_initial_stripe_cash_atomic_v1(
+            signed, cash, connection=get_db_connection,
+            writers={
+                'receipt': upsert_billing_transaction_from_invoice,
+                'renewal': apply_subscription_renewal_success,
+                'fallback': refresh_user_fallback_state,
+                'processed': mark_payment_event_processed,
+            }, expected_livemode=mode)
+
+    result = orchestrate_verified_initial_stripe_cash_v1(
+        event, expected_livemode=mode,
+        classify_reup=classify_stripe_reup_invoice_event,
+        durable_receive=receive,
+        read_authenticated_cash=read_cash,
+        atomic_settle=settle)
+    if not isinstance(result, dict) or not isinstance(result.get('status'), str):
+        raise ValueError('Initial Stripe adapter: invalid orchestrator result')
+    return {
+        'ok': True, 'duplicate': result.get('duplicate') is True,
+        'event_type': 'invoice.paid',
+        'helper_name': 'initial_cash_atomic_v1',
+        'initial_status': result['status'],
+        'held_for_review': result.get('held_for_review') is True,
+    }
 
 
 def process_stripe_event(event: dict) -> dict:
     event = stripe_obj_to_plain(event)
+
+    # A7C5D: isolate explicit re-up invoices *before* the legacy event insert.
+    # That insert commits independently and its duplicate shortcut could leave
+    # a paid purchase unfulfilled or send a failed extra purchase to the
+    # cancellation/entitlement-downgrade path. Only the signed webhook calls
+    # this handler; the trusted invoice writer performs its own identity checks.
+    route = classify_stripe_reup_invoice_event(event)
+    if route is not None:
+        # The purchase entry point has an independent default-off switch.
+        # Unless verified settlement is explicitly enabled, flagged invoices
+        # fail closed rather than entering legacy grant/cancellation handling.
+        if os.getenv("GODINC_STRIPE_REUP_WEBHOOK_MODE", "") != "verified_settlement":
+            raise RuntimeError("Stripe early-re-up settlement is not enabled")
+        if route["route"] == "reup_paid":
+            reup_result = settle_verified_paid_reup(
+                event,
+                connect=get_db_connection,
+                validate_invoice=validate_paid_stripe_reup_invoice,
+                expected_livemode=get_stripe_livemode(),
+            )
+            helper_name = "settle_verified_paid_reup"
+        elif route["route"] == "reup_payment_failed":
+            reup_result = audit_failed_stripe_reup_invoice(
+                event,
+                connect=get_db_connection,
+                expected_livemode=get_stripe_livemode(),
+            )
+            helper_name = "audit_failed_stripe_reup_invoice"
+        else:
+            raise RuntimeError("Unsupported explicit Stripe re-up route")
+        allowed_statuses = ({"settled", "duplicate"} if route["route"] == "reup_paid"
+                            else {"failed_attempt_audited", "historical_failure_audited"})
+        if not isinstance(reup_result, dict) or reup_result.get("status") not in allowed_statuses:
+            raise RuntimeError("Stripe re-up writer returned an unverified result")
+        return {
+            "ok": True,
+            "duplicate": reup_result.get("status") == "duplicate",
+            "event_type": event["type"],
+            "helper_name": helper_name,
+            "reup_status": reup_result["status"],
+        }
+
+    # H4G17M3DV: Route signed initial subscription cash before the legacy
+    # independently committed event insert and legacy renewal entitlement.
+    # Default OFF. This branch must never fall back to legacy on failure.
+    if (event.get("type") == "invoice.paid"
+            and isinstance(event.get("data"), dict)
+            and isinstance(event["data"].get("object"), dict)
+            and event["data"]["object"].get("billing_reason") == "subscription_create"):
+        if os.getenv("GODINC_STRIPE_INITIAL_CASH_WEBHOOK_MODE", "") != "verified_settlement":
+            raise RuntimeError("Stripe initial cash settlement is not enabled")
+        return dispatch_verified_initial_invoice_atomic_v1(event)
 
     event_type = event.get("type")
     obj = event.get("data", {}).get("object", {}) or {}
@@ -23161,25 +23729,7 @@ def process_stripe_event(event: dict) -> dict:
                     fallback_checkout_session_id=obj.get("id")
                 )
 
-                sub_metadata = subscription_obj.get("metadata") or {}
-                activation_user_id = sub_row.get("user_id") or sub_metadata.get("user_id") or (obj.get("metadata") or {}).get("user_id")
-                activation_plan_code = sub_row.get("plan_code") or sub_metadata.get("plan_code") or (obj.get("metadata") or {}).get("plan_code")
-                activation_support_mode = sub_row.get("support_mode") or sub_metadata.get("support_mode") or (obj.get("metadata") or {}).get("support_mode")
-
-                period_start = stripe_ts_to_dt(subscription_obj.get("current_period_start"))
-                period_end = stripe_ts_to_dt(subscription_obj.get("current_period_end"))
-
-                if activation_user_id and activation_plan_code and activation_support_mode in {"monthly_recurring", "annual_recurring"}:
-                    apply_subscription_renewal_success(
-                        user_id=activation_user_id,
-                        plan_code=activation_plan_code,
-                        period_start=period_start,
-                        period_end=period_end,
-                        support_mode=activation_support_mode
-                    )
-                    helper_name = f"checkout_activate:{activation_support_mode}"
-                else:
-                    helper_name = f"upsert_local_stripe_subscription:{sub_row.get('support_mode')}"
+                helper_name = f"checkout_subscription_observed:{sub_row.get('support_mode')}"
             elif obj.get("mode") == "payment":
                 metadata = obj.get("metadata") or {}
                 if metadata.get("support_mode") == "annual_prepaid":
@@ -23245,29 +23795,11 @@ def process_stripe_event(event: dict) -> dict:
                 helper_name = f"apply_subscription_renewal_success:{context.get('support_mode')}"
 
         elif event_type == "invoice.payment_failed":
-            context = resolve_user_and_subscription_context(
-                stripe_customer_id=obj.get("customer"),
-                stripe_subscription_id=stripe_subscription_id
-            )
-            if context.get("user_id") and context.get("support_mode") in {"monthly_recurring", "annual_recurring"}:
-                apply_subscription_renewal_failure_to_floor(context["user_id"])
-                upsert_billing_transaction_from_invoice(
-                    event_id=event["id"],
-                    invoice_obj=obj,
-                    user_id=context["user_id"],
-                    subscription_row_id=context.get("subscription_row_id"),
-                    plan_code=context.get("plan_code"),
-                    support_mode=context.get("support_mode"),
-                    transaction_kind="monthly_renewal" if context.get("support_mode") == "monthly_recurring" else "annual_renewal",
-                    status="failed"
-                )
-
-                cancellation_result = cancel_failed_stripe_subscription(stripe_subscription_id)
-
-                if cancellation_result.get("cancelled"):
-                    helper_name = f"apply_subscription_renewal_failure_to_floor_and_cancel_stripe:{context.get('support_mode')}"
-                else:
-                    helper_name = f"apply_subscription_renewal_failure_to_floor_cancel_pending:{context.get('support_mode')}"
+            # A failed attempt does not forfeit an earned paid-through period.
+            # The signed event is recorded in payment_events, but a failed
+            # financial receipt needs a separate trusted account binder.
+            # Do not downgrade access or cancel Stripe's retry process.
+            helper_name = "invoice_payment_failed_observed_no_entitlement_change"
 
         elif event_type == "invoice.upcoming":
             context = resolve_user_and_subscription_context(
@@ -23315,34 +23847,159 @@ def apple_server_notifications_healthcheck():
     return {"ok": True, "service": "apple_server_notifications"}
 
 
+# A7C5H3A — Native StoreKit account binding and verified delivery.
+# Both routes default dormant. The native purchase-flow and notification routes
+# are separate acceptance gates. No purchase acceptance without JWS verification.
+@app.get("/billing/apple/account-token")
+def apple_storekit_account_token(request: Request):
+    if os.getenv("GODINC_APPLE_DELIVERY_MODE", "") != "verified_settlement":
+        raise HTTPException(status_code=404, detail="Apple delivery unavailable")
+    user = get_current_user(request)
+    if not user or user.get("is_verified") is not True:
+        raise HTTPException(status_code=401, detail="Verified session required")
+    try:
+        from services.apple_storekit_delivery import (
+            load_delivery_configuration, authenticated_account_token,
+        )
+        config = load_delivery_configuration()
+        active = get_active_paid_rail_for_user(str(user["user_id"]))
+        if active is not None and (not isinstance(active, dict)
+                                   or active.get("provider") != "apple"
+                                   or active.get("plan_code") != "seeker"):
+            raise HTTPException(status_code=409, detail="Another paid subscription is active")
+        return authenticated_account_token(user_id=str(user["user_id"]), config=config)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("APPLE_ACCOUNT_TOKEN_UNAVAILABLE error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Apple delivery configuration unavailable") from None
+
+
+@app.post("/billing/apple/verified-transaction")
+async def apple_storekit_verified_transaction(request: Request):
+    if os.getenv("GODINC_APPLE_DELIVERY_MODE", "") != "verified_settlement":
+        raise HTTPException(status_code=404, detail="Apple delivery unavailable")
+    # Native URLSession sends session cookies but no browser Origin; browser
+    # JavaScript is not an Apple purchase delivery client.
+    if request.headers.get("origin") is not None:
+        raise HTTPException(status_code=403, detail="Native purchase delivery required")
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(status_code=415, detail="JSON body required")
+    user = get_current_user(request)
+    if not user or user.get("is_verified") is not True:
+        raise HTTPException(status_code=401, detail="Verified session required")
+    header_size = request.headers.get("content-length")
+    if header_size is not None and (not header_size.isdecimal() or int(header_size) > 105000):
+        raise HTTPException(status_code=413, detail="Apple purchase payload too large")
+    body = await request.body()
+    if not body or len(body) > 105000:
+        raise HTTPException(status_code=413, detail="Apple purchase payload missing or too large")
+    try:
+        payload = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Malformed Apple transaction JSON") from None
+    if not isinstance(payload, dict) or set(payload) != {"signed_transaction"}:
+        raise HTTPException(status_code=400, detail="Exactly one signed transaction required")
+
+    from services.apple_storekit_contract import AppleContractError
+    from services.apple_storekit_settlement import AppleSettlementError
+    from services.apple_storekit_delivery import (
+        AppleDeliveryError, AppleDeliveryUnavailable, load_delivery_configuration,
+        deliver_apple_signed_transaction,
+    )
+    try:
+        config = load_delivery_configuration()
+    except Exception as exc:
+        logger.warning("APPLE_DELIVERY_CONFIG_UNAVAILABLE error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Apple verification unavailable") from None
+
+    def reuse_existing_floor_policy(highest, scroll_count):
+        donor = compute_donor_floor_plan(highest)
+        scroll = compute_scroll_floor_plan(scroll_count)
+        fallback = compute_fallback_floor_plan(True, donor, scroll)
+        return {"donor": donor, "scroll": scroll, "fallback": fallback}
+
+    try:
+        return deliver_apple_signed_transaction(
+            payload=payload, user_id=str(user["user_id"]), config=config,
+            connection_factory=get_db_connection,
+            compute_floors=reuse_existing_floor_policy,
+        )
+    except AppleDeliveryUnavailable as exc:
+        logger.warning("APPLE_DELIVERY_VERIFIER_UNAVAILABLE error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Apple verification unavailable") from None
+    except (AppleContractError, AppleDeliveryError) as exc:
+        logger.warning("APPLE_DELIVERY_REJECTED error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=422, detail="Apple transaction not verified") from None
+    except AppleSettlementError as exc:
+        logger.warning("APPLE_DELIVERY_SETTLEMENT_HELD error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=409, detail="Apple entitlement settlement unavailable") from None
+    except Exception as exc:
+        logger.warning("APPLE_DELIVERY_FAILURE error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Apple transaction processing unavailable") from None
+
+
 @app.post("/billing/apple/server-notifications")
 async def apple_server_notifications(request: Request):
+    # A7C5H3D: legacy unverified ACK retired. These notifications require
+    # cryptographic verification and durable receipt before a successful ACK.
+    # Lifecycle switch remains OFF until signed-provider and DB acceptance.
+    if os.getenv("GODINC_APPLE_NOTIFICATIONS_MODE", "") != "verified_lifecycle":
+        raise HTTPException(status_code=404, detail="Apple notification processing unavailable")
+    if os.getenv("GODINC_APPLE_DELIVERY_MODE", "") != "verified_settlement":
+        raise HTTPException(status_code=503, detail="Apple verification unavailable")
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(status_code=415, detail="JSON required")
+    header_size = request.headers.get("content-length")
+    if header_size is not None and (not header_size.isdecimal() or int(header_size) > 105000):
+        raise HTTPException(status_code=413, detail="Apple signed notification too large")
     raw_body = await request.body()
-    payload = {}
+    if not raw_body or len(raw_body) > 105000:
+        raise HTTPException(status_code=413, detail="Apple signed notification missing or too large")
+    try:
+        payload = json.loads(raw_body)
+    except (ValueError, UnicodeDecodeError):
+        raise HTTPException(status_code=400, detail="Malformed signed notification JSON") from None
+    if not isinstance(payload, dict) or set(payload) != {"signedPayload"}:
+        raise HTTPException(status_code=400, detail="Signed Apple notification required")
 
-    if raw_body:
-        try:
-            payload = json.loads(raw_body.decode("utf-8"))
-        except Exception:
-            logger.warning(
-                "APPLE_SERVER_NOTIFICATION_RECEIVED invalid_json body_len=%s",
-                len(raw_body),
-            )
-            return {"ok": True}
-
-    signed_payload_present = isinstance(payload, dict) and bool(payload.get("signedPayload"))
-    notification_type = payload.get("notificationType") if isinstance(payload, dict) else None
-    subtype = payload.get("subtype") if isinstance(payload, dict) else None
-
-    logger.info(
-        "APPLE_SERVER_NOTIFICATION_RECEIVED signedPayload_present=%s notification_type=%s subtype=%s body_len=%s",
-        signed_payload_present,
-        notification_type,
-        subtype,
-        len(raw_body),
+    from services.apple_storekit_contract import AppleContractError
+    from services.apple_storekit_settlement import AppleSettlementError
+    from services.apple_storekit_delivery import load_delivery_configuration, AppleDeliveryUnavailable
+    from services.apple_storekit_notifications import (
+        AppleNotificationError, AppleNotificationDeferred,
+        process_verified_apple_notification,
     )
+    try:
+        config = load_delivery_configuration()
+    except Exception as exc:
+        logger.warning("APPLE_NOTIFICATION_CONFIG_HELD error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Apple verification unavailable") from None
 
-    return {"ok": True}
+    def reuse_existing_floor_policy(highest, scroll_count):
+        donor = compute_donor_floor_plan(highest)
+        scroll = compute_scroll_floor_plan(scroll_count)
+        fallback = compute_fallback_floor_plan(True, donor, scroll)
+        return {"donor": donor, "scroll": scroll, "fallback": fallback}
+
+    try:
+        return process_verified_apple_notification(
+            payload=payload, config=config,
+            connection_factory=get_db_connection,
+            compute_floors=reuse_existing_floor_policy,
+        )
+    except AppleNotificationDeferred as exc:
+        logger.warning("APPLE_NOTIFICATION_DEFERRED error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Apple notification processing deferred") from None
+    except (AppleContractError, AppleNotificationError) as exc:
+        logger.warning("APPLE_NOTIFICATION_REJECTED error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=422, detail="Apple notification not verified") from None
+    except (AppleSettlementError, AppleDeliveryUnavailable) as exc:
+        logger.warning("APPLE_NOTIFICATION_SETTLEMENT_HELD error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Apple notification settlement unavailable") from None
+    except Exception as exc:
+        logger.warning("APPLE_NOTIFICATION_UNAVAILABLE error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Apple notification processing unavailable") from None
 
 
 @app.post("/billing/stripe/webhook")
@@ -23373,6 +24030,274 @@ async def stripe_webhook(request: Request):
 class BillingCheckoutSessionInput(BaseModel):
     plan_code: str
     support_mode: Literal["monthly_recurring", "annual_prepaid", "annual_recurring"]
+
+
+@app.get("/billing/stripe/early-reup/quote")
+def billing_stripe_early_reup_quote(request: Request):
+    """Read-only Seeker offer; never reserves, charges or changes allowances.
+
+    The quote is advisory, not a Stripe price attestation. Final dispatch and
+    receipt verification remain guarded by the existing one-time intent writer.
+    """
+    if os.getenv("GODINC_STRIPE_REUP_PURCHASE_MODE", "") != "enabled":
+        raise HTTPException(status_code=404, detail="Purchase is not available.")
+    if os.getenv("GODINC_STRIPE_REUP_WEBHOOK_MODE", "") != "verified_settlement":
+        raise HTTPException(status_code=503, detail="Verified settlement is not enabled.")
+    if not STRIPE_SECRET_KEY or not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Stripe verification is unavailable.")
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    user_id = str(user["user_id"])
+    unavailable = {"eligible": False}
+    rail = get_active_paid_rail_for_user(user_id)
+    if (not isinstance(rail, dict)
+            or rail.get("provider") != "stripe"
+            or rail.get("plan_code") != "seeker"
+            or rail.get("support_mode") != "monthly_recurring"
+            or rail.get("provider_status") != "active"
+            or rail.get("internal_status") != "active"
+            or rail.get("cancel_at_period_end") is not False
+            or rail.get("livemode") is not get_stripe_livemode()
+            or not isinstance(rail.get("stripe_price_id"), str)
+            or not rail["stripe_price_id"].startswith("price_")
+            or not isinstance(rail.get("stripe_subscription_id"), str)
+            or not rail["stripe_subscription_id"].startswith("sub_")):
+        return unavailable
+    entitlement = get_user_entitlement_snapshot(user_id)
+    start, end = rail.get("current_period_start"), rail.get("current_period_end")
+    account_start = entitlement.get("current_period_started_at")
+    account_end = entitlement.get("subscription_expires_at")
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if (entitlement.get("entitlement_status") != "active"
+            or entitlement.get("effective_plan_code") != "seeker"
+            or entitlement.get("raw_plan_code") != "seeker"
+            or entitlement.get("last_support_mode") != "monthly_recurring"
+            or entitlement.get("cancel_at_period_end") is not False
+            or any(not isinstance(value, datetime.datetime) or value.tzinfo is None
+                   for value in (start, end, account_start, account_end))
+            or not start <= now < end
+            or int(start.timestamp()) != int(account_start.timestamp())
+            or int(end.timestamp()) != int(account_end.timestamp())):
+        return unavailable
+    question_limit = PLAN_LIMITS.get("seeker")
+    if (type(question_limit) is not int or question_limit <= 0
+            or plan_has_unlimited_questions("seeker")):
+        return unavailable
+    usage = get_oracle_usage_counts(
+        user_id=user_id, window_start=get_effective_usage_window_start(entitlement)
+    )
+    used = usage.get("questions_used") if isinstance(usage, dict) else None
+    if type(used) is not int or used < question_limit:
+        return unavailable
+    # Directly inspect the existing catalog and the subscription's mapped
+    # Stripe price. No provider request, mutation, or new entitlement pathway.
+    conn = get_db_connection()
+    try:
+        conn.set_session(readonly=True, autocommit=False)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT monthly_price_cents FROM plan_catalog "
+                "WHERE plan_code = %s AND active = TRUE "
+                "AND monthly_enabled = TRUE", ("seeker",)
+            )
+            prices = cur.fetchall()
+            cur.execute(
+                "SELECT COUNT(*) AS matches FROM stripe_price_map "
+                "WHERE stripe_price_id = %s AND plan_code = %s "
+                "AND support_mode = 'monthly_recurring' "
+                "AND livemode = %s AND active = TRUE",
+                (rail["stripe_price_id"], "seeker", get_stripe_livemode()),
+            )
+            mapped = cur.fetchone()
+            cur.execute(
+                "SELECT COUNT(*) AS pending FROM billing_transactions "
+                "WHERE user_id = %s::uuid AND provider = 'stripe' "
+                "AND status = 'pending' "
+                "AND raw_summary_json ->> 'schema' = 'stripe_paid_reup_intent.v1'",
+                (user_id,),
+            )
+            pending = cur.fetchone()
+        conn.rollback()
+    finally:
+        conn.close()
+    if (len(prices) != 1 or not isinstance(mapped, dict)
+            or mapped.get("matches") != 1
+            or not isinstance(pending, dict) or pending.get("pending") != 0):
+        return unavailable
+    price = prices[0].get("monthly_price_cents")
+    if type(price) is not int or price <= 0:
+        return unavailable
+    return {
+        "eligible": True,
+        "quote_only": True,
+        "plan_code": "seeker",
+        "support_mode": "monthly_recurring",
+        "currency": "usd",
+        "amount_cents": price,
+        "new_period_question_limit": question_limit,
+        "questions_used": used,
+        "existing_period_ends_at": serialize_dt(end),
+        "quoted_period_start_epoch": int(start.timestamp()),
+        "quoted_period_end_epoch": int(end.timestamp()),
+        "requires_explicit_charge_confirmation": True,
+        "payment_confirmed": False,
+        "questions_replenished": False,
+    }
+
+
+class StripeEarlyReupInput(BaseModel):
+    # The UI must separately disclose the actual price and period reset before
+    # presenting this express charge-confirmation action.
+    confirm_charge: Literal[True]
+    purchase_request_id: str
+    # These exact terms must match the server's fresh eligible quote.
+    confirmed_amount_cents: int
+    confirmed_currency: Literal["usd"]
+    confirmed_question_limit: int
+    confirmed_existing_period_ends_at: str
+
+
+@app.post("/billing/stripe/early-reup")
+def billing_stripe_early_reup(request: Request, payload: StripeEarlyReupInput):
+    """Explicit same-tier Stripe purchase, held until a signed paid invoice.
+
+    The new route is not called by the UI until separate acceptance, and
+    both independent activation switches default OFF. The original billing
+    checkout/upgrade paths remain unchanged.
+    No entitlement, subscription-period or financial receipt update is made
+    here. All such changes belong to the accepted atomic webhook writer.
+    """
+    if os.getenv("GODINC_STRIPE_REUP_PURCHASE_MODE", "") != "enabled":
+        raise HTTPException(status_code=404, detail="Purchase is not available.")
+    if os.getenv("GODINC_STRIPE_REUP_WEBHOOK_MODE", "") != "verified_settlement":
+        raise HTTPException(status_code=503, detail="Verified settlement is not enabled.")
+    if not STRIPE_SECRET_KEY or not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Stripe verification is unavailable.")
+
+    # Same-origin POST only; never accept a cross-site session-cookie charge.
+    expected = urlsplit(os.getenv("APP_BASE_URL") or str(request.base_url))
+    supplied = urlsplit(request.headers.get("origin") or "")
+    if (expected.scheme not in {"https", "http"}
+            or not expected.netloc
+            or supplied.scheme != expected.scheme
+            or supplied.netloc != expected.netloc
+            or supplied.path or supplied.query or supplied.fragment
+            or request.headers.get("sec-fetch-site") not in (None, "same-origin")):
+        raise HTTPException(status_code=403, detail="Same-origin confirmation is required.")
+    if payload.confirm_charge is not True:
+        raise HTTPException(status_code=400, detail="Explicit purchase confirmation required.")
+    try:
+        request_uuid = uuid.UUID(payload.purchase_request_id)
+        if request_uuid.version != 4 or str(request_uuid) != payload.purchase_request_id:
+            raise ValueError("Noncanonical client purchase request")
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=400, detail="Valid purchase request ID required.")
+
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    user_id = str(user["user_id"])
+    # Always re-evaluate eligibility on the SERVER for this POST.
+    # An unavailable quote must not authorize a new pending intent.
+    # Historical purchase UUIDs remain idempotent inside the writer.
+    offer = billing_stripe_early_reup_quote(request)
+    if type(offer) is not dict:
+        offer = {"eligible": False}
+    intent_id = None
+    claimed = False
+    try:
+        prepared = prepare_stripe_reup_intent(
+            user_id=user_id, connect=get_db_connection,
+            expected_livemode=get_stripe_livemode(),
+            purchase_request_id=payload.purchase_request_id,
+            exhausted_quote=offer,
+            # The writer checks these against the locked new-intent window.
+            # Historical purchase UUIDs are resolved before that check.
+            confirmed_terms={
+                "amount_cents": payload.confirmed_amount_cents,
+                "currency": payload.confirmed_currency,
+                "new_period_question_limit": payload.confirmed_question_limit,
+                "existing_period_ends_at": payload.confirmed_existing_period_ends_at,
+            },
+        )
+        if prepared.get("status") == "already_settled":
+            return {"ok": False, "status": "already_processed",
+                    "payment_confirmed": False, "questions_replenished": False,
+                    "message": "This purchase request was already processed; no new charge was made."}
+        if prepared.get("status") == "already_pending":
+            # Even a still-prepared previous intent is never auto-dispatched
+            # by another HTTP request. Operator-verified reconciliation only.
+            return {"ok": False, "status": "held", "payment_confirmed": False,
+                    "questions_replenished": False,
+                    "message": "A prior purchase request requires reconciliation."}
+        if prepared.get("status") != "prepared":
+            raise RuntimeError("Unexpected purchase registration result")
+        intent_id = prepared["intent_id"]
+        claim = transition_stripe_reup_intent(
+            user_id=user_id, intent_id=intent_id,
+            connect=get_db_connection, action="claim",
+        )
+        if claim.get("status") == "held":
+            return {"ok": False, "status": "held", "payment_confirmed": False,
+                    "questions_replenished": False,
+                    "message": "The purchase was already claimed; no retry was made."}
+        if claim.get("status") != "dispatching":
+            raise RuntimeError("Unexpected Stripe dispatch claim")
+        claimed = True
+        dispatch = claim.get("dispatch")
+        if (not isinstance(dispatch, dict)
+                or dispatch.get("user_id") != user_id
+                or dispatch.get("plan_code") != prepared.get("plan_code")
+                or dispatch.get("expected_paid_cents") != prepared.get("expected_paid_cents")
+                or dispatch.get("livemode") is not get_stripe_livemode()):
+            raise RuntimeError("Claimed purchase does not match registered intent")
+
+        # The prior transaction committed the one-time claim before this call.
+        # If provider outcome becomes ambiguous, hold; NEVER retry the charge.
+        result = change_existing_subscription_plan(
+            user_id=user_id,
+            user_email=user["email"],
+            display_name=user.get("display_name"),
+            current_subscription_id=dispatch["stripe_subscription_id"],
+            plan_code=dispatch["plan_code"],
+            support_mode="monthly_recurring",
+            force_paid_reup=True,
+            reup_intent_id=intent_id,
+        )
+        if (not isinstance(result, dict)
+                or result.get("changed_subscription") is not True
+                or result.get("pending_paid_invoice") is not True
+                or result.get("plan_code") != dispatch["plan_code"]
+                or result.get("support_mode") != "monthly_recurring"
+                or result.get("livemode") is not dispatch["livemode"]):
+            raise RuntimeError("Provider re-up response did not confirm a new invoice")
+        confirmed = transition_stripe_reup_intent(
+            user_id=user_id, intent_id=intent_id,
+            connect=get_db_connection, action="confirm",
+            stripe_result=stripe_obj_to_plain(result["subscription_obj"]),
+        )
+        if not isinstance(confirmed, dict) or confirmed.get("status") != "sent":
+            raise RuntimeError("Stripe invoice dispatch was not durably confirmed")
+        return {"ok": True, "status": "awaiting_verified_payment",
+                "payment_confirmed": False, "questions_replenished": False,
+                "message": "Purchase submitted; questions renew only after confirmed payment."}
+    except Exception as exc:
+        if claimed:
+            try:
+                transition_stripe_reup_intent(
+                    user_id=user_id, intent_id=intent_id,
+                    connect=get_db_connection, action="uncertain",
+                )
+            except Exception as hold_exc:
+                # A previous successful receipt can make this transition
+                # unnecessary; any unresolved state still blocks auto-retry.
+                logger.error("Stripe early-re-up hold unresolved: %s", type(hold_exc).__name__)
+        logger.error("Stripe early-re-up dispatch held: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=502 if claimed else 409,
+            detail="Purchase not confirmed. No automatic retry; contact support.",
+        ) from exc
 
 
 @app.post("/billing/checkout-session")
@@ -23415,22 +24340,14 @@ def billing_checkout_session(request: Request, payload: BillingCheckoutSessionIn
                     fallback_support_mode=result["support_mode"],
                 )
 
-                if result.get("changed_subscription"):
-                    period_start = stripe_ts_to_dt(updated_subscription.get("current_period_start"))
-                    period_end = stripe_ts_to_dt(updated_subscription.get("current_period_end"))
-
-                    apply_subscription_renewal_success(
-                        user_id=user["user_id"],
-                        plan_code=result["plan_code"],
-                        period_start=period_start,
-                        period_end=period_end,
-                        support_mode=result["support_mode"]
-                    )
 
                 return {
                     "ok": True,
                     "changed_subscription": bool(result.get("changed_subscription")),
-                    "message": result["message"],
+                    "message": (
+                        "Support change submitted. Access updates only after verified payment."
+                        if result.get("changed_subscription") else result["message"]
+                    ),
                     "plan_code": result["plan_code"],
                     "support_mode": result["support_mode"],
                     "livemode": result["livemode"],

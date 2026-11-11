@@ -33,6 +33,8 @@ private enum TempleEnvironment {
     static let oracleInferenceCompleteURL = URL(string: "oracle/inference/complete", relativeTo: baseAppURL)!
     static let oracleInferenceAbandonURL = URL(string: "oracle/inference/abandon", relativeTo: baseAppURL)!
     static let seekerMonthlyProductID = "ai.godincorporated.seeker.monthly"
+    static let appleAccountTokenURL = URL(string: "billing/apple/account-token", relativeTo: baseAppURL)!
+    static let appleVerifiedTransactionURL = URL(string: "billing/apple/verified-transaction", relativeTo: baseAppURL)!
 
     static func templeURL(
         voice: String?,
@@ -596,7 +598,10 @@ struct ContentView: View {
             }
             .tag(2)
 
-            NativeSupportView()
+            NativeSupportView(onEntitlementRecorded: {
+                templeEntryNonce += 1
+                authRefreshNonce += 1
+            })
                 .tabItem {
                     Label("Support", systemImage: "heart")
                 }
@@ -631,6 +636,16 @@ struct ContentView: View {
         }
         .task(id: authRefreshNonce) {
             await refreshNativeSessionAndResume()
+        }
+        .task(id: authRefreshNonce) {
+            await NativeAppleStoreKitBridge.shared.retryUnfinished {
+                templeEntryNonce += 1
+            }
+        }
+        .task {
+            await NativeAppleStoreKitBridge.shared.listenForUpdates {
+                templeEntryNonce += 1
+            }
         }
     }
 
@@ -3743,7 +3758,214 @@ extension Data {
     }
 }
 
+// A7C5H3B: native StoreKit never grants access or finishes a purchase locally.
+// Only Apple's verified JWS, durably acknowledged by the existing authenticated
+// backend, may complete a transaction. No local price or subscription authority.
+private struct NativeAppleAccountTokenReply: Decodable {
+    let app_account_token: String
+    let product_id: String
+    let environment: String
+}
+
+private struct NativeAppleSignedTransactionBody: Encodable {
+    let signed_transaction: String
+}
+
+private struct NativeAppleSettlementReply: Decodable {
+    let status: String
+    let durably_recorded: Bool
+    let access_granted_this_delivery: Bool
+    let transaction_id: String
+    let subscription_id: String
+    let refresh_entitlement_from: String
+}
+
+private enum NativeAppleDeliveryError: LocalizedError {
+    case unavailable
+    case invalidServerReply
+    case accountMismatch
+    case unverifiedTransaction
+    case deliveryInProgress
+    case restorePending
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            return "Apple billing is not ready. No new purchase was started."
+        case .invalidServerReply:
+            return "The server did not confirm the Apple transaction. Please restore later."
+        case .accountMismatch:
+            return "This Apple transaction is not linked to the signed-in Temple account. Contact support before purchasing again."
+        case .unverifiedTransaction:
+            return "StoreKit could not verify this Apple transaction."
+        case .deliveryInProgress:
+            return "This Apple transaction is already being delivered. Please try Restore Purchases later."
+        case .restorePending:
+            return "Some Apple transactions remain unconfirmed. Do not purchase again; contact support if Restore Purchases continues to fail."
+        }
+    }
+}
+
+@MainActor
+private final class NativeAppleStoreKitBridge {
+    static let shared = NativeAppleStoreKitBridge()
+    private var delivering: Set<UInt64> = []
+
+    private init() {}
+
+    private func accountToken() async throws -> UUID {
+        var request = await TempleSessionHTTP.authenticatedRequest(
+            url: TempleEnvironment.appleAccountTokenURL,
+            method: "GET"
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            throw NativeAppleDeliveryError.unavailable
+        }
+        let body = try JSONDecoder().decode(NativeAppleAccountTokenReply.self, from: data)
+        guard body.product_id == TempleEnvironment.seekerMonthlyProductID,
+              body.environment == "Sandbox" || body.environment == "Production",
+              let token = UUID(uuidString: body.app_account_token),
+              token.uuidString.lowercased() == body.app_account_token else {
+            throw NativeAppleDeliveryError.invalidServerReply
+        }
+        return token
+    }
+
+    func purchaseOptions() async throws -> Set<Product.PurchaseOption> {
+        let token = try await accountToken()
+        return [.appAccountToken(token)]
+    }
+
+    func deliver(_ verification: VerificationResult<StoreKit.Transaction>) async throws -> String {
+        guard case .verified(let transaction) = verification else {
+            throw NativeAppleDeliveryError.unverifiedTransaction
+        }
+        guard transaction.productID == TempleEnvironment.seekerMonthlyProductID else {
+            throw NativeAppleDeliveryError.invalidServerReply
+        }
+        guard !delivering.contains(transaction.id) else {
+            throw NativeAppleDeliveryError.deliveryInProgress
+        }
+        delivering.insert(transaction.id)
+        defer { delivering.remove(transaction.id) }
+
+        // Fetch fresh session-linked identity for each delivery. Do not use the
+        // anonymous UUID or persist this account token on the device.
+        let token = try await accountToken()
+        guard transaction.appAccountToken == token else {
+            // Includes older transactions without appAccountToken: do not assign
+            // them to whoever happens to be signed in, or finish them.
+            throw NativeAppleDeliveryError.accountMismatch
+        }
+        let signedJWS = verification.jwsRepresentation
+        guard (10...100000).contains(signedJWS.utf8.count) else {
+            throw NativeAppleDeliveryError.unverifiedTransaction
+        }
+        var request = await TempleSessionHTTP.authenticatedRequest(
+            url: TempleEnvironment.appleVerifiedTransactionURL,
+            method: "POST"
+        )
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(
+            NativeAppleSignedTransactionBody(signed_transaction: signedJWS)
+        )
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            // Never call finish() on a timeout, disabled endpoint, or refusal.
+            throw NativeAppleDeliveryError.invalidServerReply
+        }
+        let result = try JSONDecoder().decode(NativeAppleSettlementReply.self, from: data)
+        guard result.durably_recorded,
+              ["granted", "already_processed", "stale_ignored"].contains(result.status),
+              result.transaction_id == String(transaction.id),
+              !result.subscription_id.isEmpty,
+              result.refresh_entitlement_from == "/me",
+              (result.status != "granted" || result.access_granted_this_delivery) else {
+            throw NativeAppleDeliveryError.invalidServerReply
+        }
+
+        // Server has committed the canonical entitlement/receipt or a durable
+        // historical replay. Only this line may finish an Apple transaction.
+        await transaction.finish()
+        return result.status
+    }
+
+    func restorePurchases() async throws -> Int {
+        // Avoid Apple's sign-in prompt if the Temple account or backend is not ready.
+        _ = try await accountToken()
+        // Apple requires sync() to be initiated by an explicit user action only.
+        try await AppStore.sync()
+        var seen: Set<UInt64> = []
+        var recorded = 0
+        var held = 0
+        for await verification in StoreKit.Transaction.currentEntitlements {
+            switch verification {
+            case .verified(let transaction):
+                if transaction.productID == TempleEnvironment.seekerMonthlyProductID,
+                   seen.insert(transaction.id).inserted {
+                    do {
+                        _ = try await deliver(verification)
+                        recorded += 1
+                    } catch {
+                        held += 1
+                    }
+                }
+            case .unverified(let transaction, _):
+                if transaction.productID == TempleEnvironment.seekerMonthlyProductID { held += 1 }
+            }
+        }
+        for await verification in StoreKit.Transaction.unfinished {
+            switch verification {
+            case .verified(let transaction):
+                if transaction.productID == TempleEnvironment.seekerMonthlyProductID,
+                   seen.insert(transaction.id).inserted {
+                    do {
+                        _ = try await deliver(verification)
+                        recorded += 1
+                    } catch {
+                        held += 1
+                    }
+                }
+            case .unverified(let transaction, _):
+                if transaction.productID == TempleEnvironment.seekerMonthlyProductID { held += 1 }
+            }
+        }
+        if held > 0 {
+            throw NativeAppleDeliveryError.restorePending
+        }
+        return recorded
+    }
+
+    func retryUnfinished(onSettlement: @escaping @MainActor () -> Void) async {
+        for await verification in StoreKit.Transaction.unfinished {
+            do {
+                let status = try await deliver(verification)
+                if status != "stale_ignored" { onSettlement() }
+            } catch {
+                // Preserve StoreKit's unfinished transaction for a later retry.
+                // Do not log account tokens, the signed JWS, or transaction IDs.
+            }
+        }
+    }
+
+    func listenForUpdates(onSettlement: @escaping @MainActor () -> Void) async {
+        for await verification in StoreKit.Transaction.updates {
+            do {
+                let status = try await deliver(verification)
+                if status != "stale_ignored" { onSettlement() }
+            } catch {
+                // Account authentication or server delivery may be unavailable.
+                // An unacknowledged transaction remains unfinished in StoreKit.
+            }
+        }
+    }
+}
+
 struct NativeSupportView: View {
+    let onEntitlementRecorded: () -> Void
     @State private var product: Product?
     @State private var isLoading = false
     @State private var message = ""
@@ -3773,13 +3995,13 @@ struct NativeSupportView: View {
                                     .font(.title2.weight(.bold))
                                     .foregroundStyle(TemplePalette.ink)
 
-                                Text("Supports continued Oracle access at the Seeker level.")
+                                Text("Includes 33 Oracle questions per paid month for your signed-in Temple account. Voice questions use the same allowance.")
                                     .foregroundStyle(TemplePalette.ink.opacity(0.72))
 
                                 VStack(alignment: .leading, spacing: 10) {
                                     Label("Auto-renewable monthly subscription", systemImage: "calendar")
                                     Label("Length: 1 month", systemImage: "clock")
-                                    Label("Price: \(product?.displayPrice ?? "$0.99") / month", systemImage: "creditcard")
+                                    Label(product.map { "Price: \($0.displayPrice) / month" } ?? "Loading App Store price...", systemImage: "creditcard")
                                 }
                                 .foregroundStyle(TemplePalette.ink)
                                 .font(.body)
@@ -3798,6 +4020,13 @@ struct NativeSupportView: View {
                                     }
                                 }
                                 .buttonStyle(TemplePrimaryButtonStyle())
+                                .disabled(isLoading || product == nil)
+
+                                Button("Restore Purchases") {
+                                    Task { await restoreApplePurchases() }
+                                }
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(TemplePalette.crimson)
                                 .disabled(isLoading)
 
                                 if !message.isEmpty {
@@ -3852,64 +4081,64 @@ struct NativeSupportView: View {
         }
     }
 
+    @MainActor
     private func purchaseSeekerMonthly() async {
-        await MainActor.run {
-            isLoading = true
-            message = ""
-        }
+        isLoading = true
+        message = ""
+        defer { isLoading = false }
 
         do {
-            let products = try await Product.products(for: [TempleEnvironment.seekerMonthlyProductID])
-            guard let product = products.first else {
-                await MainActor.run {
-                    message = "Apple could not load Seeker Monthly."
-                    isLoading = false
-                }
+            // Fail closed BEFORE opening Apple's purchase sheet if the current
+            // account or durable server verification is unavailable.
+            let options = try await NativeAppleStoreKitBridge.shared.purchaseOptions()
+            let products = try await Product.products(
+                for: [TempleEnvironment.seekerMonthlyProductID]
+            )
+            guard let selected = products.first(where: {
+                $0.id == TempleEnvironment.seekerMonthlyProductID
+            }) else {
+                message = "Apple could not load Seeker Monthly."
                 return
             }
-
-            let result = try await product.purchase()
-
-            switch result {
+            let purchase = try await selected.purchase(options: options)
+            switch purchase {
             case .success(let verification):
-                switch verification {
-                case .verified(let transaction):
-                    await transaction.finish()
-                    await MainActor.run {
-                        message = "Apple purchase received. Thank you for supporting the Temple."
-                        isLoading = false
-                    }
-
-                case .unverified(_, let error):
-                    await MainActor.run {
-                        message = "Apple could not verify this purchase: \(error.localizedDescription)"
-                        isLoading = false
-                    }
+                let status = try await NativeAppleStoreKitBridge.shared.deliver(verification)
+                switch status {
+                case "granted":
+                    message = "Apple subscription confirmed. Return to Temple to refresh your access."
+                    onEntitlementRecorded()
+                case "already_processed":
+                    message = "This Apple purchase is already recorded. Check your current access in Temple."
+                    onEntitlementRecorded()
+                default:
+                    message = "Apple recorded this older transaction without granting new access."
                 }
-
-            case .userCancelled:
-                await MainActor.run {
-                    message = "Purchase cancelled."
-                    isLoading = false
-                }
-
             case .pending:
-                await MainActor.run {
-                    message = "Purchase pending Apple approval."
-                    isLoading = false
-                }
-
+                message = "Purchase pending Apple approval. Do not purchase again."
+            case .userCancelled:
+                message = "Purchase cancelled."
             @unknown default:
-                await MainActor.run {
-                    message = "Apple returned an unknown purchase result."
-                    isLoading = false
-                }
+                message = "Apple returned an unknown purchase result."
             }
         } catch {
-            await MainActor.run {
-                message = error.localizedDescription
-                isLoading = false
-            }
+            message = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func restoreApplePurchases() async {
+        isLoading = true
+        message = ""
+        defer { isLoading = false }
+        do {
+            let count = try await NativeAppleStoreKitBridge.shared.restorePurchases()
+            message = count > 0
+                ? "Apple transactions verified and recorded. Check your current access in Temple."
+                : "No eligible Seeker Monthly purchases were found for this account."
+            if count > 0 { onEntitlementRecorded() }
+        } catch {
+            message = error.localizedDescription
         }
     }
 }

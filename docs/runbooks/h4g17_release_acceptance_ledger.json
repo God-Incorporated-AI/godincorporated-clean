@@ -1,0 +1,381 @@
+{
+  "schema_version": "1.0",
+  "record_type": "point_in_time_release_acceptance_ledger",
+  "generated_at": "2026-11-11T09:35:34-07:00",
+  "project": "God Incorporated / The Temple",
+  "program": "Phase 12.11 H4G17",
+  "environment": {
+    "label": "Local Development",
+    "repository": "/Users/AIServer/GodIncorporated-integration",
+    "branch": "feature/app-store-integration",
+    "head": "d43efef66b58741891ef9fea127d2c39e471ce83",
+    "worktree": {
+      "snapshot_stage": "pre_r3_synthetic_closeout_ledger_update",
+      "state": "intentionally_dirty",
+      "porcelain_v1_entry_count": 46,
+      "porcelain_v1_sha256": "b62fda4c3a57eee437659290ca17bdafa47a250969d9e195575ff1c6cc35d324",
+      "diff_check": "pass",
+      "note": "Snapshot only; re-verify before every operation and preserve unrelated Local work."
+    },
+    "protected_comparison_repository": {
+      "path": "/Users/AIServer/GodIncorporated-clean",
+      "policy": "read_only_never_edit"
+    },
+    "runtime_acceptance": "not_established_by_this_ledger"
+  },
+  "source_pins": {
+    "AGENTS.md": "b9dc088dfa5dd11d5499dc916057bb28f840c2a56badee6ecccb2ba7a5eab8e2",
+    "main.py": "30726a51393f4f45b0af52fbe087ed902ddac48b6c8a9fc686d6dcdfa848d290",
+    "services/stripe_billing.py": "e420088b113bfaccd4e0e93a9e7f36146ba4836a06be58842d1d5f1ad88c1107",
+    "requirements.txt": "8c18a177dc0c0da5db59d8cdaf8d67601ba61b6a3970114d9321fabff6af4033"
+  },
+  "evidence_levels": [
+    "source_inspection",
+    "provider_free_regression",
+    "read_only_local_postgresql",
+    "rollback_only_or_scratch_local_postgresql",
+    "authenticated_test_provider_read",
+    "signed_local_http",
+    "integrated_local_runtime",
+    "staging",
+    "production"
+  ],
+  "evidence_references": [
+    {
+      "id": "historical_workflow_runbook",
+      "path": "/Users/AIServer/Downloads/GodIncorporated_Phase12_11_H4G17_Full_Workflow_Runbook_2026-10-29.pdf",
+      "sha256": "20f0a4f223bca52a20c4f3e95f2bcfe566d7652d637c8477fa139eed6d7cd88c",
+      "authority": "historical; superseded where later accepted evidence differs"
+    },
+    {
+      "id": "m3ep_r1_handoff",
+      "path": "/Users/AIServer/Downloads/GI_H4G17M3EP_R1_EngineeringHandoff_20261031.txt",
+      "sha256": "da7c30815c2c9bfc4709d6a39773892e62eabbb4645b1ba0de43427abeacf3b7"
+    },
+    {
+      "id": "r0_authenticated_root_cause",
+      "path": "/Users/AIServer/Downloads/GI_H4G17_R0_AuthenticatedOriginalEvent_20261103-071800-MST-96192.txt",
+      "sha256": "4da2c8d75f2535866d6afafe674f8a9ec0979e03a51a3c7be12d82500eea3bfd",
+      "privacy": "Private event export location, hash, identifiers and payload are intentionally omitted."
+    },
+    {
+      "id": "r1_decimal_normalization_and_apple_gap",
+      "path": "/Users/AIServer/Downloads/GI_H4G17_R1_DecimalNormalization_AppleGapAssessment_20261103-141414-MST.txt",
+      "sha256": "f44c39a253b56b495c7e8cacc9d6d69728e472f369ea01f51976ff0b07c60891"
+    },
+    {
+      "id": "r2_r3_readiness_preflight",
+      "path": "/Users/AIServer/Downloads/GI_H4G17_R2_R3_ReadinessPreflight_20261104-134412-MST.txt",
+      "sha256": "b91bcd6626fe4572699b39a6683247eb17c95a35b0b715e5cf63dd7a02485c26",
+      "authority": "read_only_plan; not acceptance evidence for R2 or R3"
+    },
+    {
+      "id": "r2_boundary_a_read_only_preconditions",
+      "path": "/Users/AIServer/Downloads/GI_H4G17_R2_BoundaryA_ReadOnlyPreconditions_20261104-141109-MST.txt",
+      "sha256": "cdd768f20aed50b91cd12eb2ed8c0c3821bfbc044e1e13415a03ad908a5d0c9a",
+      "authority": "accepted read-only database preconditions; provider identity remained unproved in this report"
+    },
+    {
+      "id": "r2_boundary_b_existing_payment_settlement",
+      "path": "/Users/AIServer/Downloads/GI_H4G17_R2_BoundaryB_Acceptance_20261104-145054-MST.txt",
+      "sha256": "fed6554913c20c7ef56307d99554fa052ace009620883a8505a96cf43e0ccae8",
+      "timestamp": "2026-11-04T14:50:54-07:00",
+      "authority": "accepted R2 evidence only within the isolated Local existing-payment settlement scope"
+    },
+    {
+      "id": "m3cu_initial_owner_scratch_postgresql",
+      "path": "/Users/AIServer/Downloads/GI_H4G17M3CU_InitialOwnerRealPostgres_20261030-220214-UTC-38299.txt",
+      "sha256": "f960b88a254a452fffb6f35685e2a42175bd1a1a0d541be25197db8d537ad549",
+      "authority": "accepted scratch-PostgreSQL idempotency, rollback and concurrency evidence; not signed ingress or provider acceptance"
+    },
+    {
+      "id": "r3_synthetic_local_runtime_acceptance",
+      "path": "/Users/AIServer/Downloads/GI_H4G17_R3_Synthetic_RuntimeAcceptance_20261104-163819-MST.txt",
+      "sha256": "018df91900b2a8d2d816e60320ec329f44f2917171b621611ea8d1c22d193cc5",
+      "timestamp": "2026-11-04T16:38:19-07:00",
+      "authority": "accepted R3-SYNTHETIC evidence only within the Local provider-free signed-HTTP retry, ordering and idempotency scope; not Stripe-origin transport or release-grade recovery"
+    }
+  ],
+  "release_gates": [
+    {
+      "gate": "R0",
+      "status": "accepted",
+      "evidence_level": ["authenticated_test_provider_read", "source_inspection"],
+      "accepted_scope": "Authenticated original TEST event reproduced the nested Decimal serialization defect before database access.",
+      "limits": "No signed HTTP, durable inbox, receipt, entitlement or settlement acceptance."
+    },
+    {
+      "gate": "R1",
+      "status": "accepted",
+      "evidence_level": ["provider_free_regression", "source_inspection"],
+      "accepted_scope": "Precision-preserving Decimal-to-string normalization is installed in main.py and passed authentic-event and type/precision regressions.",
+      "limits": "Provider-free Local source acceptance only; broad Stripe suite is not globally clean."
+    },
+    {
+      "gate": "R2",
+      "status": "accepted",
+      "accepted_at": "2026-11-04T14:50:54-07:00",
+      "evidence_level": ["source_inspection", "read_only_local_postgresql", "authenticated_test_provider_read", "signed_local_http", "integrated_local_runtime"],
+      "accepted_scope": "Exactly one existing provider-authenticated Stripe TEST payment traversed one locally signed loopback HTTP request into the installed versioned inbox and atomic settlement owner in godinc_billing_lab, producing one linked succeeded monthly_initial receipt and active Seeker entitlement with exact authenticated service-period boundaries.",
+      "evidence_reference": "r2_boundary_b_existing_payment_settlement",
+      "limits": "Local Development and this existing fixture only; no duplicate delivery, provider retry, event ordering, Stripe-origin signed transport, Staging or Production acceptance."
+    },
+    {
+      "gate": "R3",
+      "status": "accepted",
+      "evidence_level": [
+        "source_inspection",
+        "rollback_only_or_scratch_local_postgresql",
+        "signed_local_http",
+        "integrated_local_runtime",
+        "authenticated_test_provider_read",
+        "read_only_local_postgresql"
+      ],
+      "accepted_subscopes": [
+        {
+          "name": "R3-SYNTHETIC",
+          "status": "accepted",
+          "accepted_at": "2026-11-04T16:38:19-07:00",
+          "evidence_reference": "r3_synthetic_local_runtime_acceptance",
+          "scope": "Local provider-free runtime using a disposable synthetic-only PostgreSQL database, locally signed HTTP requests and deterministic provider stubs.",
+          "http_results": [
+            400,
+            500,
+            200,
+            200,
+            200
+          ],
+          "outcomes": [
+            "invalid signature produced HTTP 400 with no database change",
+            "invoice before subscription produced HTTP 500 while retaining exactly one received event and no receipt or entitlement",
+            "distinct synthetic subscription-state event produced HTTP 200 and only the required subscription state",
+            "controlled invoice retry produced HTTP 200 with exactly one linked succeeded initial receipt and active Seeker entitlement",
+            "post-processing duplicate produced HTTP 200 duplicate_event with no additional financial or entitlement effect"
+          ],
+          "limits": "No provider network request, real payment, existing database change, genuine Stripe-origin delivery or release-grade recovery acceptance."
+        },
+        {
+          "name": "R3-I1-I2",
+          "status": "accepted",
+          "scope": "Local monitor and checked audit with real PostgreSQL acceptance",
+          "limits": "No overdue cash recovered"
+        },
+        {
+          "name": "R3-I3-I4",
+          "status": "accepted",
+          "scope": "Advisory-lock coordination, simulated dispatch and guarded dormant operator",
+          "limits": "No real overdue cash GET or settlement"
+        },
+        {
+          "name": "R3-I5",
+          "status": "accepted",
+          "scope": "Genuine nonfinancial Stripe TEST signed delivery and separately verified cleanup",
+          "limits": "Not a financial payment or Production test"
+        },
+        {
+          "name": "R3-I6",
+          "status": "accepted",
+          "scope": "Independent Local read-only event and receipt reconciliation",
+          "limits": "No actual overdue financial recovery"
+        }
+      ],
+      "accepted_evidence": [
+        "R2 proved one locally signed HTTP 200 success path for the settled fixture.",
+        "M3CU proved scratch-PostgreSQL exact replay, same-invoice suppression, conflicting-payload rejection, rollback survival and two-backend serialization; do not repeat those concurrency tests without contradictory evidence.",
+        "R3-SYNTHETIC proved the five-request Local provider-free HTTP sequence: invalid signature rejection, durable invoice-before-subscription receipt, subscription-state ordering, exactly-once controlled settlement and post-processing duplicate suppression.",
+        "November 6 I1-I4 Local monitoring, audit, coordination and operator binding accepted.",
+        "November 6 I5 Stripe TEST-origin nonfinancial signed transport accepted, with cleanup separately verified.",
+        "November 6 I6 independent Local reconciliation accepted."
+      ],
+      "target": "Close the remaining genuine Stripe-origin delivery and release-grade monitoring, reconciliation and explicitly authorized per-event recovery requirements.",
+      "blockers": [],
+      "historical_pre_i6_blockers": [
+        "the processed R2 invoice event must not be delivered again",
+        "no installed release-grade monitor, reconciliation command or explicitly authorized per-event recovery seam consumes received initial-payment events",
+        "provider-owned redelivery behavior alone has not been accepted as the durable recovery contract",
+        "local HMAC proves local signature verification but not Stripe-origin transport through the installed endpoint"
+      ],
+      "historical_next_gate": {
+        "gate": "R3",
+        "status": "awaiting_separate_owner_authorization",
+        "plan_reference": "/Users/AIServer/Downloads/GI_H4G17_R3_RecoveryTransportDecision_20261105-065731-MST.txt",
+        "prohibitions": [
+          "never redeliver the processed R2 event",
+          "no new payment or subscription",
+          "no automatic financial recovery or retry after an ambiguous result",
+          "no Staging or Production"
+        ]
+      },
+      "historical_authority": "update only this JSON ledger with the accepted R3-SYNTHETIC closeout evidence",
+      "accepted_at": "2026-11-06",
+      "acceptance_boundary": "Local Development only: synthetic signed HTTP ordering/idempotency, PostgreSQL monitoring and checked audit, coordinated simulated recovery, dormant guarded manual operator, genuine nonfinancial Stripe TEST-origin signed transport, independently verified cleanup and I6 read-only reconciliation.",
+      "final_evidence_reference": "GI_H4G17_R3_FinalLocalAcceptance_20261106-115209.txt",
+      "final_evidence_sha256": "ae0b43389a829eeb8e49eb472d25a250ec24f69e261d383070c66ec79eb67bba",
+      "remaining_release_limitations": [
+        "Actual overdue initial-invoice cash recovery was not executed.",
+        "Durable per-attempt outcomes, alerts and Production retry ownership remain open.",
+        "Never redeliver the original processed R2 invoice.",
+        "Apple signed financial lifecycle is not accepted.",
+        "Staging and Production financial acceptance remain open."
+      ]
+    },
+    {
+      "gate": "R4",
+      "status": "held",
+      "reason": "R2/R3 Local acceptance is recorded. Broader Stripe recovery, reversal, legacy-dependency and release acceptance remain open.",
+      "historical_reason": "R2/R3 precede remaining Stripe recovery, reversal and legacy-dependency closure."
+    },
+    {
+      "gate": "R5",
+      "status": "held",
+      "reason": "Commercial/quota policy, copy, branding and logo decisions are not approved for implementation."
+    },
+    {
+      "gate": "R6",
+      "status": "held",
+      "reason": "Native dual-Temple iOS UX, accessibility, auth/quota/voice and device acceptance remain open."
+    },
+    {
+      "gate": "R7",
+      "status": "held",
+      "evidence_level": ["source_inspection", "provider_free_regression", "rollback_only_or_scratch_local_postgresql"],
+      "reason": "Apple Local synthetic/source work exists, but signed Sandbox purchase/lifecycle/HTTP/settlement acceptance is open."
+    },
+    {
+      "gate": "R8",
+      "status": "held",
+      "reason": "Migration promotion ledger and separately authorized Staging acceptance remain open."
+    },
+    {
+      "gate": "R9",
+      "status": "held",
+      "reason": "Production, App Store compliance/build/metadata/review and release verification require separate authorization."
+    },
+    {
+      "gate": "R10",
+      "status": "held",
+      "reason": "Cleanup is post-acceptance only and must preserve evidence and backups."
+    }
+  ],
+  "settled_fixture_guard": {
+    "fixture": "original authenticated Stripe TEST invoice event",
+    "state": "processed",
+    "accepted_at": "2026-11-04T14:50:54-07:00",
+    "evidence_reference": "r2_boundary_b_existing_payment_settlement",
+    "redelivery_policy": "MUST_NOT_BE_DELIVERED_AGAIN",
+    "privacy": "Provider, customer, event, invoice, payment and subscription identifiers remain intentionally omitted."
+  },
+  "approved_authorities": {
+    "this_operation": [
+      "H15R1 owner-executed, one-file Local acceptance-ledger reconciliation only; no financial or deployment actions",
+      "perform read-only source/report/filesystem inspection for release-grade recovery and Stripe-origin transport planning",
+      "create one sanitized engineering decision report in Downloads"
+    ],
+    "not_authorized": [
+      "database connection or write of any kind",
+      "provider GET or POST",
+      "webhook POST, replay, resend or duplicate delivery",
+      "application or listener startup",
+      "payment, Checkout, subscription or financially state-changing test",
+      "application, Apple, Stripe, AGENTS, test or migration edit",
+      "Git stage, commit, push, reset, stash or clean",
+      "Staging or Production action"
+    ],
+    "separate_owner_authorization_required": [
+      "implementation or runtime acceptance of monitoring, reconciliation or per-event recovery",
+      "ephemeral Local app/listener or test-client startup",
+      "genuine Stripe-origin delivery through the installed application endpoint",
+      "provider GET or POST, Stripe CLI transport, endpoint exposure or database connection/write",
+      "dependency installation",
+      "Staging, Production or App Store activity"
+    ]
+  },
+  "local_only_migrations": [
+    {
+      "path": "db/migrations/2026_10_22_a7c4d_stripe_reup_receipt_unique.sql",
+      "sha256": "c430ca7e571f27730cdb4dcfd97fced1d62c0cbeb4aca3c6d7cf786c2f319ed9",
+      "local_development": "accepted applied to godinc_dev",
+      "isolated_billing_lab": "directly verified present by read-only Boundary A at 2026-11-04T14:11:09-07:00: Stripe re-up receipt unique index",
+      "staging": "unverified_not_authorized",
+      "production": "unverified_not_authorized"
+    },
+    {
+      "path": "db/migrations/2026_10_23_a7c5h1_apple_settlement_uniqueness.sql",
+      "sha256": "e4a223392e700938b50a749a0e073ffbf8020692b5ec4ae0a2892a8848822739",
+      "local_development": "indexes observed present by later accepted Local schema evidence; application step not re-run here",
+      "isolated_billing_lab": "directly verified present by read-only Boundary A at 2026-11-04T14:11:09-07:00: Apple subscription and transaction unique indexes",
+      "staging": "unverified_not_authorized",
+      "production": "unverified_not_authorized"
+    },
+    {
+      "path": "db/migrations/2026_10_28_h4g17_stripe_invoice_identity.sql",
+      "sha256": "b2e53b0988798b327bce37daa2f9870264af8a4c4226b31a2a3dc006e33fdd73",
+      "local_development": "accepted applied to godinc_dev",
+      "isolated_billing_lab": "directly verified present by read-only Boundary A at 2026-11-04T14:11:09-07:00: Stripe invoice identity unique index and paired-invoice check",
+      "staging": "unverified_not_authorized",
+      "production": "unverified_not_authorized"
+    },
+    {
+      "path": "db/migrations/2026_10_30_h4g17_annual_initial_transaction_kind.sql",
+      "sha256": "a3b813b705b1583c5a778ad6e32db5ecb654351ede51a2002d96624c4ae79a58",
+      "local_development": "accepted applied to godinc_dev",
+      "isolated_billing_lab": "directly verified by read-only Boundary A at 2026-11-04T14:11:09-07:00: exact seven transaction kinds including annual_initial",
+      "staging": "unverified_not_authorized",
+      "production": "unverified_not_authorized"
+    }
+  ],
+  "test_suite_discrepancies": {
+    "stripe": {
+      "last_accepted_run": "281 tests: 1 failure, 16 errors",
+      "disposition": "open harness/legacy-path debt; not caused by the R1 two-line change; never label the broad suite PASS"
+    },
+    "apple": {
+      "last_accepted_run": "175 tests: 172 pass, 3 errors",
+      "disposition": "errors match missing app-store-server-library/PyJWT runtime in the protected venv; requirement pins app-store-server-library 3.1.2; no dependency change authorized"
+    }
+  },
+  "deferred_policy_decisions": [
+    "Preserve the latest approved entitlement and pricing policy; a TEST catalog or proposed policy is not launch approval.",
+    "Preserve one consistent voice experience across support tiers; do not advertise separately tiered Live Voice.",
+    "Qualifying fully paid Magus-or-above annual expiration potentially granting Seeker 33/month remains a product proposal, not implementation approval.",
+    "The latest annual-only refinement is unapproved; preserve legacy donor, scroll and fallback protections.",
+    "Do not infer entitlement from Checkout completion, metadata, plan_code alone or an unverified provider object.",
+    "Persistent initial-cash route activation, retry ownership and displaced legacy behavior require acceptance beyond an isolated test.",
+    "Proprietary/self-hosted inference remains future-only and outside this release gate."
+  ],
+  "current_blockers": [
+    "The original R2 invoice event is processed and MUST NOT be delivered again.",
+    "R3 Local I1-I6 monitoring, checked audit, manual coordination and nonfinancial Stripe TEST-origin transport passed. Real overdue cash recovery, durable outcome tracking, alert policy and Production recovery remain open.",
+    "Stripe/provider redelivery alone is not accepted as God Incorporated's complete durable recovery policy.",
+    "Locally generated HMAC evidence and the prior isolated-receiver observation do not establish genuine Stripe-origin delivery through the installed application endpoint.",
+    "The active exception logger can include provider/account identifiers; later runtime evidence must be privately captured and sanitized."
+  ],
+  "next_gate": {
+   "gate": "Checkpoint C",
+   "status": "open",
+   "focus": "Apple StoreKit signed Sandbox purchase, settlement, entitlement, lifecycle, restore, refund/revocation and cross-rail acceptance",
+   "prohibitions": [
+     "No new provider spending or financial test without authorization",
+     "No Staging or Production promotion without separate authorization",
+     "Preserve accepted R2/R3 Local evidence"
+   ]
+ },
+  "update_procedure": [
+    "Read the governing AGENTS.md and this ledger before using older handoffs.",
+    "Re-verify branch, HEAD, worktree inventory, source hashes, environment identity and required evidence before every update.",
+    "Change generated_at and only claims supported by a named evidence artifact and explicit evidence level.",
+    "Keep accepted gates closed unless contradictory evidence is recorded; never promote source/synthetic evidence to runtime acceptance.",
+    "Track every migration separately for Local Development, isolated lab, Staging and Production; Git deployment never implies database application.",
+    "Keep secrets, payloads, customer/provider identifiers, private evidence paths/hashes and raw exceptions out of this ledger.",
+    "Use a surgical edit with exact preconditions and postflight validation; preserve VS Code as editor of record and GitHub as remote source of truth."
+  ],
+  "fail_closed_rules": [
+    "STOP on any branch, HEAD, source hash, migration, environment, database, sandbox-account or worktree mismatch.",
+    "STOP if the target database is not exactly the separately authorized environment.",
+    "STOP on live-mode credentials, a non-isolated endpoint, ambiguous ownership, missing price mapping, another active paid rail or conflicting stored evidence.",
+    "STOP after the first ambiguous HTTP outcome or exception; do not retry, replay, repair or clean up financial state without a new authorization.",
+    "STOP if a received event, receipt, entitlement, paid-through boundary and event completion do not agree atomically.",
+    "STOP if evidence collection would disclose a secret, signature, payload, provider/customer identifier, DSN or private evidence location.",
+    "R2 and R3 are accepted only within their recorded Local scopes. Never redeliver the processed R2 invoice. Real overdue recovery, Production retry ownership and remote acceptance require separate verification and authorization."
+  ]
+}
