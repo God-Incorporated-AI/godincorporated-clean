@@ -24,6 +24,44 @@ document.addEventListener("DOMContentLoaded", function () {
     supportMode: VALID_SUPPORT_MODES.has(requestedSupportModeRaw) ? requestedSupportModeRaw : null
   };
 
+  // S16D4: Remember only the selected plan, never account data.
+  const PENDING_SUPPORT_KEY = "godinc_pending_support_v1";
+  const PENDING_SUPPORT_TTL = 24 * 60 * 60 * 1000;
+
+  try {
+    if (!selectedSupportIntent.planCode && !selectedSupportIntent.supportMode) {
+      const saved = JSON.parse(localStorage.getItem(PENDING_SUPPORT_KEY) || "null");
+      const age = saved ? Date.now() - Number(saved.savedAt) : -1;
+      if (saved &&
+          VALID_SUPPORT_PLAN_CODES.has(saved.planCode) &&
+          VALID_SUPPORT_MODES.has(saved.supportMode) &&
+          age >= 0 && age <= PENDING_SUPPORT_TTL) {
+        selectedSupportIntent.planCode = saved.planCode;
+        selectedSupportIntent.supportMode = saved.supportMode;
+      } else {
+        localStorage.removeItem(PENDING_SUPPORT_KEY);
+      }
+    }
+  } catch (_) {
+    // Restricted browser storage must not prevent signup.
+  }
+
+  function rememberPendingSupportIntent(planCode, supportMode) {
+    if (!VALID_SUPPORT_PLAN_CODES.has(planCode) ||
+        !VALID_SUPPORT_MODES.has(supportMode)) return false;
+    selectedSupportIntent.planCode = planCode;
+    selectedSupportIntent.supportMode = supportMode;
+    try {
+      localStorage.setItem(PENDING_SUPPORT_KEY, JSON.stringify({
+        planCode, supportMode, savedAt: Date.now()
+      }));
+    } catch (_) {
+      // The current page can continue without local storage.
+    }
+    return true;
+  }
+
+
   let supportOpenedFromQuery = false;
   // Documentation: Identity States and Unified /ask Contract
   //
@@ -346,6 +384,9 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function showFeedbackModal(message, nudges = [], title = "Temple Notice", options = {}) {
     if (!feedbackModal || !feedbackBody || !feedbackTitle) return;
+
+    // Keep notices above the styled support modal.
+    feedbackModal.style.setProperty("z-index", "13000", "important");
 
     const lines = [];
     if (message) {
@@ -7303,14 +7344,15 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       supportAuthPrompt.hidden = true;
       supportAuthPrompt.style.display = "none";
     } else {
-      supportStatusLine.textContent =
-        "Support unlocks deeper dialogue continuity, stronger seeker memory, and longer access paths.";
+      supportStatusLine.textContent = isNativeIOSApp()
+        ? "Support unlocks deeper dialogue continuity, stronger seeker memory, and longer access paths."
+        : "Choose a support plan. Please create an account or log in to purchase. You will not be charged until checkout.";
       supportAuthPrompt.hidden = false;
       supportAuthPrompt.style.display = "block";
     }
 
     supportCheckoutButtons.forEach((button) => {
-      button.disabled = !authenticated;
+      button.disabled = isNativeIOSApp() && !authenticated;
     });
 
     applyNativeIOSSupportGate(authenticated);
@@ -7358,8 +7400,15 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
 
   async function launchStripeCheckout(planCode, supportMode, button) {
     if (!currentIdentity || !currentIdentity.authenticated) {
+      if (!rememberPendingSupportIntent(planCode, supportMode)) {
+        showFeedbackModal("Please choose a valid support plan.", [], "Temple Notice");
+        return;
+      }
       closeModal(supportModal);
-      openModal(loginModal);
+      clearAuthErrors();
+      const intro = document.getElementById("registerSupportIntro");
+      if (intro) intro.hidden = false;
+      openModal(registerModal);
       return;
     }
 
@@ -7380,7 +7429,28 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       const data = await safeReadJson(response);
 
       if (!response.ok) {
-        throw new Error(data.error || data.detail || "Could not create a checkout session.");
+        if (response.status === 401) {
+          if (!rememberPendingSupportIntent(planCode, supportMode)) {
+            throw new Error("Please choose a valid support plan.");
+          }
+          currentIdentity = null;
+          setAuthenticatedMenuState(false);
+          updateMenuToggleIdentity(null);
+          updateAdminNav(null);
+          button.disabled = false;
+          button.textContent = originalText;
+          closeModal(supportModal);
+          clearAuthErrors();
+          openModal(loginModal);
+          loginError.textContent =
+            "Your session expired. Log in to continue with your selected plan.";
+          return;
+        }
+        const message =
+          (data && typeof data.error === "string" && data.error) ||
+          (data && typeof data.detail === "string" && data.detail) ||
+          "Could not create a checkout session.";
+        throw new Error(message);
       }
 
       if (Object.prototype.hasOwnProperty.call(data, "changed_subscription")) {
@@ -7443,6 +7513,26 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
     openModal(registerModal);
     mainMenu.classList.remove("show");
   });
+
+  const loginToRegisterLink = document.getElementById("loginToRegisterLink");
+  if (loginToRegisterLink) {
+    loginToRegisterLink.addEventListener("click", function(event) {
+      event.preventDefault();
+      closeModal(loginModal);
+      clearAuthErrors();
+      openModal(registerModal);
+    });
+  }
+
+  const registerToLoginLink = document.getElementById("registerToLoginLink");
+  if (registerToLoginLink) {
+    registerToLoginLink.addEventListener("click", function(event) {
+      event.preventDefault();
+      closeModal(registerModal);
+      clearAuthErrors();
+      openModal(loginModal);
+    });
+  }
 
   if (supportBtnAnonymous) {
     supportBtnAnonymous.addEventListener("click", function() {
@@ -7540,15 +7630,30 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       });
       const data = await safeReadJson(response);
       if (response.status === 401 || response.status === 403) {
-        loginError.textContent = "Session expired or unauthorized. Please log in again.";
+        loginError.textContent =
+          (data && typeof data.error === "string" && data.error)
+            ? data.error
+            : "Please check your credentials or verify your email.";
         updateIdentityDisplay();
         return;
       }
       if (response.ok) {
         // Success
-        closeModal(loginModal);
         await updateIdentityDisplay();
+        if (!currentIdentity || !currentIdentity.authenticated) {
+          loginError.textContent =
+            "Login could not establish an authenticated session. Please try again.";
+          return;
+        }
+        closeModal(loginModal);
         notifyNativeIOSAuthChanged();
+        if (!isNativeIOSApp() &&
+            selectedSupportIntent.planCode &&
+            selectedSupportIntent.supportMode) {
+          renderSupportModal();
+          openModal(supportModal);
+          applySupportIntentSelection(true);
+        }
       } else {
         // Error
         loginError.textContent = data.error || "Login failed";
@@ -7591,7 +7696,11 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       if (response.ok) {
         // Success
         closeModal(registerModal);
-        showFeedbackModal("Account created. Please check your email and verify your account before logging in.", [], "Account Created");
+        const message = selectedSupportIntent.planCode &&
+          selectedSupportIntent.supportMode
+          ? "Account created. Verify your email, then log in to continue with your selected support plan."
+          : "Account created. Please check your email and verify your account before logging in.";
+        showFeedbackModal(message, [], "Account Created");
         updateIdentityDisplay();
       } else {
         // Error
@@ -7686,6 +7795,7 @@ document.getElementById("loginPassword").addEventListener("keydown", function(e)
       const data = await safeReadJson(response);
 
       if (response.status === 401 || response.status === 403 || data.error) {
+        currentIdentity = null;
         visitorId = null;
         seekerId = localStorage.getItem("seeker_id") || null;
         setAuthenticatedMenuState(false);
