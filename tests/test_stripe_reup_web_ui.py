@@ -85,7 +85,7 @@ class BrowserWiring(unittest.TestCase):
         self.assertEqual(self.js.count('function renderSupportModal()'),1)
         self.assertEqual(self.block.count('addEventListener("click", reviewStripeReup)'),1)
     def test_asset_cache_version_and_confirmation_copy(self):
-        self.assertIn('/static/temple.js?v=20261023-a7c5g8-consent1',self.html)
+        self.assertIn('/static/temple.js?v=20261116-s16d13-r1-candidate-auth1',self.html)
         self.assertIn('existing recurring Stripe subscription',self.html)
         self.assertIn('billing date will shift',self.block)
         self.assertIn('new_period_question_limit',self.block)

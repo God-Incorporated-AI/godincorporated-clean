@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAIN = ROOT / 'main.py'
 SERVICE = ROOT / 'services' / 'stripe_reup_settlement.py'
 MODE = 'GODINC_STRIPE_REUP_WEBHOOK_MODE'
+INITIAL_MODE = 'GODINC_STRIPE_INITIAL_CASH_WEBHOOK_MODE'
 UID = '24d20b0d-c073-466e-a010-08c3db27b6d1'
 INTENT = 'e1cdb624-ff3b-429c-95df-4ad279e0f4ef'
 
@@ -98,6 +99,7 @@ class Harness:
             'get_db_connection': self._connect,
             'validate_paid_stripe_reup_invoice': self._validate,
             'get_stripe_livemode': lambda: False,
+            'dispatch_verified_initial_invoice_atomic_v1': capture('initial_verified_settlement', {'ok': True, 'source': 'verified_initial'}),
             'resolve_user_and_subscription_context': capture('resolve', self.context),
             'insert_payment_event_if_new': insert,
             'mark_payment_event_processed': capture('mark_legacy_event'),
@@ -236,12 +238,44 @@ class BridgeTests(TestCase):
         self.assertIn('mark_legacy_event', h.call_names())
         self.assertNotIn('settle', h.call_names())
 
-    def test_existing_checkout_invoice_preserved_with_flag_enabled(self):
+    def test_initial_cash_default_off_fails_closed_without_legacy(self):
         h = Harness()
-        with mock.patch.dict(os.environ, {MODE: 'verified_settlement'}):
-            h.run(make_event(reason='subscription_create'))
-        self.assertIn('legacy_grant', h.call_names())
-        self.assertNotIn('settle', h.call_names())
+        with mock.patch.dict(os.environ, {MODE: 'verified_settlement', INITIAL_MODE: ''}):
+            with self.assertRaisesRegex(RuntimeError, 'initial cash settlement is not enabled'):
+                h.run(make_event(reason='subscription_create'))
+        self.assertEqual(h.calls, [])
+
+    def test_initial_cash_noncanonical_modes_fail_closed_without_legacy(self):
+        for value in ('1', 'true', 'enabled', 'verified-settlement', 'VERIFIED_SETTLEMENT'):
+            h = Harness()
+            with self.subTest(value=value), mock.patch.dict(
+                    os.environ, {MODE: 'verified_settlement', INITIAL_MODE: value}):
+                with self.assertRaisesRegex(RuntimeError, 'initial cash settlement is not enabled'):
+                    h.run(make_event(reason='subscription_create'))
+                self.assertEqual(h.calls, [])
+
+    def test_initial_cash_enabled_routes_only_verified_writer(self):
+        for reup_gate in ('', 'verified_settlement'):
+            h = Harness()
+            event = make_event(reason='subscription_create')
+            with self.subTest(reup_gate=reup_gate), mock.patch.dict(
+                    os.environ, {MODE: reup_gate, INITIAL_MODE: 'verified_settlement'}):
+                result = h.run(event)
+            self.assertEqual(result, {'ok': True, 'source': 'verified_initial'})
+            self.assertEqual(h.call_names(), ['initial_verified_settlement'])
+            self.assertEqual(h.calls[0][1], (event,))
+            self.assertEqual(h.calls[0][2], {})
+
+    def test_initial_cash_writer_failure_never_falls_back_to_legacy(self):
+        h = Harness()
+        def failing_writer(_event):
+            raise RuntimeError('simulated initial writer failure')
+        h.ns['dispatch_verified_initial_invoice_atomic_v1'] = failing_writer
+        with mock.patch.dict(os.environ, {MODE: 'verified_settlement',
+                                          INITIAL_MODE: 'verified_settlement'}):
+            with self.assertRaisesRegex(RuntimeError, 'simulated initial writer failure'):
+                h.run(make_event(reason='subscription_create'))
+        self.assertEqual(h.calls, [])
 
     def test_existing_plan_change_invoice_preserved(self):
         h = Harness()
@@ -250,13 +284,18 @@ class BridgeTests(TestCase):
         self.assertIn('legacy_grant', h.call_names())
         self.assertNotIn('settle', h.call_names())
 
-    def test_existing_regular_renewal_failure_preserved(self):
-        h = Harness()
-        with mock.patch.dict(os.environ, {MODE: 'verified_settlement'}):
-            h.run(make_event('invoice.payment_failed', reason='subscription_cycle'))
-        self.assertIn('legacy_downgrade', h.call_names())
-        self.assertIn('legacy_cancel', h.call_names())
-        self.assertNotIn('audit', h.call_names())
+    def test_regular_renewal_failure_preserves_paid_through_period(self):
+        for reup_gate in ('', 'verified_settlement'):
+            h = Harness()
+            with self.subTest(reup_gate=reup_gate), mock.patch.dict(
+                    os.environ, {MODE: reup_gate, INITIAL_MODE: ''}):
+                result = h.run(make_event('invoice.payment_failed', reason='subscription_cycle'))
+            self.assertEqual(result['event_type'], 'invoice.payment_failed')
+            self.assertEqual(result['helper_name'], 'invoice_payment_failed_observed_no_entitlement_change')
+            self.assertEqual(h.call_names(), ['resolve', 'insert_legacy_event', 'mark_legacy_event'])
+            for forbidden in ('legacy_downgrade', 'legacy_cancel', 'legacy_grant',
+                              'legacy_receipt', 'audit', 'settle', 'legacy_error'):
+                self.assertNotIn(forbidden, h.call_names())
 
     def test_unrelated_subscription_updates_remain_legacy(self):
         h = Harness()

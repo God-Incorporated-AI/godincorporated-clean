@@ -13,9 +13,13 @@ OTHER_INTENT = '02a930d6-2318-4843-b065-0c9869d18f9e'
 
 
 def sub(price='price_seeker', status='active', start=1700000000, cancel=False, customer='cus_1'):
-    return dict(customer=customer, status=status, current_period_start=start,
+    # Modern Stripe contract: authoritative dates belong to the subscription item.
+    end = start + 2592000 if type(start) is int else 1702592000
+    return dict(id='sub_1', customer=customer, status=status,
                 cancel_at_period_end=cancel, livemode=False, metadata={'original': 'keep'},
-                items={'data': [{'id': 'si_1', 'price': {'id': price}}]})
+                items={'data': [{'id': 'si_1', 'price': {'id': price},
+                                 'current_period_start': start,
+                                 'current_period_end': end}]})
 
 
 class Fake:
@@ -27,9 +31,12 @@ class Fake:
             if self.failure: raise ValueError('declined card')
             return dict(self.row, metadata=kw['metadata'])
         unit = ast.parse(SOURCE.read_text())
+        required = ('extract_stripe_single_item_period_v1',
+                    'change_existing_subscription_plan')
         functions = [x for x in unit.body if isinstance(x, ast.FunctionDef)
-                     and x.name == 'change_existing_subscription_plan']
-        if len(functions) != 1: raise RuntimeError('Stripe function identity failed')
+                     and x.name in required]
+        if tuple(x.name for x in functions) != required:
+            raise RuntimeError('Stripe function dependency identity failed')
         scope = dict(Optional=Optional, UUID=UUID, hashlib=hashlib, init_stripe=lambda: None,
                      get_checkout_plan_and_price=lambda **kw: dict(
                          stripe_price_id=self.price, support_mode=self.mode,
