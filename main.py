@@ -9408,6 +9408,7 @@ def _count_active_question_reservations_locked(
     owner_id: str,
     quota_bucket: str,
     quota_window_started_at: Optional[str] = None,
+    economic_identity_id: Optional[str] = None,
 ) -> int:
     """
     Count active quota-bearing Oracle reservations for one allowance bucket.
@@ -9426,6 +9427,22 @@ def _count_active_question_reservations_locked(
         raise ValueError(
             "owner_kind must be user or anonymous"
         )
+
+    owner_params = [owner_id]
+    if economic_identity_id is not None:
+        if not isinstance(economic_identity_id, str) or not economic_identity_id.strip():
+            raise ValueError("economic_identity_id must be a nonempty string")
+        owner_clause = """
+        (
+            anonymous_user_id = %s
+            OR user_id IN (
+                SELECT id FROM users
+                WHERE free_economic_identity_id = %s
+            )
+            OR prepared_state->'question_quota'->>'economic_identity_id' = %s
+        )
+        """
+        owner_params = [economic_identity_id] * 3
 
     where = [
         owner_clause,
@@ -9448,7 +9465,7 @@ def _count_active_question_reservations_locked(
     ]
 
     params = [
-        owner_id,
+        *owner_params,
         quota_bucket,
     ]
 
@@ -10469,6 +10486,10 @@ def create_oracle_question_reservation(
                         quota_bucket=quota_bucket,
                         quota_window_started_at=
                             quota_window_started_at,
+                        economic_identity_id=(
+                            economic_identity_id
+                            if free_economic else None
+                        ),
                     )
                 )
 
