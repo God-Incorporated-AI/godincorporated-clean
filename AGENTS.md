@@ -107,6 +107,17 @@ Do not stop current roadmap work to solve these early unless they become real bl
 - Batch logically related investigations; reuse accepted evidence, direct source inspection, and existing tests.
 - Require one meaningful deliverable per bounded engineering stage. Do not substitute chains of fragile diagnostics or repeated speculative tests for finding the actual failure.
 
+## Resource conservation and execution economy
+- Treat compute, tool calls, network transfers, document conversions, renders, and repeated validation as project resources that must advance an accepted project goal.
+- Use the shortest reliable path to the requested deliverable. Reuse accepted evidence and existing source artifacts; do not regenerate, reconvert, or retransmit material that is already fit for the requested purpose.
+- For published documents, author or edit the requested source format first and export once to each required distribution format. Do not round-trip PDF to DOCX or DOCX to PDF and back, and do not rasterize a document when a normal source-native export is adequate.
+- Default to one generation pass and one proportionate validation pass. A further full-document render or rebuild requires a demonstrated correctness, readability, or delivery defect; repair only the affected pages or sections when practical.
+- Do not spend repeated full-document cycles on optional cosmetic perfection after the artifact is correct, readable, editable where requested, and professionally usable, unless the owner explicitly requests that additional polish.
+- Batch independent inspections, cap speculative iterations, and stop when the stated acceptance criteria are met. Do not use additional compute merely because another refinement is possible.
+- Prefer incremental source edits and targeted checks over whole-artifact rebuilds, duplicated conversions, exhaustive screenshots, or repeated inspection of unchanged content.
+- If execution cost becomes disproportionate to the remaining project value, stop, preserve the usable result, state the remaining defect and its operational consequence, and obtain owner approval before consuming more resources.
+- Resource conservation does not permit skipping security, data-integrity, financial, deployment, or acceptance checks that are material to the authorized task; validation must remain proportionate to risk.
+
 ## High-risk areas
 Treat these as high-risk and edit carefully:
 - `main.py` auth flow
